@@ -127,6 +127,43 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
+    /** Recomendaciones y títulos similares de TMDB para mostrar debajo de la ficha. */
+    suspend fun loadRelatedTitles(titleId: String): List<Title> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext emptyList()
+        val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
+        val mediaType = parsed.first
+        val endpointType = if (mediaType == "tv") "tv" else "movie"
+        runCatching {
+            val resultTitles = mutableListOf<Title>()
+            for (endpoint in listOf("$endpointType/${parsed.second}/recommendations", "$endpointType/${parsed.second}/similar")) {
+                val results = request(endpoint).optJSONArray("results") ?: continue
+                for (i in 0 until results.length()) {
+                    val item = results.optJSONObject(i) ?: continue
+                    val id = item.optLong("id", 0L)
+                    if (id <= 0L) continue
+                    val name = item.optString(if (mediaType == "tv") "name" else "title").trim()
+                    if (name.isBlank()) continue
+                    val date = item.optString(if (mediaType == "tv") "first_air_date" else "release_date")
+                    val rating = item.optDouble("vote_average", 0.0).takeIf { it > 0.0 }
+                        ?.let { String.format(Locale.US, "%.1f", it) }
+                    resultTitles += Title(
+                        id = "tmdb-$mediaType-$id",
+                        name = name,
+                        description = item.optString("overview"),
+                        posterUrl = imageUrl(item.optString("poster_path"), "w500"),
+                        backdropUrl = imageUrl(item.optString("backdrop_path"), "w1280").ifBlank { imageUrl(item.optString("poster_path"), "w500") },
+                        streamUrl = "",
+                        isLive = false,
+                        year = date.take(4).takeIf { it.length == 4 },
+                        rating = rating,
+                        contentKind = if (mediaType == "tv") ContentKind.SERIES else ContentKind.MOVIE,
+                    )
+                }
+            }
+            resultTitles.filterNot { it.id == titleId }.distinctBy { it.id }.take(18)
+        }.getOrDefault(emptyList())
+    }
+
     suspend fun loadSeasons(titleId: String): List<TmdbSeason> = withContext(Dispatchers.IO) {
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()

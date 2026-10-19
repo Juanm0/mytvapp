@@ -1,6 +1,8 @@
 package com.quilmes.xuper
 
 import android.os.Bundle
+import android.net.Uri
+import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
@@ -15,16 +17,19 @@ import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
+import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
+import com.quilmes.xuper.ui.screens.XuperBraveAdblock
 import com.quilmes.xuper.ui.theme.XuperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.charset.StandardCharsets
 
 /**
  * Las listas M3U alimentan el catálogo y la búsqueda, pero no agregan opciones
@@ -162,8 +167,7 @@ private fun loadCustomM3uSources(cacheDir: File): List<M3uSource> {
 
 class MainActivity : ComponentActivity() {
 
-    private val pendingStremioStream = mutableStateOf<Pair<String, String>?>(null)
-
+    private val pendingDetailTitle = mutableStateOf<Title?>(null)
     private val repository: ContentRepository by lazy { buildRepository(filesDir, assets) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
 
@@ -192,6 +196,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        XuperBraveAdblock.initialize(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
         // Antes se copiaban archivos acá y, sobre todo, setCatalogCategories() corría en el hilo
@@ -228,31 +233,43 @@ class MainActivity : ComponentActivity() {
                         arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
-                        val title = remember(id) { repository.find(id) }
+                        val title = remember(id, pendingDetailTitle.value?.id) {
+                            repository.find(id) ?: pendingDetailTitle.value?.takeIf { it.id == id }
+                        }
                         if (title != null) DetailScreen(
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { playableId -> navController.navigate("player/$playableId") },
-                            onPlayStremio = { streamName, streamUrl ->
-                                pendingStremioStream.value = streamName to streamUrl
-                                navController.navigate("stremio-player")
+                            onOpenTitle = { relatedTitle ->
+                                pendingDetailTitle.value = relatedTitle
+                                navController.navigate("detail/${relatedTitle.id}")
+                            },
+                            onPlayStream = { streamName, streamUrl ->
+                                val encodedUrl = Base64.encodeToString(
+                                    streamUrl.toByteArray(StandardCharsets.UTF_8),
+                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                )
+                                navController.navigate("external-player/${Uri.encode(streamName)}/$encodedUrl")
                             },
                             findPlayableEpisode = { seriesName, season, episode ->
                                 (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
                             },
                         )
                     }
-                    composable("stremio-player") {
-                        val selected = pendingStremioStream.value
-                        if (selected != null) {
-                            PlayerScreen(
-                                name = selected.first,
-                                streamUrl = selected.second,
-                                onExit = {
-                                    pendingStremioStream.value = null
-                                    navController.popBackStack()
-                                },
-                            )
+                    composable(
+                        route = "external-player/{streamName}/{streamUrl}",
+                        arguments = listOf(
+                            navArgument("streamName") { type = NavType.StringType },
+                            navArgument("streamUrl") { type = NavType.StringType },
+                        ),
+                    ) { entry ->
+                        val streamName = entry.arguments?.getString("streamName").orEmpty()
+                        val encodedUrl = entry.arguments?.getString("streamUrl").orEmpty()
+                        val streamUrl = runCatching {
+                            String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
+                        }.getOrDefault("")
+                        if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
+                            PlayerScreen(name = streamName, streamUrl = streamUrl, onExit = { navController.popBackStack() })
                         }
                     }
                     composable(

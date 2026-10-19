@@ -12161,3 +12161,63 @@ Max: 1
 M3U: http://marostream.net:80/get.php?username=X4WQ24CL71A3PFW&password=4M9jlpTEVn&type=m3u_plus
 --------------------------------------------------------------------------------------------------------------
 
+Host: tv.m3uts.xyz
+User: m
+Pass: m
+M3U: http://tv.m3uts.xyz/get.php?username=m&password=m&type=m3u_plus
+
+---
+
+Host: visionlabiptv.com
+User: MAGBKE3Y3H
+Pass: MAG7291U96
+M3U: http://visionlabiptv.com/get.php?username=MAGBKE3Y3H&password=MAG7291U96&type=m3u_plus&output=m3u8
+
+---
+
+Host: vodlat.top:80
+User: Rambito
+Pass: JCCkQ2Ornt
+M3U: http://vodlat.top:80/get.php?username=Rambito&password=JCCkQ2Ornt&type=m3u_plus
+
+---
+
+Host: vodlat.top:80
+User: IvonVallejo429
+Pass: y8N12TBkk1
+M3U: http://vodlat.top:80/get.php?username=IvonVallejo429&password=y8N12TBkk1&type=m3u_plus
+
+---
+
+Host: vodlat.top:80
+User: ecsrivera0039
+Pass: ixZyi1jmF7
+M3U: http://vodlat.top:80/get.php?username=ecsrivera0039&password=ixZyi1jmF7&type=m3u_plus&output=m3u8
+
+---
+
+Host: vodlat.top:80
+User: MaRLeNcL
+Pass: LcNeLRaM
+M3U: http://vodlat.top:80/get.php?username=MaRLeNcL&password=LcNeLRaM&type=m3u_plus
+
+---
+
+Host: vodlat.top:80
+User: FE994517323RM
+Pass: fernandocruz23
+M3U: http://vodlat.top:80/get.php?username=FE994517323RM&password=fernandocruz23&type=m3u_plus
+
+---
+
+Host: vodlat.top:80
+User: FL2620ALEJANDROM
+Pass: nvePBpa2pUg3
+M3U: http://vodlat.top:80/get.php?username=FL2620ALEJANDROM&password=nvePBpa2pUg3&type=m3u_plus
+
+---
+
+Host: vodlat.top:80
+User: ectchisaguano986
+Pass: UUpcNczssP34
+M3U: http://vodlat.top:80/get.php?username=ectchisaguano986&password=UUpcNczssP34&type=m3u_plus

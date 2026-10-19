@@ -1,9 +1,21 @@
 package com.quilmes.xuper.ui.screens
 
 import android.view.KeyEvent as AndroidKeyEvent
-import android.content.Context
-import android.media.AudioManager
 import android.view.ViewGroup
+import android.view.View
+import android.app.Activity
+import android.content.ContextWrapper
+import android.widget.FrameLayout
+import android.webkit.CookieManager
+import android.os.Build
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.os.Message
+import java.net.URI
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -15,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -53,6 +66,7 @@ import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.WebPageMediaResolver
 import kotlinx.coroutines.delay
 
 /**
@@ -63,6 +77,13 @@ import kotlinx.coroutines.delay
  * con un indicador que confirma el salto, play/pause, audio/subtítulos, cambiar fuente y
  * episodio siguiente. CH+/CH- siguen moviendo canales de Argentina como antes.
  */
+private fun isWebPageUrl(raw: String): Boolean {
+    val parsed = runCatching { URI(raw) }.getOrNull() ?: return false
+    if (parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank()) return false
+    val path = parsed.path.orEmpty().lowercase()
+    return !listOf(".m3u8", ".mpd", ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".ts", ".aac", ".mp3").any(path::endsWith)
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -78,11 +99,15 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
     onExit: () -> Unit = {},
 ) {
+    if (isWebPageUrl(streamUrl)) {
+        // Primero intenta resolver HTML público a un medio directo para usar ExoPlayer nativo.
+        // Solo cae al WebView embebido si el proveedor no expone una URL de vídeo directa.
+        WebPageResolverPlayer(name = name, pageUrl = streamUrl)
+        return
+    }
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl) { mutableStateOf(true) }
-    var controlInteractionTick by remember(streamUrl) { mutableStateOf(0) }
-    var previousVolume by remember(streamUrl) { mutableStateOf(-1) }
     var showNextEpisode by remember { mutableStateOf(false) }
     var sourceIndex by remember(streamUrl, alternatePlayers) {
         mutableStateOf(alternatePlayers.indexOfFirst { it.streamUrl == streamUrl })
@@ -97,8 +122,6 @@ fun PlayerScreen(
     // como en cualquier reproductor de streaming grande).
     var seekFlash by remember { mutableStateOf<String?>(null) }
     var seekFlashToken by remember { mutableStateOf(0) }
-    var repeatedKeyCode by remember { mutableStateOf(0) }
-    var repeatedKeyCount by remember { mutableStateOf(0) }
 
     // Fila de botones de abajo: en vez de depender de que izquierda/derecha muevan el foco
     // entre botones (eso es lo que quedaba "pegado" — la flecha derecha quedaba reservada
@@ -106,25 +129,8 @@ fun PlayerScreen(
     // de forma explícita y predecible.
     val buttonCount = 4 // Reproducir/Pausar, Cambiar reproductor, Audio, Subtítulos
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
+    val rootFocusRequester = remember(streamUrl) { FocusRequester() }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-
-    fun revealControls() {
-        showControls = true
-        controlInteractionTick++
-    }
-
-    fun toggleMute() {
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (current > 0) {
-            previousVolume = current
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
-        } else {
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val restore = previousVolume.takeIf { it > 0 } ?: (max / 2).coerceAtLeast(1)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, restore.coerceAtMost(max), AudioManager.FLAG_SHOW_UI)
-        }
-    }
 
     val dataSourceFactory = remember {
         DefaultHttpDataSource.Factory()
@@ -168,20 +174,18 @@ fun PlayerScreen(
     }
 
     fun seekBy(deltaMs: Long) {
-        if (!exoPlayer.isCurrentMediaItemSeekable) {
-            flashSeek("⏭  No disponible")
-            revealControls()
-            return
-        }
         val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L)
-        exoPlayer.seekTo(if (exoPlayer.duration > 0) target.coerceAtMost(exoPlayer.duration) else target)
-        val seconds = kotlin.math.abs(deltaMs / 1000L)
-        flashSeek(if (deltaMs < 0) "⏪  ${seconds} s" else "${seconds} s  ⏩")
-        revealControls()
+        exoPlayer.seekTo(target)
+        flashSeek(if (deltaMs < 0) "⏪  10 s" else "10 s  ⏩")
+        showControls = true
     }
 
     LaunchedEffect(exoPlayer, streamUrl) {
         setUrl(streamUrl, streamHeaders)
+    }
+    LaunchedEffect(streamUrl) {
+        delay(100)
+        runCatching { rootFocusRequester.requestFocus() }
     }
     // El foco se reasigna al botón seleccionado cada vez que los controles aparecen (al abrir
     // o al reaparecer tras auto-ocultarse), así queda listo para navegar sin tocar dos veces.
@@ -192,9 +196,9 @@ fun PlayerScreen(
             runCatching { buttonFocusRequesters[0].requestFocus() }
         }
     }
-    LaunchedEffect(exoPlayer, showControls, controlInteractionTick) {
+    LaunchedEffect(exoPlayer, showControls) {
         if (showControls) {
-            delay(5000)
+            delay(6000)
             showControls = false
         }
     }
@@ -224,10 +228,10 @@ fun PlayerScreen(
                     sourceIndex = nextIndex
                     failedSources++
                     setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
-                    revealControls()
+                    showControls = true
                 } else {
                     error = "No se encontró otro enlace coincidente que no se haya probado. Puede que esta película o episodio no esté disponible en las listas cargadas."
-                    revealControls()
+                    showControls = true
                 }
             }
         }
@@ -251,13 +255,13 @@ fun PlayerScreen(
 
     fun togglePlayPause() {
         if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-        revealControls()
+        showControls = true
     }
 
     fun changeSource() {
         if (alternatePlayers.isEmpty()) {
             error = "No hay otra fuente coincidente en las listas cargadas."
-            revealControls()
+            showControls = true
             return
         }
         val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
@@ -270,76 +274,47 @@ fun PlayerScreen(
             // are recreated and the user loses the playback overlay.
             setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
             error = null
-            revealControls()
+            showControls = true
         } else {
             error = "No se encontraron más enlaces distintos para este contenido."
-            revealControls()
+            showControls = true
         }
     }
 
     fun moveButtonFocus(delta: Int) {
         focusedButton = (focusedButton + delta).coerceIn(0, buttonCount - 1)
-        controlInteractionTick++
         runCatching { buttonFocusRequesters[focusedButton].requestFocus() }
     }
 
     Box(
-        Modifier.fillMaxSize().background(Color.Black).focusable()
+        Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocusRequester).focusable()
             .onPreviewKeyEvent { event ->
-                val keyCode = event.key.keyCode.toInt()
-                if (event.type == KeyEventType.KeyUp) {
-                    if (keyCode == repeatedKeyCode) {
-                        repeatedKeyCode = 0
-                        repeatedKeyCount = 0
-                    }
-                    return@onPreviewKeyEvent false
-                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (keyCode == repeatedKeyCode) repeatedKeyCount++ else {
-                    repeatedKeyCode = keyCode
-                    repeatedKeyCount = 0
-                }
-                val repeat = repeatedKeyCount
-                when (keyCode) {
+                // CH+/CH- y las teclas físicas de medios (si el control remoto las tiene)
+                // funcionan siempre, se vean o no los controles — como en cualquier TV.
+                when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-10_000); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(10_000); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer.play(); isPlaying = true; revealControls(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; revealControls(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_STOP -> { exoPlayer.stop(); onExit(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_UP -> { audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_DOWN -> { audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_MUTE, AndroidKeyEvent.KEYCODE_MUTE -> { toggleMute(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
-                        if (showControls) { showControls = false; return@onPreviewKeyEvent true }
-                        onExit(); return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        val seconds = when { repeat >= 6 -> 60L; repeat >= 3 -> 30L; repeat > 0 -> 20L; else -> 10L }
-                        seekBy(-seconds * 1000L)
-                        return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        val seconds = when { repeat >= 6 -> 60L; repeat >= 3 -> 30L; repeat > 0 -> 20L; else -> 10L }
-                        seekBy(seconds * 1000L)
-                        return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER -> {
-                        if (!showControls) { togglePlayPause(); return@onPreviewKeyEvent true }
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (!showControls) { revealControls(); return@onPreviewKeyEvent true }
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (!showControls) { revealControls(); return@onPreviewKeyEvent true }
-                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer.play(); isPlaying = true; return@onPreviewKeyEvent true }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; return@onPreviewKeyEvent true }
                 }
                 when (event.key) {
-                    Key.DirectionUp -> { if (showControls) { moveButtonFocus(-1); true } else { revealControls(); true } }
-                    Key.DirectionDown -> { if (showControls) { moveButtonFocus(1); true } else { revealControls(); true } }
-                    Key.DirectionCenter, Key.Enter -> if (!showControls) { togglePlayPause(); true } else false
+                    // Izquierda/derecha SIEMPRE adelantan o atrasan 10 s, se vean los controles
+                    // o no y esté el foco donde esté — no hace falta "entrar" a un botón primero.
+                    Key.DirectionLeft -> { seekBy(-10_000); true }
+                    Key.DirectionRight -> { seekBy(10_000); true }
+                    Key.DirectionCenter, Key.Enter -> {
+                        if (!showControls) { showControls = true; true } else false
+                    }
+                    Key.DirectionUp -> {
+                        if (!showControls) { showControls = true; true } else { moveButtonFocus(-1); true }
+                    }
+                    Key.DirectionDown -> {
+                        if (!showControls) { showControls = true; true } else { moveButtonFocus(1); true }
+                    }
                     else -> false
                 }
             }
@@ -354,7 +329,7 @@ fun PlayerScreen(
                     isFocusable = false
                     isFocusableInTouchMode = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                    setOnClickListener { revealControls() }
+                    setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 }
             },
@@ -393,7 +368,7 @@ fun PlayerScreen(
                     }
                 }
                 Text(
-                    "◀  10 s        10 s  ▶        ▲▼  cambiar botón",
+                    "◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir",
                     color = Color(0x99FFFFFF),
                     fontSize = 11.sp,
                 )
@@ -411,14 +386,14 @@ fun PlayerScreen(
                     Button(
                         modifier = Modifier.focusRequester(buttonFocusRequesters[2]),
                         onClick = {
-                            revealControls()
+                            showControls = true
                             TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
                         },
                     ) { Text("♫  Audio") }
                     Button(
                         modifier = Modifier.focusRequester(buttonFocusRequesters[3]),
                         onClick = {
-                            revealControls()
+                            showControls = true
                             TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
                         },
                     ) { Text("CC  Subtítulos") }
@@ -443,4 +418,291 @@ private fun formatTime(ms: Long): String {
     val m = (total % 3600) / 60
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+
+/** Resuelve una URL de detalle fuera del hilo principal y deriva al reproductor adecuado. */
+@Composable
+private fun WebPageResolverPlayer(name: String, pageUrl: String) {
+    var attempt by remember(pageUrl) { mutableStateOf(0) }
+    var result by remember(pageUrl) { mutableStateOf<WebPageMediaResolver.Result?>(null) }
+
+    LaunchedEffect(pageUrl, attempt) {
+        result = null
+        result = WebPageMediaResolver.resolve(pageUrl)
+    }
+
+    when (val resolved = result) {
+        null -> Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Buscando una fuente declarada por la página…", color = Color.White, fontSize = 18.sp)
+                Text("Esto puede tardar unos segundos", color = Color(0xFF9CCBD4), fontSize = 13.sp)
+            }
+        }
+        is WebPageMediaResolver.Result.DirectMedia -> PlayerScreen(name = name, streamUrl = resolved.url)
+        is WebPageMediaResolver.Result.EmbedPage -> WebEmbedPlayer(url = resolved.url)
+        is WebPageMediaResolver.Result.NotFound -> Box(
+            Modifier.fillMaxSize().background(Color(0xFF07111B)).padding(32.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("No se encontró una fuente reproducible", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(resolved.reason, color = Color(0xFFB9CDD6), fontSize = 15.sp)
+                Text("El extractor solo lee fuentes públicas del HTML inicial. Si el sitio construye el reproductor con JavaScript, la app no puede deducir una URL de vídeo fiable con Jsoup.", color = Color(0xFF8BA7B5), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { attempt++ }) { Text("Reintentar") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Un embed es una página HTML, no un archivo de video: se renderiza en WebView.
+ * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
+ */
+@Composable
+private fun WebEmbedPlayer(url: String) {
+    val context = LocalContext.current
+    var progress by remember(url) { mutableStateOf(0) }
+    var pageError by remember(url) { mutableStateOf<String?>(null) }
+    var pageFinished by remember(url) { mutableStateOf(false) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var serverOptions by remember(url) { mutableStateOf<List<String>>(emptyList()) }
+    var showServerPicker by remember(url) { mutableStateOf(false) }
+
+    fun refreshServerOptions() {
+        val script = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]));var out=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!out.some(function(x){return x===t}))out.push(t);});return JSON.stringify(out.slice(0,12));}catch(e){return "[]";}})()"""
+        webViewRef?.evaluateJavascript(script) { value ->
+            val decoded = runCatching { org.json.JSONArray(value?.trim()?.removeSurrounding("\"" )?.replace("\\\"", "\"") ?: "[]") }.getOrNull()
+            if (decoded != null) serverOptions = (0 until decoded.length()).mapNotNull { i -> decoded.optString(i).takeIf { it.isNotBlank() } }
+        }
+    }
+
+    // No dejamos un indicador de carga infinito si el servidor no termina de responder.
+    LaunchedEffect(url) {
+        delay(30_000)
+        if (!pageFinished && pageError == null) {
+            pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
+        }
+    }
+
+    // Algunos proveedores cargan la página correctamente pero fallan al iniciar el video.
+    // Sondeamos el error HTML5 y los servidores visibles porque WebView no notifica esos fallos
+    // como errores de navegación. Los iframes de otro origen no son inspeccionables por seguridad.
+    LaunchedEffect(url) {
+        while (true) {
+            delay(3_000)
+            webViewRef?.evaluateJavascript("(function(){var v=document.querySelector('video');return v&&v.error?'VIDEO_ERROR:'+v.error.code:''})()") { result ->
+                if (result?.contains("VIDEO_ERROR") == true && pageError == null) {
+                    pageError = "La página cargó, pero su reproductor informó un error de video. Si hay otro servidor disponible, podés cambiarlo abajo."
+                }
+            }
+            refreshServerOptions()
+        }
+    }
+
+    BackHandler(enabled = webViewRef?.canGoBack() == true) { webViewRef?.goBack() }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext ->
+                val container = FrameLayout(viewContext).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+                val webView = WebView(viewContext).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    // Bloqueo básico de ventanas emergentes y contenido mixto inseguro.
+                    settings.javaScriptCanOpenWindowsAutomatically = false
+                    settings.setSupportMultipleWindows(false)
+                    settings.loadsImagesAutomatically = true
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    settings.userAgentString = settings.userAgentString + " XuperQuilmesTV/1.0"
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.safeBrowsingEnabled = true
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    webChromeClient = object : WebChromeClient() {
+                        private var fullscreenView: View? = null
+                        private var fullscreenCallback: CustomViewCallback? = null
+                        private var originalUi = 0
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            progress = newProgress
+                        }
+                        override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
+                            // Nunca crear una segunda ventana/pestaña; suele ser la vía de los popunders.
+                            return false
+                        }
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (view == null || fullscreenView != null) { callback?.onCustomViewHidden(); return }
+                            val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+                            val decor = activity?.window?.decorView as? ViewGroup
+                            if (decor == null) { callback?.onCustomViewHidden(); return }
+                            fullscreenView = view
+                            fullscreenCallback = callback
+                            originalUi = decor.systemUiVisibility
+                            decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            decor.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        }
+                        override fun onHideCustomView() {
+                            val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+                            val decor = activity?.window?.decorView as? ViewGroup
+                            fullscreenView?.let { decor?.removeView(it) }
+                            fullscreenView = null
+                            fullscreenCallback?.onCustomViewHidden()
+                            fullscreenCallback = null
+                            decor?.systemUiVisibility = originalUi
+                        }
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                            val requestUrl = request?.url?.toString() ?: return null
+                            // Una excepción del motor de filtros nunca debe cerrar el reproductor.
+                            return runCatching {
+                                if (XuperBraveAdblock.shouldBlock(request, view?.url)) XuperBraveAdblock.blockedResponse() else null
+                            }.onFailure { android.util.Log.w("XuperWebView", "Falló el filtro de una solicitud; se permite continuar", it) }
+                                .getOrNull()
+                        }
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            val target = request?.url?.toString() ?: return true
+                            val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
+                            // Solo navegación web http(s); rechaza esquemas externos y destinos publicitarios conocidos.
+                            if (scheme != "http" && scheme != "https") return true
+                            val blocked = runCatching { XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document") }
+                                .onFailure { android.util.Log.w("XuperWebView", "Falló el filtro de navegación; se permite continuar", it) }
+                                .getOrDefault(false)
+                            if (blocked) {
+                                pageError = "Se bloqueó una redirección publicitaria o de seguimiento. Volvé al reproductor e intentá reproducir otra vez."
+                                return true
+                            }
+                            return false
+                        }
+                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) { progress = 0; pageFinished = false; pageError = null }
+                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                            progress = 100
+                            pageFinished = true
+                            refreshServerOptions()
+                            if (view != null && !pageUrl.isNullOrBlank()) {
+                                runCatching { XuperBraveAdblock.injectCosmetics(view, pageUrl) }
+                                    .onFailure { android.util.Log.w("XuperWebView", "No se pudieron aplicar reglas cosméticas", it) }
+                            }
+                            // Refuerzo best-effort del filtro: reduce banners/capas publicitarias,
+                            // bloquea window.open y enlaces de salida claramente publicitarios. No
+                            // oculta video/iframe de forma global para no romper el reproductor.
+                            view?.evaluateJavascript("""(function(){
+                              try {
+                                if (!window.__xuperAdGuardInstalled) {
+                                  window.__xuperAdGuardInstalled = true;
+                                  window.open = function(){ return null; };
+                                  var adHref = /doubleclick|googlesyndication|googleadservices|popunder|popcash|popads|adsterra|exoclick|onclickads|clickadu|trafficjunky|ad-maven|admaven|hilltopads|monetag/i;
+                                  document.addEventListener('click', function(ev){
+                                    var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+                                    if (a && adHref.test(a.href || '')) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+                                  }, true);
+                                }
+                                var css = '[id*="ad-" i],[id^="ads" i],[class*="popunder" i],[class*="popup-ad" i],[class*="advertisement" i],[class*="ad-banner" i],[class*="adsbox" i],[class*="ad-container" i],iframe[src*="doubleclick" i],iframe[src*="googlesyndication" i]{display:none!important;visibility:hidden!important;pointer-events:none!important;max-height:0!important;max-width:0!important}';
+                                var style=document.getElementById('xuper-ad-cosmetics');
+                                if(!style){style=document.createElement('style');style.id='xuper-ad-cosmetics';(document.head||document.documentElement).appendChild(style);} style.textContent=css;
+                              } catch(e) {}
+                            })();""", null)
+                            // Se oculta el botón de fullscreen del reproductor del sitio porque
+                            // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
+                            // son best-effort: cada proveedor usa un reproductor distinto.
+                            view?.evaluateJavascript("""(function(){
+                              var css = '.jw-icon-fullscreen,.vjs-fullscreen-control,.plyr__control[data-plyr="fullscreen"],.shaka-fullscreen-button,.fullscreen-button,[aria-label*="Fullscreen" i],[title*="Fullscreen" i],[aria-label*="Pantalla completa" i],[title*="Pantalla completa" i]{display:none!important;visibility:hidden!important;width:0!important}';
+                              var style=document.getElementById('xuper-hide-fullscreen');
+                              if(!style){style=document.createElement('style');style.id='xuper-hide-fullscreen';document.head.appendChild(style);} style.textContent=css;
+                            })();""", null)
+                        }
+                        override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                            // Android puede matar el proceso aislado de WebView por memoria o por un fallo del sitio.
+                            // Consumir el evento evita que ese fallo arrastre la Activity de Xuper.
+                            pageError = "El reproductor web se cerró inesperadamente. Volvé atrás e intentá otra fuente."
+                            if (view != null) {
+                                runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                                // Ya fuera del contenedor, liberar el WebView que perdió su renderer.
+                                runCatching { view.destroy() }
+                            }
+                            webViewRef = null
+                            return true
+                        }
+                        override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                            if (request?.isForMainFrame == true) {
+                                val description = error?.description?.toString()?.takeIf { it.isNotBlank() }
+                                pageError = if (description != null) "Falló la carga de la página: $description" else "No se pudo cargar la página. Revisá la conexión e intentá de nuevo."
+                            }
+                        }
+                        override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
+                            if (request?.isForMainFrame == true && (response?.statusCode ?: 200) >= 400) pageError = "El sitio respondió HTTP ${response?.statusCode}. Puede que el contenido no esté disponible."
+                        }
+                    }
+                    setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
+                    loadUrl(url)
+                    requestFocus()
+                }
+                webViewRef = webView
+                container.addView(webView)
+                container
+            },
+            update = { container ->
+                val webView = container.getChildAt(0) as? WebView
+                if (webView != null && webView.url != url && webView.tag != url) { webView.tag = url; webView.loadUrl(url) }
+            },
+            onRelease = { container ->
+                (container.getChildAt(0) as? WebView)?.let { webView ->
+                    runCatching { webView.stopLoading() }
+                    runCatching { webView.loadUrl("about:blank") }
+                    runCatching { webView.clearHistory() }
+                    runCatching { webView.removeAllViews() }
+                    runCatching { webView.destroy() }
+                }
+                webViewRef = null
+            },
+        )
+        if (progress < 100 && pageError == null) {
+            Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
+        }
+        if (serverOptions.isNotEmpty() && pageError == null) {
+            Button(onClick = { refreshServerOptions(); showServerPicker = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)) {
+                Text("Cambiar servidor (${serverOptions.size})")
+            }
+        }
+        if (showServerPicker && serverOptions.isNotEmpty()) {
+            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.72f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Servidores disponibles en la página", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                serverOptions.forEachIndexed { index, label ->
+                    Button(onClick = {
+                        val safeIndex = index.coerceIn(0, 11)
+                        val clickScript = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]'));var unique=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!unique.some(function(x){return x.t===t}))unique.push({e:e,t:t});});els=unique.slice(0,12).map(function(x){return x.e});if(els[SAFE_INDEX]){els[SAFE_INDEX].click();return 'ok'}return 'missing'}catch(e){return 'error'}})()""".replace("SAFE_INDEX", safeIndex.toString())
+                        webViewRef?.evaluateJavascript(clickScript, null)
+                        showServerPicker = false
+                        pageError = null
+                    }) { Text(label) }
+                }
+                Button(onClick = { showServerPicker = false }) { Text("Cerrar") }
+            }
+        }
+        if (pageError != null) {
+            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.78f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("No se pudo reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(pageError.orEmpty(), color = Color(0xFFD8E3EA), fontSize = 15.sp)
+                Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { pageError = null; progress = 0; pageFinished = false; webViewRef?.reload() }) { Text("↻  Reintentar") }
+                    if (serverOptions.isNotEmpty()) {
+                        Button(onClick = { pageError = null; refreshServerOptions(); showServerPicker = true }) { Text("Cambiar servidor") }
+                    }
+                    Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
+                }
+            }
+        }
+        Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("Bloqueo reforzado activo · OK: controles · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
+        }
+    }
 }
