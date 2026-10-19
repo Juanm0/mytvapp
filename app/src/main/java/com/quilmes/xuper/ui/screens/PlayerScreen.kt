@@ -231,7 +231,7 @@ fun PlayerScreen(
                     Button(onClick = { exoPlayer.seekForward(); showControls = true }) { Text("10 s ↷") }
                     Button(onClick = { changeSource() }) { Text("⟳  Cambiar reproductor") }
                     Button(onClick = {
-                        TrackSelectionDialogBuilder(context, "Audio y subtítulos", exoPlayer).build().show()
+                        TrackSelectionDialogBuilder(context, "Audio y subtítulos", exoPlayer, 0).build().show()
                         showControls = true
                     }) { Text("♫  Audio / subtítulos") }
                 }
