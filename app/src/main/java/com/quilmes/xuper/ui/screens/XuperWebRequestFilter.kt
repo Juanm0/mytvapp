@@ -43,6 +43,48 @@ internal object XuperWebRequestFilter {
         "scorecardresearch.com",
         "quantserve.com",
         "segment.io",
+        "ad-delivery.net",
+        "ad-maven.com",
+        "adskeeper.co.uk",
+        "adskeeper.com",
+        "adf.ly",
+        "advertising.com",
+        "advertising.microsoft.com",
+        "adnami.io",
+        "adpushup.com",
+        "adrecover.com",
+        "adscore.com",
+        "adspyglass.com",
+        "adtech.de",
+        "bidswitch.net",
+        "bluekai.com",
+        "casalemedia.com",
+        "criteo.com",
+        "criteo.net",
+        "demdex.net",
+        "everesttech.net",
+        "getadmiral.com",
+        "imrworldwide.com",
+        "lijit.com",
+        "media.net",
+        "moatads.com",
+        "openx.net",
+        "pubmatic.com",
+        "rubiconproject.com",
+        "sharethrough.com",
+        "smartadserver.com",
+        "themoneytizer.com",
+        "triplelift.com",
+        "yieldmo.com",
+        "zemanta.com",
+        "zedo.com",
+        "ad.gt",
+        "adsafeprotected.com",
+        "adlightning.com",
+        "adkernel.com",
+        "ad.plus",
+        "trafficstars.com",
+        "trafficfactory.biz",
     )
 
     private val blockedUrlFragments = listOf(
@@ -54,7 +96,23 @@ internal object XuperWebRequestFilter {
         "/popunder/",
         "/popup-ad",
         "/tracking-pixel",
+        "/ads/",
+        "/advert/",
+        "/advertisement/",
+        "/adserver/",
+        "/adframe/",
+        "/adtag/",
+        "/vast/",
+        "doubleclick",
+        "popunder",
+        "popup-ad",
+        "clickunder",
+        "click-track",
+        "track.php",
+        "pixel.gif",
     )
+
+    private val adLikeHostLabel = Regex("(^|[-.])(ads?|adserver|adservice|adnetwork|popunder|popads|clicktracker|tracking)([-.]|$)", RegexOption.IGNORE_CASE)
 
     fun shouldBlock(rawUrl: String): Boolean {
         val uri = runCatching { URI(rawUrl) }.getOrNull() ?: return false
@@ -62,6 +120,7 @@ internal object XuperWebRequestFilter {
         if (scheme != "http" && scheme != "https") return false
         val host = uri.host?.lowercase(Locale.ROOT)?.trimEnd('.') ?: return false
         if (blockedHosts.any { host == it || host.endsWith(".$it") }) return true
+        if (host.split('.').any { label -> adLikeHostLabel.matches(".$label.") }) return true
         val pathAndQuery = ((uri.rawPath ?: "") + "?" + (uri.rawQuery ?: "")).lowercase(Locale.ROOT)
         return blockedUrlFragments.any { pathAndQuery.contains(it) }
     }

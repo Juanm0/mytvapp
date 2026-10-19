@@ -300,3 +300,17 @@ Ejemplo de URL de episodio: `https://movies2watch.vc/series/breaking-bad-18349/3
 - El indicador de carga ya no puede quedar indefinidamente activo si la página principal no termina: tras 30 segundos se muestra un error y se ofrece reintentar. Los errores de red del frame principal muestran la descripción disponible y los errores HTTP conservan el código de estado.
 - **Limitaciones:** esto es un filtro básico, no Brave Shields ni una implementación completa de EasyList/uBlock. No puede garantizar el bloqueo de anuncios servidos desde el mismo dominio que el vídeo, anuncios insertados dentro del stream, todos los popups/redirects, ni páginas que dependan de contenido mixto o ventanas auxiliares. Un bloqueo agresivo también puede romper el reproductor; si pasa, el dominio o recurso debe revisarse con un caso concreto. No elude DRM, autenticación ni controles de acceso.
 - **Verificación:** se revisó la estructura del proyecto y se valida la integridad del ZIP. No se pudo compilar `assembleRelease` porque este entorno no tiene Android SDK/Gradle configurados. Probar en el Android TV/dispositivo destino sigue siendo necesario.
+
+
+## Refuerzo del WebView, bloqueo de anuncios y cambio de servidor
+
+La versión de octubre de 2026 refuerza el filtro de solicitudes del reproductor web:
+
+- `XuperWebRequestFilter.kt` mantiene una lista local más amplia de redes publicitarias/analítica y reglas de URL para patrones comunes de anuncios, popunders y píxeles de seguimiento. Las coincidencias reciben una respuesta vacía HTTP 204.
+- El `WebView` rechaza ventanas emergentes, no permite ventanas JavaScript automáticas, bloquea contenido mixto HTTP dentro de páginas HTTPS, activa Safe Browsing cuando está disponible y rechaza esquemas de navegación externos. Las redirecciones hacia dominios que coinciden con el filtro se cancelan.
+- El filtro es local y no descarga ni actualiza listas EasyList/EasyPrivacy. No equivale a Brave Shields/uBlock Origin: no puede detectar toda la publicidad contextual o servida desde el mismo dominio del video, y una regla puede romper algún reproductor. No se bloquean de forma general los dominios de video ni se deshabilitan controles de acceso.
+- El reproductor busca en el DOM principal botones/enlaces visibles con nombres habituales de servidor, fuente o player y ofrece `Cambiar servidor` si encuentra opciones. Al detectar un error HTML5 de video, el panel de error ofrece reintento y, cuando hay opciones detectadas, cambio de servidor. La selección se realiza pulsando el control correspondiente de la página, no inventando URLs.
+- La detección solo puede ver elementos del documento accesible. Por la política de mismo origen, no puede inspeccionar los controles internos de un iframe de otro dominio. Algunos sitios también crean selectores con iconos sin texto o estructuras personalizadas que no se detectarán; en esos casos se conserva el selector original del sitio y puede usarse con el mando.
+- Se agregó el import explícito `android.webkit.WebResourceResponse` en `PlayerScreen.kt`, que corrige el error de compilación `Unresolved reference: WebResourceResponse` reportado por `compileReleaseKotlin`.
+
+**Validación pendiente:** este entorno no tiene Gradle/Android SDK disponibles, por lo que no se pudo ejecutar `gradle assembleRelease`. Compilar y probar en Android TV sigue siendo obligatorio, especialmente para comprobar que los filtros no bloqueen el reproductor concreto y que sus botones de servidor sean detectables.

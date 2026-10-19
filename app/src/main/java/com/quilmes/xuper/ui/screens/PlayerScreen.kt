@@ -13,6 +13,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.os.Message
 import java.net.URI
 import androidx.compose.animation.core.animateFloatAsState
@@ -465,12 +466,37 @@ private fun WebEmbedPlayer(url: String) {
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var serverOptions by remember(url) { mutableStateOf<List<String>>(emptyList()) }
+    var showServerPicker by remember(url) { mutableStateOf(false) }
+
+    fun refreshServerOptions() {
+        val script = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]));var out=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!out.some(function(x){return x===t}))out.push(t);});return JSON.stringify(out.slice(0,12));}catch(e){return "[]";}})()"""
+        webViewRef?.evaluateJavascript(script) { value ->
+            val decoded = runCatching { org.json.JSONArray(value?.trim()?.removeSurrounding("\"" )?.replace("\\\"", "\"") ?: "[]") }.getOrNull()
+            if (decoded != null) serverOptions = (0 until decoded.length()).mapNotNull { i -> decoded.optString(i).takeIf { it.isNotBlank() } }
+        }
+    }
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
         delay(30_000)
         if (!pageFinished && pageError == null) {
             pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
+        }
+    }
+
+    // Algunos proveedores cargan la página correctamente pero fallan al iniciar el video.
+    // Sondeamos el error HTML5 y los servidores visibles porque WebView no notifica esos fallos
+    // como errores de navegación. Los iframes de otro origen no son inspeccionables por seguridad.
+    LaunchedEffect(url) {
+        while (true) {
+            delay(3_000)
+            webViewRef?.evaluateJavascript("(function(){var v=document.querySelector('video');return v&&v.error?'VIDEO_ERROR:'+v.error.code:''})()") { result ->
+                if (result?.contains("VIDEO_ERROR") == true && pageError == null) {
+                    pageError = "La página cargó, pero su reproductor informó un error de video. Si hay otro servidor disponible, podés cambiarlo abajo."
+                }
+            }
+            refreshServerOptions()
         }
     }
 
@@ -550,6 +576,7 @@ private fun WebEmbedPlayer(url: String) {
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
                             pageFinished = true
+                            refreshServerOptions()
                             // Se oculta el botón de fullscreen del reproductor del sitio porque
                             // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
                             // son best-effort: cada proveedor usa un reproductor distinto.
@@ -589,6 +616,26 @@ private fun WebEmbedPlayer(url: String) {
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }
+        if (serverOptions.isNotEmpty() && pageError == null) {
+            Button(onClick = { refreshServerOptions(); showServerPicker = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)) {
+                Text("Cambiar servidor (${serverOptions.size})")
+            }
+        }
+        if (showServerPicker && serverOptions.isNotEmpty()) {
+            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.72f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Servidores disponibles en la página", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                serverOptions.forEachIndexed { index, label ->
+                    Button(onClick = {
+                        val safeIndex = index.coerceIn(0, 11)
+                        val clickScript = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]'));var unique=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!unique.some(function(x){return x.t===t}))unique.push({e:e,t:t});});els=unique.slice(0,12).map(function(x){return x.e});if(els[SAFE_INDEX]){els[SAFE_INDEX].click();return 'ok'}return 'missing'}catch(e){return 'error'}})()""".replace("SAFE_INDEX", safeIndex.toString())
+                        webViewRef?.evaluateJavascript(clickScript, null)
+                        showServerPicker = false
+                        pageError = null
+                    }) { Text(label) }
+                }
+                Button(onClick = { showServerPicker = false }) { Text("Cerrar") }
+            }
+        }
         if (pageError != null) {
             Column(Modifier.align(Alignment.Center).fillMaxWidth(0.78f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No se pudo reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -596,13 +643,16 @@ private fun WebEmbedPlayer(url: String) {
                 Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { pageError = null; progress = 0; pageFinished = false; webViewRef?.reload() }) { Text("↻  Reintentar") }
+                    if (serverOptions.isNotEmpty()) {
+                        Button(onClick = { pageError = null; refreshServerOptions(); showServerPicker = true }) { Text("Cambiar servidor") }
+                    }
                     Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
                 }
             }
         }
         Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("Bloqueo básico activo · OK: controles · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
+            Text("Bloqueo reforzado activo · OK: controles · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
         }
     }
 }
