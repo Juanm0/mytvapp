@@ -35,6 +35,23 @@ jobs:
             printf 'TMDB_API_KEY=%s\n' "$TMDB_API_KEY" >> local.properties
           fi
 
+      # El AAR 0.1.3 contiene el motor Rust/JNI de Brave y las reglas de recursos cosméticos.
+      # Su metadata declara compileSdk 37 aunque el wrapper no necesita APIs Java nuevas;
+      # se consume como AAR local y se ajusta la metadata a SDK 36, disponible en CI.
+      - name: Preparar AAR nativo de Brave adblock-rust
+        run: |
+          mkdir -p app/libs /tmp/adblock-aar
+          curl --fail --location --retry 3 \
+            https://repo.maven.apache.org/maven2/io/github/mlm-games/adblock/0.1.3/adblock-0.1.3.aar \
+            --output app/libs/adblock-0.1.3.aar
+          cd /tmp/adblock-aar
+          unzip -q "$GITHUB_WORKSPACE/app/libs/adblock-0.1.3.aar"
+          if [ -f META-INF/com/android/build/gradle/aar-metadata.properties ]; then
+            sed -i 's/^minCompileSdkVersion=37$/minCompileSdkVersion=36/' META-INF/com/android/build/gradle/aar-metadata.properties
+            sed -i 's/^minCompileSdk=37$/minCompileSdk=36/' META-INF/com/android/build/gradle/aar-metadata.properties
+          fi
+          zip -qr "$GITHUB_WORKSPACE/app/libs/adblock-0.1.3.aar" .
+
       - name: Compilar APK (release rápido, firmado con la clave del proyecto)
         run: gradle assembleRelease --no-daemon
 
