@@ -85,6 +85,23 @@ fun PosterCard(
                         fontWeight = FontWeight.Bold,
                     )
                 }
+                // Catálogo de TMDB sin fuente de video coincidente (normal en el buscador:
+                // trae metadata de estrenos que nuestras listas no tienen). Se avisa ANTES
+                // de tocar la ficha en vez de dejar que el usuario entre y se encuentre con
+                // el botón deshabilitado.
+                val noVideo = !title.isLive && title.contentKind != ContentKind.LIVE && title.streamUrl.isBlank()
+                if (noVideo) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(6.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xCC14202B))
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    ) {
+                        Text(text = "SIN VIDEO", color = Color(0xFFE0A33E), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
             Box(
                 modifier = Modifier

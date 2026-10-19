@@ -45,14 +45,13 @@ import com.quilmes.xuper.ui.theme.XuperTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-/** Filas de TMDB que aparecen en Inicio (el resto del catálogo queda para el buscador). */
-private val HOME_TMDB_ROWS = listOf(
-    "Tendencias · Películas",
-    "Tendencias · Series",
-    "Películas populares",
-    "Series populares",
-)
-private const val HOME_TMDB_ITEMS = 14
+// Inicio YA NO muestra filas de TMDB (Tendencias/Populares, etc.): esas fichas no tienen
+// video real detrás casi nunca (TMDB trae metadata de estrenos actuales; nuestras listas M3U
+// son películas de dominio público viejas, así que el nombre casi nunca coincide). Mostrarlas
+// en Inicio como si fueran "contenido disponible" es lo que generaba "no puedo ver nada": el
+// usuario tocaba el póster más vistoso de la pantalla y resultaba ser un estreno sin fuente.
+// El catálogo de TMDB sigue existiendo para el buscador (ahí sí tiene sentido: el usuario ya
+// sabe que puede no tener video y lo usa para descubrir, no como oferta principal).
 private const val HOME_VOD_ITEMS = 40
 
 @Composable
@@ -74,11 +73,14 @@ fun HomeScreen(
         val computed = withContext(Dispatchers.Default) { buildHomeRows(sections) }
         rows = computed
     }
-    // Banner destacado: la primera ficha de TMDB con imagen de fondo; si todavía no cargó,
-    // el primer título bajo demanda reproducible.
+    // Banner destacado: SIEMPRE un título que realmente se pueda reproducir (streamUrl no
+    // vacío). Antes podía caer una ficha de TMDB sin video — era literalmente lo primero que
+    // el usuario veía y tocaba, y no andaba.
     val featured = remember(rows) {
-        rows.firstOrNull { it.id.startsWith("home-tmdb-") }?.items?.firstOrNull { it.backdropUrl.isNotBlank() }
+        rows.firstOrNull { it.id.startsWith("home-vod-") }
+            ?.items?.firstOrNull { it.backdropUrl.isNotBlank() }
             ?: rows.firstOrNull { it.id.startsWith("home-vod-") }?.items?.firstOrNull()
+            ?: rows.firstOrNull { it.id == "home-argentina" }?.items?.firstOrNull()
     }
 
     if (rows.isEmpty()) {
@@ -200,17 +202,10 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
             }
         }
 
-    // --- TMDB: solo unas pocas filas, con pocos títulos (el catálogo completo está en el buscador) ---
-    val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
-        .filter { it.title in HOME_TMDB_ROWS }
-        .sortedBy { HOME_TMDB_ROWS.indexOf(it.title) }
-        .map { Category("home-tmdb-${it.id}", it.title, it.items.take(HOME_TMDB_ITEMS)) }
-
     return buildList {
         if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
         if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
         if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
-        addAll(tmdbRows)
         addAll(vodRows)
     }
 }

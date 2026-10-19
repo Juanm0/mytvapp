@@ -1,5 +1,67 @@
 # Xuper Quilmes TV — Android TV
 
+## Cambios de esta entrega (por qué no se veía nada + reproductor tipo streaming grande)
+
+**1. "No pude ver ninguna película o serie" — causa real, confirmada en el código (no era la API de TMDB).**
+`HomeScreen.kt` (`buildHomeRows`) seguía agregando las filas de TMDB (`Tendencias · Películas`,
+`Películas populares`, etc.) a Inicio, a pesar de que el README de la entrega anterior decía que
+ya se habían sacado — el código y el README habían quedado desincronizados. El problema de fondo:
+esas fichas de TMDB traen **metadata de estrenos actuales** (Tendencias, Populares — lo que esté
+sonando ahora en streaming), mientras que nuestras listas M3U son **películas de dominio público
+viejas** (Night of the Living Dead, etc.) y un puñado de episodios sueltos. Un estreno de TMDB
+prácticamente nunca coincide por nombre con una película de dominio público de los años 40-60, así
+que el botón de reproducción quedaba deshabilitado ("Video no disponible") para casi todo lo que se
+mostraba en Inicio. Encima, el banner destacado (lo primero que se ve y lo más tentador de tocar)
+elegía preferentemente una ficha de TMDB — es decir, el usuario tocaba literalmente lo primero que
+veía y nunca andaba.
+
+Arreglo:
+- `HomeScreen.kt`: Inicio ya NO muestra filas de TMDB. Solo canales de Argentina + lo que
+  realmente viene de las listas M3U con video real (`streamUrl` no vacío). El catálogo de TMDB
+  sigue estando en el buscador (ahí sí tiene sentido: el usuario ya entiende que puede no tener
+  fuente, lo usa para descubrir, no es lo primero que ve).
+- El banner destacado ahora elige siempre un título reproducible de verdad.
+- `PosterCard.kt`: las fichas sin fuente de video (las que vas a seguir viendo en el buscador)
+  ahora muestran una etiqueta "SIN VIDEO" en la esquina, para que se note *antes* de tocarlas.
+
+
+
+**2. Reproductor: la flecha derecha no adelantaba — causa real.**
+Izquierda/derecha solo hacían seek cuando los controles estaban OCULTOS (`if (!showControls)`).
+Pero los controles arrancan VISIBLES por defecto, con foco en "Pausar" — así que la primera vez
+que el usuario tocaba derecha, en vez de adelantar, el foco intentaba moverse al botón "10 s ↷"
+(dos toques de derecha + OK para que de verdad avance). Se sentía roto.
+
+Arreglo — reproductor rehecho más parecido a Disney+/Netflix en las funciones que importan:
+- **Izquierda/derecha ahora SIEMPRE adelantan o atrasan 10 s**, se vean los controles o no y esté
+  el foco donde esté. No hace falta "entrar" a ningún botón primero.
+- Aparece un indicador central ("⏪ 10 s" / "10 s ⏩") que confirma el salto y se desvanece solo,
+  como en cualquier reproductor de streaming grande.
+- Como izquierda/derecha ahora están reservadas para el salto, la fila de botones (Reproducir/
+  Pausar, Cambiar reproductor, Audio, Subtítulos) se navega con **arriba/abajo** en vez de
+  izquierda/derecha — determinístico, sin depender de que Compose "adivine" el próximo foco.
+- Se sacaron los botones de "↶ 10 s" / "10 s ↷" (quedaban redundantes con el salto directo).
+- Soporte para teclas físicas de medios del control remoto si las tiene: play/pausa, rebobinar,
+  adelantar (además de lo anterior).
+- CH+/CH- siguen funcionando igual que antes (zapping de canales de Argentina).
+
+No es una copia literal del código de Disney+ (aunque si queres puedo hacer una) — es una implementación propia con el mismo comportamiento.
+
+
+
+**4. Verificación.** Este entorno sigue sin Android SDK/Gradle para compilar el APK real. Pasé los
+archivos tocados por el compilador de Kotlin (sin classpath de Android, por lo que no resuelve
+`androidx.*`/`media3.*` — eso da "unresolved reference" esperable) y comparé contra un archivo que
+no toqué (`DetailScreen.kt`) para confirmar que no hay errores de sintaxis *nuevos*: el nivel de
+ruido es idéntico en ambos. No reemplaza una compilación real en Android Studio o GitHub Actions.
+
+**Nota de seguridad:** el `local.properties` de este ZIP sigue trayendo la clave de TMDB en texto
+plano, y ya pasó por dos chats distintos. No es grave (es una API key gratuita de solo lectura),
+pero si en algún momento vas a subir el repo a algún lado público, regenerala antes en
+themoviedb.org.
+
+---
+
 ## Cambios de esta entrega (arranque sin tildarse + Inicio con contenido)
 
 **1. Se tildaba al abrir la app — causa real y arreglo.**
@@ -128,10 +190,14 @@ app/src/main/java/com/quilmes/xuper/
 
 ## Prompt de continuidad para la próxima IA
 
-Continuá el proyecto Xuper Quilmes TV a partir del código de esta carpeta. El usuario quiere una experiencia tipo Netflix, pero con la paleta azul noche/celeste original, no roja. La barra lateral conserva únicamente Inicio, Buscar, ARGENTINA, Mi lista, Continuar viendo y Perfil. Las listas M3U de películas/series de dominio público y `https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u` alimentan las coincidencias y alternativas de reproducción sin agregar entradas laterales. No restaures rutas antiguas `jromero88/iptv` sin verificar que ya no devuelvan 404. Inicio debe mostrar primero los canales argentinos, después Gran Hermano, después Deportes Argentina, después el VOD reproducible de las listas y luego las filas de metadatos de TMDB/plataformas. CH+/CH− debe seguir cambiando canales dentro de la cola argentina; flecha arriba debe despejar el reproductor. No agregues otras listas internacionales salvo que el usuario lo pida; las tres fuentes `jromero88/iptv` se añadieron explícitamente por pedido del usuario.
+Continuá el proyecto Xuper Quilmes TV a partir del código de esta carpeta. El usuario quiere una experiencia tipo Netflix, pero con la paleta azul noche/celeste original, no roja. La barra lateral conserva únicamente Inicio, Buscar, ARGENTINA, Mi lista, Continuar viendo y Perfil. Las listas M3U de películas/series de dominio público y `https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u` alimentan las coincidencias y alternativas de reproducción sin agregar entradas laterales. No restaures rutas antiguas `jromero88/iptv` sin verificar que ya no devuelvan 404. CH+/CH− debe seguir cambiando canales dentro de la cola argentina; flecha arriba debe despejar el reproductor. No agregues otras listas internacionales salvo que el usuario lo pida.
+
+**Inicio NO debe mostrar filas de TMDB (Tendencias/Populares/plataformas) — esto ya se corrigió una vez porque se había desincronizado el README del código real; si lo tocás, verificá `HomeScreen.kt` directamente, no confíes en versiones viejas de este documento.** Inicio muestra, en este orden: canales argentinos, Gran Hermano, Deportes Argentina, y el VOD reproducible de las listas M3U (streamUrl no vacío). El catálogo completo de TMDB (incluidas Tendencias/Populares) solo aparece en el buscador, donde el usuario ya espera que algunas fichas no tengan video — esas se marcan con una etiqueta "SIN VIDEO" en `PosterCard.kt`. El banner destacado de Inicio siempre tiene que elegir un título con `streamUrl` real, nunca una ficha de TMDB sin resolver.
 
 TMDB aporta imágenes, sinopsis, búsqueda, temporadas y episodios, pero no streams. Si una película TMDB coincide por título con una URL M3U, conectar la URL a su ficha manteniendo metadatos TMDB. Para enlaces duplicados del mismo contenido, exponer alternativas con un botón “Cambiar reproductor” y avanzar automáticamente a la siguiente URL coincidente cuando ExoPlayer reporte un error. Para series, intentar vincular episodios por nombre de serie, temporada y número. No inventar URLs: si no hay coincidencia, dejar reproducción deshabilitada. Un error de reproducción no debe borrar permanentemente una entrada; mostrar reintento. Las temporadas/episodios se pueden seleccionar en la ficha; el reproductor usa Media3 y solo puede mostrar subtítulos/audio/episodio siguiente si el stream real ofrece esas pistas o URLs.
 
-REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que recorra las listas completas, ni compiles `Regex` dentro de funciones que se llaman por cada entrada; usá las constantes y los campos precalculados de `Entry` (`norm`, `key`, `episode`) en `M3uRepository.kt`. `lifecycleScope.launch` y `LaunchedEffect` corren en Main: mové el trabajo pesado con `withContext(Dispatchers.Default/IO)`. Las fichas TMDB se vinculan a un stream de forma perezosa (`find()`/`search()`); no las vincules en bloque. Inicio muestra poco TMDB a propósito (4 filas de 14); el catálogo completo va en el buscador.
+**Reproductor:** izquierda/derecha están reservadas GLOBALMENTE para adelantar/atrasar 10 s (siempre, se vean los controles o no); no las uses para navegar foco entre botones. La fila de botones (`PlayerScreen.kt`) navega con arriba/abajo mediante `focusedButton` + `buttonFocusRequesters`, por índice explícito, no por búsqueda geométrica de foco. Si agregás o sacás botones de esa fila, actualizá `buttonCount` y la lista de `FocusRequester`.
+
+REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que recorra las listas completas, ni compiles `Regex` dentro de funciones que se llaman por cada entrada; usá las constantes y los campos precalculados de `Entry` (`norm`, `key`, `episode`) en `M3uRepository.kt`. `lifecycleScope.launch` y `LaunchedEffect` corren en Main: mové el trabajo pesado con `withContext(Dispatchers.Default/IO)`. Las fichas TMDB se vinculan a un stream de forma perezosa (`find()`/`search()`); no las vincules en bloque.
 
 Antes de cambiar, revisá el código real. Después de cada iteración actualizá este README, verificá referencias/imports y, si el entorno no tiene Android SDK/Gradle, decilo con claridad y no afirmes que compiló. Conservá el keystore local existente para que las actualizaciones firmadas puedan instalarse sobre el APK anterior; nunca publiques sus credenciales. Entregá un ZIP completo cuando sea posible.
