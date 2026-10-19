@@ -80,6 +80,18 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxPerRow = 80,
             maxRows = 120,
         ),
+        M3uSource(
+            name = "VOD original",
+            url = File(cacheDir, "vod-original.m3u").toURI().toString(),
+            icon = "🎬",
+            homeRows = 0,
+            // Lista mixta con títulos bajo demanda y algunos canales lineales.
+            // Se muestra como VOD; los streams protegidos por DRM requieren licencia autorizada.
+            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
+            enrichMetadata = false,
+            maxPerRow = 80,
+            maxRows = 120,
+        ),
     ),
 )
 
@@ -92,10 +104,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
-        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_pel_culas_gratis.tsv", "catalog_3_series_gratis.tsv", "catalog_4_mickflix_canales.tsv")
+        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_pel_culas_gratis.tsv", "catalog_3_series_gratis.tsv", "catalog_4_mickflix_canales.tsv", "catalog_5_vod_original.tsv")
         filesDir.listFiles()?.forEach { file ->
             val oldCatalogCache = file.name.startsWith("catalog_") && file.name.endsWith(".tsv") && file.name !in activeCaches
-            val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u")
+            val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u")
             val oldFailureBlacklist = file.name == "unavailable_streams.txt"
             if (oldCatalogCache || oldPlaylist || oldFailureBlacklist) file.delete()
         }
@@ -108,6 +120,14 @@ class MainActivity : ComponentActivity() {
             }
         }.onFailure { error ->
             android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista argentina adicional", error)
+        }
+        // Instala la lista VOD original compartida por el usuario en el almacenamiento privado.
+        runCatching {
+            assets.open("vod-original.m3u").use { input ->
+                File(filesDir, "vod-original.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista VOD original", error)
         }
         // Las listas locales ya están copiadas; ahora sí se puede iniciar la carga.
         lifecycleScope.launch {
