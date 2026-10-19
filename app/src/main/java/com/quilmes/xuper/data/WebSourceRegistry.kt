@@ -96,13 +96,29 @@ object WebSourceRegistry {
     }
 
     fun addSource(context: Context, contentKey: String, rawUrl: String): Boolean {
-        val url = normalizeHttpUrl(rawUrl) ?: return false
+        val url = rawUrl.trim()
+        if (url.isEmpty()) return false
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val current = decode(prefs.getString(KEY_PREFIX + contentKey, null)).toMutableList()
-        if (url in getSources(context, contentKey) || url in current) return false
+        if (url in current) return false
         current.add(url)
-        prefs.edit().putString(KEY_PREFIX + contentKey, JSONArray(current).toString()).apply()
-        return true
+        return prefs.edit().putString(KEY_PREFIX + contentKey, JSONArray(current).toString()).commit()
+    }
+
+    /** Replace selected source atomically; don't hide/remove the old URL before the new one is saved. */
+    fun replaceSource(context: Context, contentKey: String, oldUrl: String, rawUrl: String): Boolean {
+        val replacement = rawUrl.trim()
+        if (replacement.isEmpty()) return false
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val current = decode(prefs.getString(KEY_PREFIX + contentKey, null)).toMutableList()
+        val index = current.indexOf(oldUrl)
+        if (index >= 0) current[index] = replacement else current.add(replacement)
+        val result = current.distinct()
+        val hidden = (decode(prefs.getString("hidden:$contentKey", null)) + oldUrl).distinct()
+        return prefs.edit()
+            .putString(KEY_PREFIX + contentKey, JSONArray(result).toString())
+            .putString("hidden:$contentKey", JSONArray(hidden).toString())
+            .commit()
     }
 
     fun removeSource(context: Context, contentKey: String, rawUrl: String) {
@@ -116,10 +132,11 @@ object WebSourceRegistry {
 
     private fun decode(raw: String?): List<String> = runCatching {
         val json = JSONArray(raw ?: "[]")
-        (0 until json.length()).mapNotNull { index -> normalizeHttpUrl(json.optString(index)) }
+        (0 until json.length()).mapNotNull { index -> json.optString(index).takeIf { it.isNotBlank() } }
     }.getOrDefault(emptyList())
 
-    fun normalizeForEditor(raw: String): String? = normalizeHttpUrl(raw)
+    // The QR editor deliberately stores the user's pasted text as-is; playback decides whether it can open it.
+    fun normalizeForEditor(raw: String): String? = raw.trim().takeIf { it.isNotEmpty() }
 
     private fun normalizeHttpUrl(raw: String): String? = runCatching {
         val value = raw.trim()

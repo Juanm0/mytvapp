@@ -2,7 +2,10 @@ package com.quilmes.xuper.ui.screens
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -343,9 +346,15 @@ private fun SourceQrEditor(
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = "Tocar para agrandar el QR y editar enlaces desde el celular",
-                modifier = Modifier.size(if (compact) 76.dp else 120.dp).clickable { enlarged = true },
+                modifier = Modifier
+                    .size(if (compact) 76.dp else 120.dp)
+                    .border(3.dp, XuperAccentBright, RoundedCornerShape(10.dp))
+                    .background(androidx.compose.ui.graphics.Color.White, RoundedCornerShape(10.dp))
+                    .clickable { enlarged = true }
+                    .focusable()
+                    .padding(3.dp),
             )
-            Text("Tocá el QR para agrandarlo", color = XuperAccentBright, fontSize = 9.sp)
+            Text("◉ TOCÁ PARA AGRANDAR", color = XuperAccentBright, fontSize = 9.sp, fontWeight = FontWeight.Bold)
             if (enlarged) {
                 Dialog(onDismissRequest = { enlarged = false }) {
                     Column(

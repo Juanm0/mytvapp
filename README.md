@@ -61,3 +61,9 @@ En la ficha de una película/serie y junto a cada episodio se muestra un QR que 
 - El campo de URL móvil usa texto con teclado de URL para evitar rechazos del control HTML `type=url` en algunos navegadores móviles. El guardado sigue validando protocolo HTTP/HTTPS y host.
 - El QR de la ficha se puede tocar para abrir una vista ampliada; al cerrarla/volver atrás se regresa al tamaño compacto.
 - Si una fuente no aparece, depende de que la ficha haya recuperado el IMDb ID y de que la fuente sea aplicable al tipo de contenido.
+
+
+## QR editor fixes
+- The phone editor replaces a selected source atomically and hides the replaced generated candidate, so it does not reappear next time the title is opened.
+- URL input accepts the pasted text as-is (only blank input is rejected); no mandatory `http://` or `https://` prefix validation is applied by the editor. Playback still depends on whether the player/provider can handle the supplied text.
+- QR codes have a high-contrast accent border and a clear touch prompt; tapping opens the larger scan view, and back/dismiss returns to the detail screen.
