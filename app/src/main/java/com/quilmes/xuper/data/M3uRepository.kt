@@ -175,51 +175,53 @@ class M3uRepository(
     @Volatile private var byId: Map<String, Title> = emptyMap()
     @Volatile private var searchIndex: List<Pair<String, Title>> = emptyList()
 
-    override suspend fun refresh() = refreshMutex.withLock {
-        withContext(Dispatchers.IO) {
-            iptvRefreshInProgress = true
-            _loading.value = true
-            try {
-                if (synchronized(lock) { entriesBySource.isEmpty() }) {
-                    // Primero el caché del disco, incluso si el catálogo TMDB ya está visible.
-                    val cached = sources.indices.mapNotNull { i -> readCache(i)?.let { i to it } }
-                    if (cached.isNotEmpty()) {
-                        synchronized(lock) {
-                            cached.forEach { (i, entries) -> entriesBySource[i] = entries }
-                            rebuildPublishedState()
-                        }
-                    }
-                }
-                // No abrir decenas de conexiones simultáneas: límite pequeño para evitar saturar
-                // el dispositivo o proveedores lentos. Un fallo aislado no cancela las demás listas.
-                val networkSlots = Semaphore(3)
-                coroutineScope {
-                    sources.mapIndexed { i, source ->
-                        async(Dispatchers.IO) {
-                            networkSlots.withPermit {
-                                runCatching {
-                                    val parsed = parse(downloadWithRetry(source.url), "s$i", source.contentHint)
-                                    if (parsed.isNotEmpty()) {
-                                        val enriched = if (tmdbMetadata.enabled && source.enrichMetadata) {
-                                            tmdbMetadata.enrich(parsed.map { EntryForMetadata(it.group, it.title) })
-                                                .map { entryOf(it.group, it.title) }
-                                        } else parsed
-                                        writeCache(i, enriched)
-                                        publish(i, enriched)
-                                    } else {
-                                        android.util.Log.w("XuperM3U", "Lista sin entradas válidas: ${source.name}")
-                                    }
-                                }.onFailure { error ->
-                                    // El catálogo cacheado se conserva si el proveedor falla o expiró.
-                                    android.util.Log.w("XuperM3U", "No se pudo actualizar la fuente ${source.name}; se conserva el caché si existe", error)
-                                }
+    override suspend fun refresh() {
+        refreshMutex.withLock {
+            withContext(Dispatchers.IO) {
+                iptvRefreshInProgress = true
+                _loading.value = true
+                try {
+                    if (synchronized(lock) { entriesBySource.isEmpty() }) {
+                        // Primero el caché del disco, incluso si el catálogo TMDB ya está visible.
+                        val cached = sources.indices.mapNotNull { i -> readCache(i)?.let { i to it } }
+                        if (cached.isNotEmpty()) {
+                            synchronized(lock) {
+                                cached.forEach { (i, entries) -> entriesBySource[i] = entries }
+                                rebuildPublishedState()
                             }
                         }
-                    }.awaitAll()
+                    }
+                    // No abrir decenas de conexiones simultáneas: límite pequeño para evitar saturar
+                    // el dispositivo o proveedores lentos. Un fallo aislado no cancela las demás listas.
+                    val networkSlots = Semaphore(3)
+                    coroutineScope {
+                        sources.mapIndexed { i, source ->
+                            async(Dispatchers.IO) {
+                                networkSlots.withPermit {
+                                    runCatching {
+                                        val parsed = parse(downloadWithRetry(source.url), "s$i", source.contentHint)
+                                        if (parsed.isNotEmpty()) {
+                                            val enriched = if (tmdbMetadata.enabled && source.enrichMetadata) {
+                                                tmdbMetadata.enrich(parsed.map { EntryForMetadata(it.group, it.title) })
+                                                    .map { entryOf(it.group, it.title) }
+                                            } else parsed
+                                            writeCache(i, enriched)
+                                            publish(i, enriched)
+                                        } else {
+                                            android.util.Log.w("XuperM3U", "Lista sin entradas válidas: ${source.name}")
+                                        }
+                                    }.onFailure { error ->
+                                        // El catálogo cacheado se conserva si el proveedor falla o expiró.
+                                        android.util.Log.w("XuperM3U", "No se pudo actualizar la fuente ${source.name}; se conserva el caché si existe", error)
+                                    }
+                                }
+                            }
+                        }.awaitAll()
+                    }
+                } finally {
+                    iptvRefreshInProgress = false
+                    _loading.value = false
                 }
-            } finally {
-                iptvRefreshInProgress = false
-                _loading.value = false
             }
         }
     }
