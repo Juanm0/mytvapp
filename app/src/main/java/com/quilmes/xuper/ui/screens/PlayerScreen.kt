@@ -191,7 +191,7 @@ private fun NativePlayerScreen(
                 // Preferir subtítulos en español automáticamente cuando el stream los ofrece.
                 // Media3 conserva esta preferencia al cambiar de contenido dentro del reproductor.
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
-                    .setPreferredTextLanguages(arrayOf("es", "es-419", "es-ES", "spa", "es-MX"))
+                    .setPreferredTextLanguage("es")
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
             }
