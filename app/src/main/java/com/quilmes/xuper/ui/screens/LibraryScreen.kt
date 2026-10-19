@@ -106,16 +106,18 @@ private fun buildLibraryRows(
         LibraryMode.ARGENTINA -> {
             val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
                 ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
-            val ordered = argentina.distinctBy { it.streamUrl }.distinctBy { title ->
-                val name = normalizeName(title.name)
-                if (name.contains("gran hermano") || name == "gh") "gh:${title.streamUrl}"
-                else argentinaBrand(title.name) ?: "url:${title.streamUrl}"
-            }.sortedWith(compareBy<Title>({ argentinaPriority(it.name) }, { normalizeName(it.name) }))
-            val gh = ordered.filter { val n = normalizeName(it.name); n.contains("gran hermano") || n == "gh" }
-            val sports = ordered.filter { isArgentinaSport(it.name) }
+            // Se normaliza el nombre UNA sola vez por canal (antes se hacía dentro del ordenamiento,
+            // con una Regex nueva en cada comparación, y trababa la pestaña Argentina).
+            val keyed = argentina.distinctBy { it.streamUrl }.map { it to normalizeName(it.name) }
+            val orderedPairs = keyed.distinctBy { (title, n) ->
+                if (n.contains("gran hermano") || n == "gh") "gh:${title.streamUrl}"
+                else argentinaBrand(n) ?: "url:${title.streamUrl}"
+            }.sortedWith(compareBy<Pair<Title, String>>({ argentinaPriority(it.second) }, { it.second }))
+            val gh = orderedPairs.filter { (_, n) -> n.contains("gran hermano") || n == "gh" }.map { it.first }
+            val sports = orderedPairs.filter { isArgentinaSport(it.second) }.map { it.first }
             val ghUrls = gh.map { it.streamUrl }.toSet()
             val sportUrls = sports.map { it.streamUrl }.toSet()
-            val channels = ordered.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
+            val channels = orderedPairs.map { it.first }.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
             listOfNotNull(
                 channels.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) },
                 gh.takeIf { it.isNotEmpty() }?.let { Category("argentina-gh", "Gran Hermano", it) },
@@ -125,10 +127,12 @@ private fun buildLibraryRows(
     }
 }
 
-private fun normalizeName(value: String): String = java.text.Normalizer.normalize(value.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+private val MARKS_REGEX = Regex("\\p{Mn}+")
 
-private fun argentinaBrand(value: String): String? {
-    val n = normalizeName(value)
+private fun normalizeName(value: String): String = java.text.Normalizer.normalize(value.lowercase(), java.text.Normalizer.Form.NFD).replace(MARKS_REGEX, "")
+
+/** `n` ya viene normalizado con normalizeName. */
+private fun argentinaBrand(n: String): String? {
     return when {
         n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "tn"
         "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> "la nacion"
@@ -143,8 +147,7 @@ private fun argentinaBrand(value: String): String? {
     }
 }
 
-private fun argentinaPriority(value: String): Int {
-    val n = normalizeName(value)
+private fun argentinaPriority(n: String): Int {
     return when {
         n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> 0
         "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> 1
@@ -160,7 +163,6 @@ private fun argentinaPriority(value: String): Int {
     }
 }
 
-private fun isArgentinaSport(value: String): Boolean {
-    val n = normalizeName(value)
+private fun isArgentinaSport(n: String): Boolean {
     return listOf("espn", "fox sports", "tyc sports", "t y c sports", "directv sports", "dsports", "tnt sports", "deportv", "goltv", "sport tv").any { it in n }
 }

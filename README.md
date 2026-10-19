@@ -1,5 +1,54 @@
 # Xuper Quilmes TV — Android TV
 
+## Cambios de esta entrega (arranque sin tildarse + Inicio con contenido)
+
+**1. Se tildaba al abrir la app — causa real y arreglo.**
+La entrega anterior movió a un hilo de fondo el cálculo de las filas de Inicio, pero eso no era lo que
+congelaba la app. Había dos problemas más graves:
+- `MainActivity` hacía `lifecycleScope.launch { repository.refresh(); ...; setCatalogCategories(categories) }`.
+  `lifecycleScope` corre en el **hilo principal** (`Dispatchers.Main`), así que `setCatalogCategories()` se
+  ejecutaba ahí. Esa función vinculaba **cada una de las ~400 fichas de TMDB** con las listas M3U
+  (`resolveCatalogTitle` -> `findPlayableMovie` / `findFirstPlayableEpisode`), y cada vinculación recorría
+  **todas** las entradas M3U compilando ~10 expresiones regulares nuevas por entrada. Eran cientos de millones de
+  operaciones en el hilo de la interfaz, justo cuando terminaba de cargar: de ahí el congelamiento. El buscador
+  tenía el mismo problema (`registerCatalogTitles` en el hilo principal en cada búsqueda), y también abrir
+  una ficha de serie (`findPlayableEpisode` por cada episodio visible) y abrir el reproductor
+  (`getNextEpisode` / `getPlayableAlternatives`).
+- Las `Regex(...)` se compilaban de nuevo en cada llamada (clasificación, episodios, normalización, orden de
+  Argentina, etc.).
+
+Arreglo (`data/M3uRepository.kt` reescrito, `MainActivity.kt`, `SearchScreen.kt`, `LibraryScreen.kt`):
+- Todas las `Regex` son constantes compiladas una sola vez.
+- Cada entrada M3U guarda precalculados su nombre normalizado (`norm`), su clave de título (`key`, con palabras ya
+  separadas) y su info de episodio (`episode`), una sola vez y en segundo plano.
+- Las fichas de TMDB **ya no se vinculan todas juntas**: se vinculan de forma perezosa (`find()` / `search()`), solo las
+  que se abren o aparecen en una búsqueda, con resultado cacheado.
+- `setCatalogCategories()` y `registerCatalogTitles()` ahora se llaman desde `Dispatchers.Default`, nunca desde el hilo principal.
+- La copia de archivos de `assets` y la limpieza de cachés (antes en `onCreate`, en el hilo principal) pasaron a `Dispatchers.IO`.
+- El catálogo TMDB se carga **en paralelo** con las listas M3U (sale del caché de disco casi al instante), así Inicio
+  muestra contenido enseguida en vez de esperar a que bajen las 6 listas.
+- El caché de disco de las 6 listas se publica **una sola vez** (antes 6 reconstrucciones seguidas).
+- La ruta del reproductor ya no escribe `SharedPreferences` ni recalcula colas/alternativas en cada recomposición.
+- Pestaña ARGENTINA: el nombre de cada canal se normaliza una sola vez (antes se normalizaba dentro del comparador del `sortedWith`).
+
+**2. Inicio ya no está vacío.** El filtro de VOD buscaba secciones llamadas `"vod general"`, `"agrupado por contenido"` y
+`"peliculas"`, que **no existen** con las fuentes actuales (`Películas gratis`, `Series gratis`, `VOD original`), por eso
+Inicio solo mostraba Argentina. Ahora `buildHomeRows` (`HomeScreen.kt`) arma:
+1. Argentina (canales), Gran Hermano y Deportes Argentina.
+2. **Algo de TMDB** (solo 4 filas de 14 títulos): Tendencias · Películas, Tendencias · Series, Películas populares, Series populares.
+   El resto del catálogo (plataformas, etc.) sigue estando solo en el buscador.
+3. Las primeras `homeRows` filas de cada fuente VOD (`Películas gratis` 2, `Series gratis` 1, `VOD original` 3), sin repetir URLs.
+El banner destacado usa la imagen de fondo (`backdropUrl`) de la primera ficha de TMDB.
+
+**3. Verificación.** Este entorno no tiene Android SDK ni Gradle: el código **no se compiló**. Se pasó por el compilador de
+Kotlin 1.9.24 solo para detectar errores de **sintaxis** (no hay ninguno); los errores de tipos/librerías no se pueden
+verificar acá. Si GitHub Actions marca un error, mandá el log.
+
+**Regla para el futuro:** nada que recorra las listas completas ni compile `Regex` puede correr en el hilo principal ni dentro
+de una composición. `lifecycleScope.launch { }` y `LaunchedEffect { }` corren en Main por defecto: usar `withContext(Dispatchers.Default/IO)`.
+
+---
+
 ## Cambios de esta entrega (sobre la del fix de freeze)
 
 **1. Inicio ya no muestra el catálogo completo de TMDB — eso queda para el buscador.**
@@ -82,5 +131,7 @@ app/src/main/java/com/quilmes/xuper/
 Continuá el proyecto Xuper Quilmes TV a partir del código de esta carpeta. El usuario quiere una experiencia tipo Netflix, pero con la paleta azul noche/celeste original, no roja. La barra lateral conserva únicamente Inicio, Buscar, ARGENTINA, Mi lista, Continuar viendo y Perfil. Las listas M3U de películas/series de dominio público y `https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u` alimentan las coincidencias y alternativas de reproducción sin agregar entradas laterales. No restaures rutas antiguas `jromero88/iptv` sin verificar que ya no devuelvan 404. Inicio debe mostrar primero los canales argentinos, después Gran Hermano, después Deportes Argentina, después el VOD reproducible de las listas y luego las filas de metadatos de TMDB/plataformas. CH+/CH− debe seguir cambiando canales dentro de la cola argentina; flecha arriba debe despejar el reproductor. No agregues otras listas internacionales salvo que el usuario lo pida; las tres fuentes `jromero88/iptv` se añadieron explícitamente por pedido del usuario.
 
 TMDB aporta imágenes, sinopsis, búsqueda, temporadas y episodios, pero no streams. Si una película TMDB coincide por título con una URL M3U, conectar la URL a su ficha manteniendo metadatos TMDB. Para enlaces duplicados del mismo contenido, exponer alternativas con un botón “Cambiar reproductor” y avanzar automáticamente a la siguiente URL coincidente cuando ExoPlayer reporte un error. Para series, intentar vincular episodios por nombre de serie, temporada y número. No inventar URLs: si no hay coincidencia, dejar reproducción deshabilitada. Un error de reproducción no debe borrar permanentemente una entrada; mostrar reintento. Las temporadas/episodios se pueden seleccionar en la ficha; el reproductor usa Media3 y solo puede mostrar subtítulos/audio/episodio siguiente si el stream real ofrece esas pistas o URLs.
+
+REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que recorra las listas completas, ni compiles `Regex` dentro de funciones que se llaman por cada entrada; usá las constantes y los campos precalculados de `Entry` (`norm`, `key`, `episode`) en `M3uRepository.kt`. `lifecycleScope.launch` y `LaunchedEffect` corren en Main: mové el trabajo pesado con `withContext(Dispatchers.Default/IO)`. Las fichas TMDB se vinculan a un stream de forma perezosa (`find()`/`search()`); no las vincules en bloque. Inicio muestra poco TMDB a propósito (4 filas de 14); el catálogo completo va en el buscador.
 
 Antes de cambiar, revisá el código real. Después de cada iteración actualizá este README, verificá referencias/imports y, si el entorno no tiene Android SDK/Gradle, decilo con claridad y no afirmes que compiló. Conservá el keystore local existente para que las actualizaciones firmadas puedan instalarse sobre el APK anterior; nunca publiques sus credenciales. Entregá un ZIP completo cuando sea posible.

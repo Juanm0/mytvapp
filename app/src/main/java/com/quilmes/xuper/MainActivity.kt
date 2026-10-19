@@ -3,6 +3,7 @@ package com.quilmes.xuper
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
@@ -18,7 +19,9 @@ import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.theme.XuperTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -36,6 +39,7 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             homeRows = 1,
             priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública", "Gran Hermano"),
             flattenIntoOneCategory = true,
+            enrichMetadata = false,
             maxPerRow = 100,
             maxRows = 1,
         ),
@@ -84,7 +88,7 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             name = "VOD original",
             url = File(cacheDir, "vod-original.m3u").toURI().toString(),
             icon = "🎬",
-            homeRows = 0,
+            homeRows = 3,
             // Lista mixta con títulos bajo demanda y algunos canales lineales.
             // Se muestra como VOD; los streams protegidos por DRM requieren licencia autorizada.
             contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
@@ -100,9 +104,9 @@ class MainActivity : ComponentActivity() {
     private val repository: ContentRepository by lazy { buildRepository(filesDir) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
 
+    /** Corre en un hilo de fondo (Dispatchers.IO). */
+    private fun prepareLocalFiles() {
         // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
         val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_pel_culas_gratis.tsv", "catalog_3_series_gratis.tsv", "catalog_4_mickflix_canales.tsv", "catalog_5_vod_original.tsv")
         filesDir.listFiles()?.forEach { file ->
@@ -111,30 +115,35 @@ class MainActivity : ComponentActivity() {
             val oldFailureBlacklist = file.name == "unavailable_streams.txt"
             if (oldCatalogCache || oldPlaylist || oldFailureBlacklist) file.delete()
         }
+        // Instala las listas locales (argentina adicional y VOD original) en el almacenamiento privado.
+        // Las listas remotas se descargan y cachean; TMDB aporta metadatos, no los videos.
+        for (name in listOf("argentina-extra.m3u", "vod-original.m3u")) {
+            runCatching {
+                assets.open(name).use { input ->
+                    File(filesDir, name).outputStream().use { output -> input.copyTo(output) }
+                }
+            }.onFailure { error ->
+                android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $name", error)
+            }
+        }
+    }
 
-        // Instala únicamente la lista argentina adicional. Las listas VOD se descargan
-        // desde sus URLs y se cachean; TMDB aporta metadatos, no los videos.
-        runCatching {
-            assets.open("argentina-extra.m3u").use { input ->
-                File(filesDir, "argentina-extra.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista argentina adicional", error)
-        }
-        // Instala la lista VOD original compartida por el usuario en el almacenamiento privado.
-        runCatching {
-            assets.open("vod-original.m3u").use { input ->
-                File(filesDir, "vod-original.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista VOD original", error)
-        }
-        // Las listas locales ya están copiadas; ahora sí se puede iniciar la carga.
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
+        // Antes se copiaban archivos acá y, sobre todo, setCatalogCategories() corría en el hilo
+        // principal (lifecycleScope usa Dispatchers.Main): era lo que congelaba la app al abrir.
         lifecycleScope.launch {
+            withContext(Dispatchers.IO) { prepareLocalFiles() }
+            // El catálogo de TMDB sale del caché del disco casi al instante, así que no espera
+            // a que terminen de bajar las listas M3U: Inicio muestra contenido enseguida.
+            launch(Dispatchers.Default) {
+                runCatching { tmdbCatalogService.loadCatalog() }
+                    .onSuccess { categories -> (repository as? M3uRepository)?.setCatalogCategories(categories) }
+                    .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo cargar el catálogo TMDB", it) }
+            }
             repository.refresh()
-            runCatching { tmdbCatalogService.loadCatalog() }
-                .onSuccess { categories -> (repository as? M3uRepository)?.setCatalogCategories(categories) }
-                .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo cargar el catálogo TMDB", it) }
         }
 
         setContent {
@@ -174,20 +183,26 @@ class MainActivity : ComponentActivity() {
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
                         if (title != null && title.streamUrl.isNotBlank()) {
-                            if (!title.isLive) {
-                                val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
-                                val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
-                                recent.add(id)
-                                prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
+                            LaunchedEffect(id) {
+                                if (!title.isLive) {
+                                    val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
+                                    val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
+                                    recent.add(id)
+                                    prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
+                                }
                             }
+                            val m3u = repository as? M3uRepository
+                            val channelQueue = remember(id) { m3u?.getChannelQueue(id).orEmpty() }
+                            val nextEpisode = remember(id) { m3u?.getNextEpisode(id) }
+                            val alternatePlayers = remember(id) { m3u?.getPlayableAlternatives(id).orEmpty() }
                             PlayerScreen(
                                 name = title.name,
                                 streamUrl = title.streamUrl,
                                 streamHeaders = title.requestHeaders,
-                                channelQueue = (repository as? M3uRepository)?.getChannelQueue(id).orEmpty(),
+                                channelQueue = channelQueue,
                                 currentTitleId = id,
-                                nextEpisode = (repository as? M3uRepository)?.getNextEpisode(id),
-                                alternatePlayers = (repository as? M3uRepository)?.getPlayableAlternatives(id).orEmpty(),
+                                nextEpisode = nextEpisode,
+                                alternatePlayers = alternatePlayers,
                                 onChangePlayer = { alternativeId ->
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$alternativeId")

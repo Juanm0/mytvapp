@@ -61,10 +61,11 @@ fun SearchScreen(
             results = emptyList()
         } else {
             val tmdb = catalogService.search(query)
-            (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
-            // Releer el índice después de registrar TMDB: el repositorio descarta fichas
-            // que no tengan ningún enlace reproducible en las listas activas.
-            results = withContext(Dispatchers.Default) { repository.search(query) }.distinctBy { it.id }.take(120)
+            // registerCatalogTitles reconstruye el índice: nunca en el hilo principal.
+            results = withContext(Dispatchers.Default) {
+                (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
+                repository.search(query)
+            }.distinctBy { it.id }.take(120)
         }
     }
 
