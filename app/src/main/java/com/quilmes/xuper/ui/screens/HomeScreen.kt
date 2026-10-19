@@ -30,6 +30,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.Category
 import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.ui.components.ContentRow
@@ -49,28 +50,26 @@ fun HomeScreen(
     val sections by repository.sections.collectAsState()
     val loading by repository.loading.collectAsState()
 
-    // Inicio prioriza contenido VOD, como una app de streaming, y deja TV en vivo al final.
+    // Inicio combina TV real de Argentina con filas editoriales del catálogo TMDB.
+    // El catálogo de TMDB aporta metadatos e imágenes, no enlaces de video.
     val rows = remember(sections) {
-        val all = sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.streamUrl }
-        val movies = all.filter { it.contentKind == ContentKind.MOVIE || it.contentKind == ContentKind.OTHER_VOD }
-            .sortedWith(compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
-                .thenByDescending { yearForSort(it) }.thenBy { it.name.lowercase() })
-        val series = all.filter { it.contentKind == ContentKind.SERIES }
-            .sortedWith(compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
-                .thenByDescending { yearForSort(it) }.thenBy { it.name.lowercase() })
-        val live = all.filter { it.isLive }
+        val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+            ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+        val gh = argentina.filter { isGranHermano(it.name) }
+        val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
+        val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
+        val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
         buildList {
-            if (movies.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-movies", "Películas", movies))
-            if (series.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-series", "Series y episodios", series))
-            if (live.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-live", "TV en vivo", live))
+            if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
+            if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
+            if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
+            addAll(tmdbRows)
         }
     }
     val featured = remember(sections) {
-        sections.asSequence().flatMap { it.categories.asSequence() }
-            .flatMap { it.items.asSequence() }
-            .filter { !it.isLive && (it.rating?.toDoubleOrNull() != null || yearForSort(it) > 0) }
-            .maxWithOrNull(compareBy<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
-                .thenBy { yearForSort(it) }.thenBy { it.name.lowercase() })
+        sections.firstOrNull { it.id == "tmdb-catalog" }?.categories
+            ?.firstOrNull { it.title.contains("Tendencias", ignoreCase = true) }
+            ?.items?.firstOrNull()
     }
 
     if (rows.isEmpty()) {
@@ -159,6 +158,12 @@ private fun HeroBanner(title: Title, onPlay: () -> Unit) {
         }
     }
 }
+
+private fun isGranHermano(name: String): Boolean = name.contains("gran hermano", ignoreCase = true) || name.trim().equals("GH", ignoreCase = true)
+
+private fun isArgentinaSports(name: String): Boolean = listOf(
+    "directv sports", "espn", "fox sports", "tyc sports", "tnt sports", "deportes argentina"
+).any { name.contains(it, ignoreCase = true) }
 
 private fun yearForSort(title: Title): Int = title.year?.toIntOrNull()
     ?: Regex("\\b(?:19|20)\\d{2}\\b").find(title.name)?.value?.toIntOrNull()

@@ -29,13 +29,14 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
+import androidx.tv.material3.Button
 import com.quilmes.xuper.data.Title
 import kotlinx.coroutines.delay
 
 /**
- * Reproductor de pantalla completa con controles persistentes (pausa, ±10 s y
- * barra de progreso). Los controles no se ocultan automáticamente.
- * En canales en vivo sin buffer de retroceso la barra aparece bloqueada: es normal.
+ * Reproductor de pantalla completa con controles Media3 (pausa, búsqueda, selección
+ * de pistas de audio/subtítulos cuando la fuente las ofrece). Los controles se ocultan
+ * solos; flecha arriba despeja la pantalla y CH+/CH- conserva el zapping argentino.
  */
 @OptIn(UnstableApi::class)
 @Composable
@@ -44,12 +45,15 @@ fun PlayerScreen(
     streamUrl: String,
     channelQueue: List<Title> = emptyList(),
     currentTitleId: String = "",
+    nextEpisode: Title? = null,
     onChangeChannel: (String) -> Unit = {},
+    onPlayNextEpisode: (String) -> Unit = {},
     onPlaybackError: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var error by remember { mutableStateOf<String?>(null) }
     var showName by remember { mutableStateOf(true) }
+    var showNextEpisode by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         delay(5000)
@@ -70,6 +74,14 @@ fun PlayerScreen(
                 prepare()
                 playWhenReady = true
             }
+    }
+
+    LaunchedEffect(exoPlayer, nextEpisode?.id) {
+        while (nextEpisode != null) {
+            val duration = exoPlayer.duration
+            showNextEpisode = duration > 0L && exoPlayer.currentPosition >= duration - 60_000L
+            delay(1000)
+        }
     }
 
     DisposableEffect(Unit) {
@@ -121,9 +133,9 @@ fun PlayerScreen(
                 }.apply {
                     player = exoPlayer
                     useController = true
-                    // Flecha arriba despeja la pantalla ocultando los controles. Las teclas
-                    // dedicadas CH+/CH- hacen zapping dentro de la cola argentina.
-                    controllerShowTimeoutMs = 0
+                    // Los controles se ocultan solos como en una app de streaming. Flecha arriba
+                    // los despeja inmediatamente; CH+/CH- conserva el zapping argentino.
+                    controllerShowTimeoutMs = 5000
                     controllerHideOnTouch = false
                     keepScreenOn = true
                     isFocusable = true
@@ -150,6 +162,13 @@ fun PlayerScreen(
                     .background(Color(0xAA000000))
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
+        }
+
+        if (showNextEpisode && nextEpisode != null) {
+            Button(
+                onClick = { onPlayNextEpisode(nextEpisode.id) },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 36.dp, bottom = 64.dp),
+            ) { Text("▶  Siguiente episodio · ${nextEpisode.name}") }
         }
 
         error?.let {

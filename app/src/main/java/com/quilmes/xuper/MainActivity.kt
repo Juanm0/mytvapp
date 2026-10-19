@@ -11,9 +11,9 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
-import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
+import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
@@ -33,10 +33,10 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             name = "Argentina",
             url = "https://iptv-org.github.io/iptv/countries/ar.m3u",
             icon = "🇦🇷",
-            homeRows = 5,
+            homeRows = 1,
             priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública", "Gran Hermano"),
             flattenIntoOneCategory = true,
-            maxPerRow = 80,
+            maxPerRow = 100,
             maxRows = 1,
         ),
         M3uSource(
@@ -49,117 +49,27 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxPerRow = 100,
             maxRows = 1,
         ),
-        M3uSource(
-            name = "Free-TV",
-            url = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
-            icon = "📡",
-            homeRows = 4,
-            priorityGroups = listOf("Argentina", "Spain", "Uruguay", "Chile"),
-        ),
-        M3uSource(
-            name = "Español",
-            url = "https://iptv-org.github.io/iptv/languages/spa.m3u",
-            icon = "🌎",
-            homeRows = 3,
-        ),
-        M3uSource(
-            name = "Deportes",
-            url = "https://iptv-org.github.io/iptv/categories/sports.m3u",
-            icon = "⚽",
-            homeRows = 2,
-        ),
-        M3uSource(
-            name = "España",
-            url = "https://iptv-org.github.io/iptv/countries/es.m3u",
-            icon = "🇪🇸",
-            homeRows = 2,
-        ),
-        M3uSource(
-            name = "Mundo",
-            url = "https://iptv-org.github.io/iptv/index.m3u",
-            icon = "🌍",
-            homeRows = 2,
-        ),
-        M3uSource(
-            name = "Canales internacionales",
-            url = File(cacheDir, "iptv-extra.m3u").toURI().toString(),
-            icon = "🌐",
-            homeRows = 3,
-            priorityGroups = listOf("Argentina", "NEWS WORLD", "SPORTS", "Reality Show'S Live", "Cameras Ao Vivo"),
-            maxPerRow = 60,
-            maxRows = 80,
-        ),
-        M3uSource(
-            name = "Películas de dominio público",
-            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/movies.m3u",
-            icon = "🎬",
-            homeRows = 3,
-            maxPerRow = 30,
-            maxRows = 80,
-            contentHint = ContentKind.MOVIE,
-        ),
-        M3uSource(
-            name = "Series de dominio público",
-            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/series.m3u",
-            icon = "📺",
-            homeRows = 3,
-            maxPerRow = 30,
-            maxRows = 80,
-            contentHint = ContentKind.SERIES,
-        ),
-        M3uSource(
-            name = "Lista extendida (experimental)",
-            url = File(cacheDir, "lista-extendida.m3u").toURI().toString(),
-            icon = "🧪",
-            homeRows = 2,
-            priorityGroups = listOf("Argentina", "Reality Show'S Live", "TVI PLAYER", "🟢 KÊNH PHIM", "Cameras Ao Vivo", "NEWS WORLD"),
-            maxPerRow = 60,
-            maxRows = 120,
-            enrichMetadata = false,
-        ),
-        M3uSource(
-            name = "Mi lista",
-            url = File(cacheDir, "mi-lista.m3u").toURI().toString(),
-            icon = "📋",
-            homeRows = 3,
-            priorityGroups = listOf("24/7", "Animation", "Cine", "Religioso", "Radio"),
-            maxPerRow = 60,
-            maxRows = 80,
-        ),
     ),
 )
 
 class MainActivity : ComponentActivity() {
 
     private val repository: ContentRepository by lazy { buildRepository(filesDir) }
+    private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Copia la lista adicional empaquetada en el APK al almacenamiento privado.
-        // La fuente se lee como archivo local, sin depender de un servidor para esta lista.
-        runCatching {
-            assets.open("iptv-extra.m3u").use { input ->
-                File(filesDir, "iptv-extra.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista IPTV adicional", error)
-        }
-        runCatching {
-            assets.open("mi-lista.m3u").use { input ->
-                File(filesDir, "mi-lista.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista M3U del usuario", error)
-        }
-        runCatching {
-            assets.open("peliculas-dominio-publico.m3u").use { input ->
-                File(filesDir, "peliculas-dominio-publico.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar el catálogo local de películas", error)
+        // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
+        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv")
+        filesDir.listFiles()?.forEach { file ->
+            val oldCatalogCache = file.name.startsWith("catalog_") && file.name.endsWith(".tsv") && file.name !in activeCaches
+            val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u")
+            if (oldCatalogCache || oldPlaylist) file.delete()
         }
 
+        // Instala únicamente la lista argentina adicional. Las antiguas listas mixtas
+        // dejaron de cargarse para mantener la app ligera; el catálogo VOD viene de TMDB.
         runCatching {
             assets.open("argentina-extra.m3u").use { input ->
                 File(filesDir, "argentina-extra.m3u").outputStream().use { output -> input.copyTo(output) }
@@ -167,15 +77,13 @@ class MainActivity : ComponentActivity() {
         }.onFailure { error ->
             android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista argentina adicional", error)
         }
-        runCatching {
-            assets.open("lista-extendida.m3u").use { input ->
-                File(filesDir, "lista-extendida.m3u").outputStream().use { output -> input.copyTo(output) }
-            }
-        }.onFailure { error ->
-            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista extendida", error)
-        }
         // Las listas locales ya están copiadas; ahora sí se puede iniciar la carga.
-        lifecycleScope.launch { repository.refresh() }
+        lifecycleScope.launch {
+            repository.refresh()
+            runCatching { tmdbCatalogService.loadCatalog() }
+                .onSuccess { categories -> (repository as? M3uRepository)?.setCatalogCategories(categories) }
+                .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo cargar el catálogo TMDB", it) }
+        }
 
         setContent {
             XuperTheme {
@@ -184,6 +92,7 @@ class MainActivity : ComponentActivity() {
                     composable("main") {
                         MainScreen(
                             repository = repository,
+                            catalogService = tmdbCatalogService,
                             onPlay = { id ->
                                 val selected = repository.find(id)
                                 if (selected?.isLive == true) navController.navigate("player/$id")
@@ -197,7 +106,7 @@ class MainActivity : ComponentActivity() {
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
-                        if (title != null) DetailScreen(title = title, onPlay = { navController.navigate("player/$id") })
+                        if (title != null) DetailScreen(title = title, catalogService = tmdbCatalogService, onPlay = { navController.navigate("player/$id") })
                     }
                     composable(
                         route = "player/{titleId}",
@@ -205,7 +114,7 @@ class MainActivity : ComponentActivity() {
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
-                        if (title != null) {
+                        if (title != null && title.streamUrl.isNotBlank()) {
                             if (!title.isLive) {
                                 val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
                                 val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
@@ -217,6 +126,11 @@ class MainActivity : ComponentActivity() {
                                 streamUrl = title.streamUrl,
                                 channelQueue = (repository as? M3uRepository)?.getChannelQueue(id).orEmpty(),
                                 currentTitleId = id,
+                                nextEpisode = (repository as? M3uRepository)?.getNextEpisode(id),
+                                onPlayNextEpisode = { nextId ->
+                                    navController.popBackStack("main", false)
+                                    navController.navigate("player/$nextId")
+                                },
                                 onChangeChannel = { nextId ->
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")

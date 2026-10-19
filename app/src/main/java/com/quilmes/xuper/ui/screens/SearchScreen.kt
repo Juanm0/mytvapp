@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.M3uRepository
+import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.ui.components.CardWidth
 import com.quilmes.xuper.ui.components.PosterCard
@@ -44,6 +46,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun SearchScreen(
     repository: ContentRepository,
+    catalogService: TmdbCatalogService,
     onPlay: (String) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -54,7 +57,14 @@ fun SearchScreen(
 
     LaunchedEffect(query) {
         delay(250) // espera a que termine de escribir
-        results = withContext(Dispatchers.Default) { repository.search(query) }
+        if (query.isBlank()) {
+            results = emptyList()
+        } else {
+            val local = withContext(Dispatchers.Default) { repository.search(query) }
+            val tmdb = catalogService.search(query)
+            (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
+            results = (local + tmdb).distinctBy { it.id }.take(120)
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(start = 48.dp, end = 48.dp, top = 32.dp)) {
@@ -75,7 +85,7 @@ fun SearchScreen(
                 ) {
                     if (query.isEmpty()) {
                         Text(
-                            text = "🔍  Buscar canales…",
+                            text = "🔍  Buscar películas, series y canales…",
                             color = XuperTextSecondary,
                             fontSize = 24.sp,
                         )

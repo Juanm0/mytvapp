@@ -68,6 +68,8 @@ class M3uRepository(
 
     private val lock = Any()
     private val entriesBySource = HashMap<Int, List<Entry>>()
+    private var catalogCategories: List<Category> = emptyList()
+    private var searchCatalogTitles: List<Title> = emptyList()
     private val tmdbMetadata = TmdbMetadataService(cacheDir)
     private val unavailableUrls = ConcurrentHashMap.newKeySet<String>().apply {
         addAll(readUnavailableUrls())
@@ -109,6 +111,47 @@ class M3uRepository(
 
     override fun find(id: String): Title? = byId[id]
 
+    /** Añade el catálogo visual de TMDB sin mezclarlo con las fuentes de canales reales. */
+    fun setCatalogCategories(categories: List<Category>) {
+        synchronized(lock) {
+            catalogCategories = categories
+            rebuildPublishedState()
+        }
+    }
+
+    /** Registra resultados de búsqueda para que sus fichas y favoritos resuelvan el título. */
+    fun registerCatalogTitles(titles: List<Title>) {
+        if (titles.isEmpty()) return
+        synchronized(lock) {
+            searchCatalogTitles = (titles + searchCatalogTitles).distinctBy { it.id }.take(120)
+            rebuildPublishedState()
+        }
+    }
+
+    private fun rebuildPublishedState() {
+        val visibleCatalog = catalogCategories.toMutableList()
+        if (searchCatalogTitles.isNotEmpty()) {
+            visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", searchCatalogTitles))
+        }
+        val secs = sources.indices.mapNotNull { n ->
+            entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
+        }.toMutableList()
+        if (visibleCatalog.isNotEmpty()) secs.add(Section("tmdb-catalog", "Catálogo", "🎬", visibleCatalog, visibleCatalog.size))
+        val ids = HashMap<String, Title>()
+        val index = ArrayList<Pair<String, Title>>()
+        entriesBySource.values.flatten().forEach { entry ->
+            ids[entry.title.id] = entry.title
+            index.add(normalize(entry.title.name) to entry.title)
+        }
+        visibleCatalog.flatMap { it.items }.forEach { title ->
+            ids[title.id] = title
+            index.add(normalize(title.name) to title)
+        }
+        byId = ids
+        searchIndex = index
+        _sections.value = secs
+    }
+
     /** Zapping local: usa la fila/categoría del canal actual (país o grupo), no fuerza Argentina. */
     fun getChannelQueue(titleId: String): List<Title> {
         val current = byId[titleId] ?: return getArgentinaChannels()
@@ -127,6 +170,40 @@ class M3uRepository(
         return if (sameSource.isNotEmpty()) sameSource.sortedWith(compareBy<Title>({ channelPriority(it.name) }, { normalize(it.name) })) else getArgentinaChannels()
     }
 
+    /** Busca el siguiente episodio reproducible de la misma serie si la fuente los etiqueta. */
+    fun getNextEpisode(titleId: String): Title? {
+        val current = byId[titleId] ?: return null
+        if (current.isLive || current.streamUrl.isBlank()) return null
+        val currentEpisode = episodeKey(current.name) ?: return null
+        val sameSeries = byId.values.asSequence()
+            .filter { !it.isLive && it.streamUrl.isNotBlank() && it.contentKind == current.contentKind }
+            .mapNotNull { title -> episodeKey(title.name)?.let { key -> if (key.first == currentEpisode.first) title to key else null } }
+            .distinctBy { it.first.id }
+            .sortedWith(compareBy<Pair<Title, Triple<String, Int, Int>>>({ it.second.second }, { it.second.third }))
+            .toList()
+        val index = sameSeries.indexOfFirst { it.first.id == titleId }
+        return sameSeries.getOrNull(index + 1)?.first
+    }
+
+    private fun episodeKey(raw: String): Triple<String, Int, Int>? {
+        val patterns = listOf(
+            Regex("(?i)\\bS(\\d{1,2})\\s*E(\\d{1,3})\\b"),
+            Regex("(?i)\\b(\\d{1,2})x(\\d{1,3})\\b"),
+            Regex("(?i)\\btemporada\\s*(\\d+).*?(?:episodio|episode|ep)\\s*(\\d+)\\b"),
+            Regex("(?i)\\b(?:episodio|episode|ep)\\s*(\\d+)\\b"),
+        )
+        for ((index, regex) in patterns.withIndex()) {
+            val match = regex.find(raw) ?: continue
+            val season: Int
+            val episode: Int
+            if (index == 3) { season = 1; episode = match.groupValues[1].toIntOrNull() ?: continue }
+            else { season = match.groupValues[1].toIntOrNull() ?: continue; episode = match.groupValues[2].toIntOrNull() ?: continue }
+            val base = normalize(raw.removeRange(match.range).replace(Regex("[-_.:]+"), " ").trim())
+            if (base.isNotBlank()) return Triple(base, season, episode)
+        }
+        return null
+    }
+
     /** Oculta del catálogo los streams que ExoPlayer confirma que fallan. */
     override suspend fun markUnavailable(id: String) {
         withContext(Dispatchers.IO) {
@@ -140,19 +217,7 @@ class M3uRepository(
                 if (updated.size != current.size) {
                     entriesBySource[sourceIndex] = updated
                     writeCache(sourceIndex, updated)
-                    val ids = HashMap<String, Title>()
-                    val index = ArrayList<Pair<String, Title>>()
-                    for (list in entriesBySource.values) {
-                        for (entry in list) {
-                            ids[entry.title.id] = entry.title
-                            index.add(normalize(entry.title.name) to entry.title)
-                        }
-                    }
-                    byId = ids
-                    searchIndex = index
-                    _sections.value = sources.indices.mapNotNull { n ->
-                        entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
-                    }
+                    rebuildPublishedState()
                 }
             }
         }
@@ -164,7 +229,7 @@ class M3uRepository(
         val out = ArrayList<Title>()
         val seen = HashSet<String>()
         for ((name, title) in searchIndex) {
-            if (tokens.all { name.contains(it) } && seen.add(title.streamUrl)) {
+            if (tokens.all { name.contains(it) } && seen.add(title.streamUrl.ifBlank { title.id })) {
                 out.add(title)
                 if (out.size >= limit) break
             }
@@ -179,20 +244,7 @@ class M3uRepository(
             if (entriesBySource[i] == entries) return
             entriesBySource[i] = entries
 
-            val secs = sources.indices.mapNotNull { n ->
-                entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
-            }
-            val ids = HashMap<String, Title>()
-            val index = ArrayList<Pair<String, Title>>()
-            for (list in entriesBySource.values) {
-                for (e in list) {
-                    ids[e.title.id] = e.title
-                    index.add(normalize(e.title.name) to e.title)
-                }
-            }
-            byId = ids
-            searchIndex = index
-            _sections.value = secs
+            rebuildPublishedState()
         }
     }
 
