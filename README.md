@@ -221,3 +221,21 @@ Antes de cambiar, revisá el código real. Después de cada iteración actualiz�
 - Cada fuente publica sus resultados cuando termina; si aparece una coincidencia, se puede reproducir sin esperar al resto.
 - Las fuentes restantes continúan cargando en segundo plano y sus coincidencias se agregan como alternativas de reproducción.
 - El catálogo visual usa caché de TMDB cuando está disponible. La disponibilidad real de una película depende de que alguna fuente IPTV tenga una coincidencia reproducible.
+
+## Fallback y memoria de fuentes de reproducción
+
+- La ficha siempre ofrece una acción principal: **Reproducir** si ya hay una fuente vinculada o **Buscar fuente** si todavía no la hay.
+- Al abrir el reproductor, Xuper reúne las coincidencias de las listas M3U disponibles y prueba primero la fuente preferida guardada para ese contenido; si no existe, respeta el orden de las listas.
+- Si ExoPlayer informa un error, el reproductor pasa automáticamente a la siguiente alternativa coincidente que todavía no haya probado.
+- Cuando una fuente alcanza el estado `STATE_READY`, se guarda su URL en `SharedPreferences` usando la clave estable del contenido. En próximas reproducciones se intenta primero esa URL y, si falla o ya no figura en las listas, se continúa con las demás.
+- Si no hay coincidencias, la pantalla informa que no encontró una fuente y permite volver a intentar la búsqueda de listas.
+- `STATE_READY` confirma que el reproductor preparó el stream, no que haya verificado semánticamente que el vídeo sea la película correcta. Las listas IPTV pueden cambiar, expirar o devolver contenido distinto; por eso se conserva el fallback.
+
+## Fallback y memoria de fuentes de reproducción
+
+- La ficha siempre ofrece una acción principal: **Reproducir** si ya hay una fuente vinculada o **Buscar fuente** si todavía no la hay.
+- Al abrir el reproductor, Xuper reúne las coincidencias de las listas M3U disponibles y prueba primero la fuente preferida guardada para ese contenido; si no existe, respeta el orden de las listas.
+- Si ExoPlayer informa un error, el reproductor pasa automáticamente a la siguiente alternativa coincidente que todavía no haya probado.
+- Cuando una fuente alcanza el estado `STATE_READY`, se guarda su URL en `SharedPreferences` usando la clave estable del contenido. En próximas reproducciones se intenta primero esa URL y, si falla o ya no figura en las listas, se continúa con las demás.
+- Si no hay coincidencias, la pantalla informa que no encontró una fuente y permite volver a intentar la búsqueda de listas.
+- `STATE_READY` confirma que el reproductor preparó el stream, no que haya verificado semánticamente que el vídeo sea la película correcta. Las listas IPTV pueden cambiar, expirar o devolver contenido distinto; por eso se conserva el fallback.

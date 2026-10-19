@@ -2,6 +2,12 @@
 # Las URLs completas también están admitidas: una URL por bloque si querés asociarle Expires.
 # Si no se indica Expires, la app no puede borrar esa cuenta automáticamente por fecha.
 
+Host: tv.m3uts.xyz
+User: m
+Pass: m
+M3U: http://tv.m3uts.xyz/get.php?username=m&password=m&type=m3u_plus
+
+--------------------------------------------------------------------------------------------------------------
 
 Host: like55.xyz:80
 User: MAGVYYCJ3T
@@ -11948,13 +11954,6 @@ Active: 0
 Max: 1
 M3U: http://marostream.net:80/get.php?username=X4WQ24CL71A3PFW&password=4M9jlpTEVn&type=m3u_plus
 --------------------------------------------------------------------------------------------------------------
-
-Host: tv.m3uts.xyz
-User: m
-Pass: m
-M3U: http://tv.m3uts.xyz/get.php?username=m&password=m&type=m3u_plus
-
----
 
 Host: visionlabiptv.com
 User: MAGBKE3Y3H

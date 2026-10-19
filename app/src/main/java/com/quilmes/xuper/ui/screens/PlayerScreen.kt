@@ -66,6 +66,7 @@ import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.PlaybackSourceRegistry
 import com.quilmes.xuper.data.WebPageMediaResolver
 import kotlinx.coroutines.delay
 
@@ -92,6 +93,7 @@ fun PlayerScreen(
     streamHeaders: Map<String, String> = emptyMap(),
     channelQueue: List<Title> = emptyList(),
     currentTitleId: String = "",
+    playbackKey: String = currentTitleId,
     nextEpisode: Title? = null,
     alternatePlayers: List<Title> = emptyList(),
     onChangeChannel: (String) -> Unit = {},
@@ -214,8 +216,15 @@ fun PlayerScreen(
 
     // Si una URL falla, intenta automáticamente la siguiente fuente disponible. El botón manual
     // permite recorrerlas incluso cuando el stream abre pero corresponde a otra película/episodio.
-    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex) {
+    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, playbackKey) {
         val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    val activeUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+                    if (activeUrl.isNotBlank()) PlaybackSourceRegistry.savePreferredUrl(context, playbackKey, activeUrl)
+                }
+            }
+
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
                 val nextIndex = (1..alternatePlayers.size).asSequence()

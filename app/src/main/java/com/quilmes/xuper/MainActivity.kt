@@ -10,6 +10,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Button
+import androidx.tv.material3.Text
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -19,6 +31,7 @@ import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
+import com.quilmes.xuper.data.PlaybackSourceRegistry
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.TmdbCatalogService
@@ -171,15 +184,21 @@ private fun loadCustomM3uSources(cacheDir: File): List<M3uSource> {
 class MainActivity : ComponentActivity() {
 
     @Volatile private var iptvRefreshStarted = false
+    @Volatile private var iptvRefreshInProgress = false
     private val localFilesReady = CompletableDeferred<Unit>()
 
-    private fun requestIptvRefresh() {
-        if (iptvRefreshStarted) return
+    private fun requestIptvRefresh(force: Boolean = false) {
+        if (iptvRefreshInProgress || (iptvRefreshStarted && !force)) return
         iptvRefreshStarted = true
+        iptvRefreshInProgress = true
         lifecycleScope.launch {
-            localFilesReady.await()
-            runCatching { repository.refresh() }
-                .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudieron cargar las fuentes IPTV", it) }
+            try {
+                localFilesReady.await()
+                runCatching { repository.refresh() }
+                    .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudieron cargar las fuentes IPTV", it) }
+            } finally {
+                iptvRefreshInProgress = false
+            }
         }
     }
 
@@ -265,7 +284,7 @@ class MainActivity : ComponentActivity() {
                         if (title != null) DetailScreen(
                             title = title,
                             catalogService = tmdbCatalogService,
-                            onPlay = { playableId -> navController.navigate("player/$playableId") },
+                            onPlay = { playableId -> navController.navigate("player/$playableId?contentKey=${Uri.encode(playableId)}") },
                             onOpenTitle = { relatedTitle ->
                                 pendingDetailTitle.value = relatedTitle
                                 navController.navigate("detail/${relatedTitle.id}")
@@ -299,31 +318,44 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                     composable(
-                        route = "player/{titleId}",
-                        arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
+                        route = "player/{titleId}?contentKey={contentKey}",
+                        arguments = listOf(
+                            navArgument("titleId") { type = NavType.StringType },
+                            navArgument("contentKey") { type = NavType.StringType; nullable = true; defaultValue = null },
+                        ),
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
-                        // Congelamos la fuente elegida al entrar al reproductor: cuando llegan
-                        // alternativas nuevas, no queremos cambiar/reiniciar el video actual.
-                        val title = remember(id) { repository.find(id) }
-                        if (title != null && title.streamUrl.isNotBlank()) {
-                            LaunchedEffect(id) {
-                                if (!title.isLive) {
-                                    val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
-                                    val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
-                                    recent.add(id)
-                                    prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
-                                }
+                        val contentKey = entry.arguments?.getString("contentKey") ?: id
+                        val isIptvLoading by repository.loading.collectAsState()
+                        val title = remember(id, observedSections, pendingDetailTitle.value?.id) {
+                            repository.find(id) ?: pendingDetailTitle.value?.takeIf { it.id == id }
+                        }
+                        val m3u = repository as? M3uRepository
+                        val savedUrl = remember(contentKey) { PlaybackSourceRegistry.getPreferredUrl(this@MainActivity, contentKey) }
+                        val alternatePlayers = remember(id, observedSections, title?.streamUrl, savedUrl) {
+                            if (title == null) emptyList() else {
+                                val matches = m3u?.getPlayableAlternatives(title).orEmpty() + title
+                                matches.filter { it.streamUrl.isNotBlank() }
+                                    .distinctBy { it.streamUrl }
+                                    .sortedBy { if (it.streamUrl == savedUrl) 0 else 1 }
                             }
-                            val m3u = repository as? M3uRepository
-                            // La lista cambia mientras se descargan fuentes en segundo plano;
-                            // el reproductor recibe las alternativas nuevas sin reiniciar el video.
-                            val alternatePlayers = remember(id, observedSections) { m3u?.getPlayableAlternatives(title).orEmpty() }
-                            // Cada reproducción empieza por la primera cuenta configurada que tenga
-                            // una coincidencia; el reproductor solo prueba las demás si esta falla.
-                            val preferredPlayback = remember(id, title.streamUrl) {
-                                alternatePlayers.firstOrNull { it.streamUrl == title.streamUrl } ?: title
+                        }
+                        val preferredPlayback = alternatePlayers.firstOrNull { it.streamUrl == savedUrl }
+                            ?: alternatePlayers.firstOrNull { it.streamUrl == title?.streamUrl }
+                            ?: alternatePlayers.firstOrNull()
+
+                        LaunchedEffect(id) {
+                            if (title?.streamUrl.isNullOrBlank()) requestIptvRefresh()
+                            if (title != null && !title.isLive) {
+                                val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
+                                val recent = prefs.getString("recent", "").orEmpty().split("|")
+                                    .filter { it.isNotBlank() && it != id }.toMutableList()
+                                recent.add(id)
+                                prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
                             }
+                        }
+
+                        if (title != null && preferredPlayback != null) {
                             val playbackId = preferredPlayback.id
                             val channelQueue = remember(playbackId) { m3u?.getChannelQueue(playbackId).orEmpty() }
                             val nextEpisode = remember(playbackId) { m3u?.getNextEpisode(playbackId) }
@@ -333,6 +365,7 @@ class MainActivity : ComponentActivity() {
                                 streamHeaders = preferredPlayback.requestHeaders,
                                 channelQueue = channelQueue,
                                 currentTitleId = playbackId,
+                                playbackKey = contentKey,
                                 nextEpisode = nextEpisode,
                                 alternatePlayers = alternatePlayers,
                                 onChangePlayer = { alternativeId ->
@@ -349,6 +382,24 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onExit = { navController.popBackStack() },
                             )
+                        } else {
+                            Box(
+                                Modifier.fillMaxSize().background(Color(0xFF0B0F17)).padding(32.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    Text(
+                                        when {
+                                            title == null -> "No se pudo cargar la ficha."
+                                            isIptvLoading -> "Buscando una fuente en las listas IPTV…"
+                                            else -> "No encontramos una fuente IPTV coincidente en las listas cargadas."
+                                        },
+                                        color = Color.White,
+                                    )
+                                    Button(enabled = !isIptvLoading, onClick = { requestIptvRefresh(force = true) }) { Text("Reintentar búsqueda") }
+                                    Button(onClick = { navController.popBackStack() }) { Text("Volver a la ficha") }
+                                }
+                            }
                         }
                     }
                 }

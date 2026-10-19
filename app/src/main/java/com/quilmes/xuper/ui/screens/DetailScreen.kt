@@ -146,8 +146,8 @@ fun DetailScreen(
                         )
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (title.streamUrl.isNotBlank()) {
-                                Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
+                            Button(onClick = { onPlay(title.id) }) {
+                                Text(if (title.streamUrl.isNotBlank()) "▶  Reproducir" else "🔎  Buscar fuente")
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -155,6 +155,12 @@ fun DetailScreen(
                                 prefs.edit().putStringSet("favorites", ids).apply()
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
+                        }
+                        if (title.streamUrl.isBlank()) {
+                            Text(
+                                "Todavía no hay una fuente IPTV vinculada. Xuper va a probar las listas disponibles en orden y recordar la fuente que funcione.",
+                                color = XuperTextSecondary, fontSize = 12.sp,
+                            )
                         }
                         val qrKey = sourceKey ?: WebSourceRegistry.titleKey(title.id)
                         SourceQrEditor(
