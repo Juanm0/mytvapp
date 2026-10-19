@@ -561,14 +561,14 @@ private fun WebEmbedPlayer(url: String) {
                     webViewClient = object : WebViewClient() {
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                             val requestUrl = request?.url?.toString() ?: return null
-                            return if (XuperWebRequestFilter.shouldBlock(requestUrl)) XuperWebRequestFilter.emptyResponse() else null
+                            return if (XuperBraveAdblock.shouldBlock(request, view?.url)) XuperBraveAdblock.blockedResponse() else null
                         }
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val target = request?.url?.toString() ?: return true
                             val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
                             // Solo navegación web http(s); rechaza esquemas externos y destinos publicitarios conocidos.
                             if (scheme != "http" && scheme != "https") return true
-                            if (XuperWebRequestFilter.shouldBlock(target)) {
+                            if (XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document")) {
                                 pageError = "Se bloqueó una redirección publicitaria o de seguimiento. Volvé al reproductor e intentá reproducir otra vez."
                                 return true
                             }
@@ -579,6 +579,7 @@ private fun WebEmbedPlayer(url: String) {
                             progress = 100
                             pageFinished = true
                             refreshServerOptions()
+                            if (view != null && !pageUrl.isNullOrBlank()) XuperBraveAdblock.injectCosmetics(view, pageUrl)
                             // Refuerzo best-effort del filtro: reduce banners/capas publicitarias,
                             // bloquea window.open y enlaces de salida claramente publicitarios. No
                             // oculta video/iframe de forma global para no romper el reproductor.

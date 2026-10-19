@@ -14,7 +14,11 @@ object WebSourceRegistry {
     private const val KEY_PREFIX = "sources:"
 
     const val FRAME_XTV_EXAMPLE = "https://framextv.xyz/watch/1396/3/11"
-    private const val BREAKING_BAD_S3E11_KEY = "tmdb-tv-1396|s3|e11"
+    const val FRAME_XTV_HOME = "https://framextv.xyz/"
+
+    /** Estos dos dominios aparecen como Referer en la lista IPTV del usuario, no como URLs VOD. */
+    const val IPTV_REFERER_LEWBLIVE = "https://lewblivehdplay.ru/"
+    const val IPTV_REFERER_QQWEBPLAY = "https://qqwebplay.xyz/"
 
     fun titleKey(titleId: String): String = titleId
 
@@ -24,8 +28,15 @@ object WebSourceRegistry {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = decode(prefs.getString(KEY_PREFIX + contentKey, null))
         val hiddenDefaults = decode(prefs.getString("hidden:$contentKey", null)).toSet()
-        // Keep the user's example available for the exact episode, without applying it to unrelated titles.
-        val defaults = if (contentKey == BREAKING_BAD_S3E11_KEY && FRAME_XTV_EXAMPLE !in hiddenDefaults) listOf(FRAME_XTV_EXAMPLE) else emptyList()
+        // Fuente global candidata: la única ruta que pudimos observar directamente fue
+        // /watch/{TMDB_ID}/{temporada}/{episodio}. Se genera por episodio y se etiqueta como no verificada.
+        // Para películas no inventamos un patrón de reproducción: dejamos la página del proveedor como búsqueda.
+        val episode = Regex("^(?:tmdb-tv-)?(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
+        val defaults = when {
+            episode != null -> listOf("https://framextv.xyz/watch/${episode.groupValues[1]}/${episode.groupValues[2]}/${episode.groupValues[3]}")
+            contentKey.startsWith("tmdb-movie-") -> listOf(FRAME_XTV_HOME)
+            else -> emptyList()
+        }.filterNot { it in hiddenDefaults }
         return (defaults + stored).distinct()
     }
 
@@ -43,10 +54,9 @@ object WebSourceRegistry {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val current = decode(prefs.getString(KEY_PREFIX + contentKey, null)).filterNot { it == rawUrl }
         val editor = prefs.edit().putString(KEY_PREFIX + contentKey, JSONArray(current).toString())
-        if (contentKey == BREAKING_BAD_S3E11_KEY && rawUrl == FRAME_XTV_EXAMPLE) {
-            val hidden = (decode(prefs.getString("hidden:$contentKey", null)) + rawUrl).distinct()
-            editor.putString("hidden:$contentKey", JSONArray(hidden).toString())
-        }
+        // Las fuentes predeterminadas se ocultan solo para este contenido cuando el usuario las quita.
+        val hidden = (decode(prefs.getString("hidden:$contentKey", null)) + rawUrl).distinct()
+        editor.putString("hidden:$contentKey", JSONArray(hidden).toString())
         editor.apply()
     }
 

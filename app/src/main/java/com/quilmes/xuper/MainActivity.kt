@@ -19,6 +19,7 @@ import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
+import com.quilmes.xuper.ui.screens.XuperBraveAdblock
 import com.quilmes.xuper.ui.theme.XuperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -131,6 +132,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // El motor de Brave se inicializa y actualiza sus listas en segundo plano.
+        XuperBraveAdblock.initialize(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
         // Antes se copiaban archivos acá y, sobre todo, setCatalogCategories() corría en el hilo

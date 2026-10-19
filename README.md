@@ -9,8 +9,8 @@ Aplicación personal de streaming para Android TV, escrita en Kotlin + Jetpack C
 - **Buscar:** búsqueda de películas y series en TMDB y el catálogo local.
 - **Mi lista / Continuar viendo / Perfil:** utilidades locales de la aplicación.
 - **Ficha de una serie:** selector de temporadas, lista de episodios con título, sinopsis, duración e imagen cuando está disponible. El usuario elige el episodio concreto antes de abrir sus fuentes.
-- **Fuentes web alternativas:** permite guardar más de una URL para una película o para cada episodio. Las URLs se almacenan localmente y pueden probarse o quitarse. Una URL guardada es una candidata, no una garantía de reproducción.
-- **IPTV:** las URL M3U8/MP4 y otros medios directos se reproducen con Media3/ExoPlayer. Las páginas web se abren en WebView para utilizar el reproductor que ofrece el propio sitio.
+- **Fuentes web alternativas globales:** cada episodio obtiene una URL candidata de FrameXTV con el patrón observado `/watch/{TMDB_ID}/{temporada}/{episodio}`. Para películas se ofrece la página principal del proveedor porque no se verificó un patrón de película. Se pueden agregar, probar y quitar URLs específicas por título/episodio. Una URL candidata no garantiza reproducción.
+- **IPTV:** las URL M3U8/MP4 y otros medios directos se reproducen con Media3/ExoPlayer. Las páginas web se abren dentro de WebView, con protección publicitaria compartida.
 
 ## Fuentes web y límites
 
@@ -20,13 +20,17 @@ Aplicación personal de streaming para Android TV, escrita en Kotlin + Jetpack C
 
 No debe asumirse que ese enlace sirve para otras series o episodios. Para añadir una fuente desde la ficha, seleccionar el episodio (en series), pegar una URL HTTP/HTTPS y pulsar **Agregar URL**. Las fuentes se guardan en SharedPreferences del dispositivo.
 
-El proyecto no descubre mágicamente nuevas URL ni verifica por adelantado todos los reproductores. Los proveedores web cambian su estructura, pueden requerir JavaScript, cookies, acceso regional o mecanismos incompatibles con WebView. No se inventan enlaces ni se considera una fuente válida solo por guardarla. Usar únicamente fuentes a las que se tenga acceso legítimo.
+El patrón de episodio de FrameXTV se infirió de la URL aportada por el usuario (`https://framextv.xyz/watch/1396/3/11`), que coincide con el ID TMDB de Breaking Bad y temporada/capítulo. Xuper construye candidatos para el resto de episodios, pero **no se verificó que el proveedor acepte ese patrón en todos los títulos**. Las páginas `lewblivehdplay.ru` y `qqwebplay.xyz` aparecen como cabeceras Referer en una lista IPTV aportada por el usuario; no se tratan como catálogos VOD porque no se confirmó una ruta de películas/series. El parser M3U conserva las cabeceras HTTP que cada stream necesita.
 
-## Bloqueador web
+Los proveedores cambian su estructura y pueden requerir JavaScript, cookies, acceso regional o mecanismos incompatibles con WebView. No se inventan URLs de vídeo directas ni se considera una fuente válida solo por guardarla. Usar únicamente fuentes a las que se tenga acceso legítimo.
 
-`ui/screens/XuperWebRequestFilter.kt` bloquea un conjunto local de dominios publicitarios y rastreadores, además de patrones de URL. El WebView deshabilita nuevas ventanas, rechaza esquemas externos, bloquea contenido mixto inseguro y aplica reglas cosméticas best-effort a banners/capas comunes.
+## Protección publicitaria basada en Brave
 
-**Esto no es Brave Shields ni uBlock Origin.** No garantiza bloquear anuncios servidos desde el mismo dominio que el vídeo, anuncios insertados dentro del stream, anuncios first-party, redirecciones que se ejecutan dentro de scripts ofuscados o todos los cambios de cada sitio. Las reglas cosméticas pueden fallar o interferir con algún reproductor. No se bloquean globalmente todos los iframes ni los elementos de vídeo porque eso rompería contenido legítimo.
+`ui/screens/XuperBraveAdblock.kt` integra `io.github.mlm-games:adblock:0.1.3`, un wrapper JNI para el motor Rust `adblock-rust` que usa Brave. Intercepta solicitudes del WebView con reglas de red, inyecta CSS/scriptlets cosméticos cuando hay recursos disponibles y conserva `XuperWebRequestFilter.kt` como respaldo.
+
+En segundo plano intenta descargar y cachear EasyList, EasyPrivacy y AdGuard Annoyances; las reglas almacenadas se reutilizan cuando no hay conexión. La interfaz no espera estas descargas. El motor usa licencia MPL-2.0; ver https://github.com/brave/adblock-rust y https://github.com/mlm-games/adblock-rs-kt-wrapper.
+
+Esto **no convierte WebView en Chromium/Brave completo ni garantiza eliminar todos los anuncios**. No puede quitar publicidad integrada directamente en el vídeo/stream o servida desde el mismo origen de forma indistinguible, y algunos filtros cosméticos pueden interferir con reproductores. Las ventanas emergentes, esquemas externos y contenido mixto inseguro siguen restringidos por WebView.
 
 ## Catálogo y TMDB
 
@@ -39,8 +43,9 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 - `MainActivity.kt`: navegación, carga inicial y fuentes M3U.
 - `data/M3uRepository.kt`: carga, indexación y búsqueda de canales/entradas M3U.
 - `data/TmdbCatalogService.kt`: metadatos TMDB y temporadas/episodios.
-- `data/WebSourceRegistry.kt`: registro global de URL alternativas por título/episodio.
+- `data/WebSourceRegistry.kt`: registro global de URL alternativas por título/episodio y candidatos generados para FrameXTV.
 - `data/WebPageMediaResolver.kt`: extracción conservadora de medios declarados en HTML inicial; no ejecuta JavaScript ni elude DRM/autenticación.
+- `ui/screens/XuperBraveAdblock.kt`: motor adblock-rust, actualización/caché de listas, intercepción de red y filtros cosméticos.
 - `ui/screens/HomeScreen.kt`: Inicio tipo streaming sin IPTV argentino ni listas M3U antiguas.
 - `ui/screens/DetailScreen.kt`: ficha, temporadas, episodios, sinopsis y gestión de fuentes web.
 - `ui/screens/PlayerScreen.kt`: ExoPlayer para medios directos y WebView para páginas web.
@@ -48,7 +53,7 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 
 ## Compilar
 
-Requisitos: Android Studio, JDK 17 y Android SDK 34. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar.
+Requisitos: Android Studio, **JDK 21** y Android SDK 34 y Gradle 8.11.1 o superior. La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
 
 El ZIP de trabajo contiene configuración local y una clave de firma personal. No publicar ni compartir públicamente esos archivos. Si se publica el proyecto, quitar `local.properties`, reemplazar la clave y sus contraseñas y no subir secretos al control de versiones.
 
@@ -59,5 +64,7 @@ El ZIP de trabajo contiene configuración local y una clave de firma personal. N
 - No volver a mostrar listas M3U antiguas de películas/series en Inicio.
 - En series, conservar el selector de temporada y el título/sinopsis de cada episodio.
 - No presentar un póster de TMDB como reproducción garantizada: si no hay stream directo, ofrecer ficha y fuentes alternativas guardadas.
+- Las URL generadas por plantilla son candidatas no verificadas. No etiquetar un sitio como fuente funcional hasta probarlo.
+- El motor Brave se integra en WebView; no abrir un navegador externo ni incorporar las funciones generales de Brave.
 - Los controles del reproductor deben mantener el comportamiento del mando descrito en el código existente.
 - Si un sitio muestra anuncios, registrar el dominio/patrón concreto antes de añadir una regla; bloquear agresivamente un dominio completo puede romper el vídeo.

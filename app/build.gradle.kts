@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val xuperLocalProperties = Properties().apply {
@@ -19,7 +20,7 @@ android {
     defaultConfig {
         applicationId = "com.quilmes.xuper"
         buildConfigField("String", "TMDB_API_KEY", "\"$escapedTmdbApiKey\"")
-        minSdk = 24
+        minSdk = 26
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
@@ -57,16 +58,12 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
-    }
-
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "21"
     }
 }
 
@@ -87,6 +84,9 @@ dependencies {
     // Navegación
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Motor nativo adblock-rust de Brave, envuelto para Android/JNI y WebView.
+    implementation("io.github.mlm-games:adblock:0.1.3")
+
     // Parseo HTML de páginas públicas; no ejecuta JavaScript ni resuelve players ofuscados.
     implementation("org.jsoup:jsoup:1.18.3")
 

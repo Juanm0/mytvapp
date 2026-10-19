@@ -204,8 +204,8 @@ fun DetailScreen(
                     Text("Fuentes web alternativas", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Text(
                         if (title.contentKind == ContentKind.SERIES)
-                            "Elegí una temporada y un episodio. Cada episodio conserva sus propias URL alternativas."
-                        else "Guardá varias URL para esta película. Si una no funciona, probá otra. El filtro publicitario se aplica al abrir páginas web compatibles.",
+                            "Elegí una temporada y un episodio. Xuper propone automáticamente FrameXTV como fuente candidata global y conserva las URL propias de cada capítulo. La disponibilidad debe comprobarse al abrirla."
+                        else "Xuper incluye FrameXTV como punto de búsqueda global y permite guardar varias URL específicas para esta película. El filtro publicitario se aplica al abrir páginas web compatibles.",
                         color = XuperTextSecondary, fontSize = 13.sp,
                     )
                     if (sourceKey == null) {
