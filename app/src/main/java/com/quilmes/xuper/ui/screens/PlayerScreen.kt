@@ -725,9 +725,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 }
             }
         }
-        Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("Control remoto: flechas para navegar · OK para seleccionar · Atrás para salir", color = Color(0xFFD8E3EA), fontSize = 11.sp)
-        }
+        // Se quitó la banda permanente de ayuda: tapaba parte del contenido web.
     }
 }
