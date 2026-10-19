@@ -69,7 +69,7 @@ internal fun LibraryScreen(
                     if (filtered.isEmpty()) null else Category("countries-${category.id}", "${section.name} · ${category.title}", filtered)
                 } }
             else -> sections.flatMap { section ->
-                section.categories.mapNotNull { category ->
+                section.categories.flatMap { category ->
                     val filtered = category.items.filter { title ->
                         when (mode) {
                             LibraryMode.MOVIES -> title.contentKind == ContentKind.MOVIE || title.contentKind == ContentKind.OTHER_VOD
@@ -78,7 +78,9 @@ internal fun LibraryScreen(
                             else -> false
                         }
                     }
-                    if (filtered.isEmpty()) null else if (mode == LibraryMode.SERIES) {
+                    if (filtered.isEmpty()) {
+                        emptyList()
+                    } else if (mode == LibraryMode.SERIES) {
                         val grouped = filtered.groupBy { title ->
                             val match = Regex("(?i)(?:s(\\d{1,2})\\s*e\\d{1,3}|(\\d{1,2})x\\d{1,3}|temporada\\s*(\\d+))").find(title.name)
                             val season = match?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() }
@@ -90,7 +92,7 @@ internal fun LibraryScreen(
                             compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
                                 .thenByDescending { yearForSort(it) }.thenBy { normalizeName(it.name) }
                         ) else filtered
-                        Category("${mode.name}-${category.id}", category.title, ordered)
+                        listOf(Category("${mode.name}-${category.id}", category.title, ordered))
                     }
                 }
             }
