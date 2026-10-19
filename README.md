@@ -201,3 +201,18 @@ TMDB aporta imágenes, sinopsis, búsqueda, temporadas y episodios, pero no stre
 REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que recorra las listas completas, ni compiles `Regex` dentro de funciones que se llaman por cada entrada; usá las constantes y los campos precalculados de `Entry` (`norm`, `key`, `episode`) en `M3uRepository.kt`. `lifecycleScope.launch` y `LaunchedEffect` corren en Main: mové el trabajo pesado con `withContext(Dispatchers.Default/IO)`. Las fichas TMDB se vinculan a un stream de forma perezosa (`find()`/`search()`); no las vincules en bloque.
 
 Antes de cambiar, revisá el código real. Después de cada iteración actualizá este README, verificá referencias/imports y, si el entorno no tiene Android SDK/Gradle, decilo con claridad y no afirmes que compiló. Conservá el keystore local existente para que las actualizaciones firmadas puedan instalarse sobre el APK anterior; nunca publiques sus credenciales. Entregá un ZIP completo cuando sea posible.
+
+
+## Controles del reproductor Android TV
+
+- Flechas izquierda/derecha: salto de 10 segundos; al mantener pulsado, acelera progresivamente a 20, 30 y hasta 60 segundos por repetición del mando.
+- Arriba/abajo: muestra el panel y permite recorrer sus botones; Back oculta el panel y, si ya estaba oculto, sale del reproductor.
+- OK/Select: activa el botón enfocado; si el panel está oculto, reproduce/pausa y lo vuelve a mostrar.
+- Play/Pause y Stop: alterna reproducción/pausa; Stop detiene y vuelve a la pantalla anterior.
+- CH+/CH-: cambia de canal en la cola disponible.
+- Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
+- El panel se oculta tras 5 segundos sin interacción.
+
+## Stremio
+
+No se incorporó un addon de Stremio de terceros preconfigurado. Para que la app obtenga streams de un addon real, hay que configurar su URL de manifiesto y mapear cada película/episodio a un ID externo compatible (por ejemplo IMDb). Los addons de metadatos no entregan video por sí solos y no es confiable prometer que un addon aleatorio tenga fuentes disponibles. Las URLs DASH/Widevine protegidas siguen requiriendo una licencia autorizada.

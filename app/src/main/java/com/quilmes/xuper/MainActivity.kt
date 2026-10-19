@@ -215,6 +215,7 @@ class MainActivity : ComponentActivity() {
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")
                                 },
+                                onExit = { navController.popBackStack() },
                             )
                         }
                     }
