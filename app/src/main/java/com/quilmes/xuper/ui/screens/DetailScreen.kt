@@ -33,7 +33,12 @@ import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 
 @Composable
-fun DetailScreen(title: Title, catalogService: TmdbCatalogService, onPlay: () -> Unit) {
+fun DetailScreen(
+    title: Title,
+    catalogService: TmdbCatalogService,
+    onPlay: (String) -> Unit,
+    findPlayableEpisode: (String, Int, Int) -> Title? = { _, _, _ -> null },
+) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("xuper-library", Context.MODE_PRIVATE) }
     var favorites by remember(title.id) { mutableStateOf(prefs.getStringSet("favorites", emptySet())?.contains(title.id) == true) }
@@ -101,7 +106,7 @@ fun DetailScreen(title: Title, catalogService: TmdbCatalogService, onPlay: () ->
                         if (seasonEpisode != null) Text(seasonEpisode, color = XuperTextPrimary, fontSize = 16.sp)
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(onClick = onPlay, enabled = title.streamUrl.isNotBlank()) {
+                            Button(onClick = { onPlay(title.id) }, enabled = title.streamUrl.isNotBlank()) {
                                 Text(if (title.streamUrl.isBlank()) "▶  Video no disponible" else "▶  Reproducir")
                             }
                             Button(onClick = {
@@ -142,6 +147,7 @@ fun DetailScreen(title: Title, catalogService: TmdbCatalogService, onPlay: () ->
                 item { Text("Cargando episodios…", color = XuperTextSecondary, modifier = Modifier.padding(start = 48.dp, top = 8.dp)) }
             }
             items(episodes, key = { "${selectedSeason}-${it.number}" }) { episode ->
+                val playableEpisode = findPlayableEpisode(title.name, selectedSeason ?: 0, episode.number)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 6.dp)
                         .background(if (selectedEpisode == episode.number) XuperSurfaceVariant else Color.Transparent, RoundedCornerShape(8.dp))
@@ -161,7 +167,13 @@ fun DetailScreen(title: Title, catalogService: TmdbCatalogService, onPlay: () ->
                         Text("${episode.number}. ${episode.name}", color = XuperTextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
-                        if (selectedEpisode == episode.number) Text("Este episodio no tiene una fuente de video conectada.", color = XuperAccentBright, fontSize = 12.sp)
+                        if (playableEpisode != null) {
+                            Button(onClick = { onPlay(playableEpisode.id) }) {
+                                Text("▶  Reproducir episodio")
+                            }
+                        } else if (selectedEpisode == episode.number) {
+                            Text("Este episodio no tiene una fuente de video coincidente en las listas conectadas.", color = XuperAccentBright, fontSize = 12.sp)
+                        }
                     }
                 }
             }

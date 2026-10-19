@@ -52,7 +52,16 @@ internal fun LibraryScreen(sections: List<Section>, mode: LibraryMode, onPlay: (
                     if (name.contains("gran hermano") || name == "gh") "gh:${title.streamUrl}"
                     else argentinaBrand(title.name) ?: "url:${title.streamUrl}"
                 }.sortedWith(compareBy<Title>({ argentinaPriority(it.name) }, { normalizeName(it.name) }))
-                listOfNotNull(ordered.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) })
+                val gh = ordered.filter { val n = normalizeName(it.name); n.contains("gran hermano") || n == "gh" }
+                val sports = ordered.filter { isArgentinaSport(it.name) }
+                val ghUrls = gh.map { it.streamUrl }.toSet()
+                val sportUrls = sports.map { it.streamUrl }.toSet()
+                val channels = ordered.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
+                listOfNotNull(
+                    channels.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) },
+                    gh.takeIf { it.isNotEmpty() }?.let { Category("argentina-gh", "Gran Hermano", it) },
+                    sports.takeIf { it.isNotEmpty() }?.let { Category("argentina-sports", "Deportes Argentina", it) },
+                )
             }
         }
     }
@@ -125,4 +134,9 @@ private fun argentinaPriority(value: String): Int {
         "gran hermano" in n || n == "gh" -> 9
         else -> 10
     }
+}
+
+private fun isArgentinaSport(value: String): Boolean {
+    val n = normalizeName(value)
+    return listOf("espn", "fox sports", "tyc sports", "t y c sports", "directv sports", "dsports", "tnt sports", "deportv", "goltv", "sport tv").any { it in n }
 }

@@ -13,7 +13,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
 import com.quilmes.xuper.data.ContentKind
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Una lista M3U a mostrar en la app.
@@ -71,9 +70,6 @@ class M3uRepository(
     private var catalogCategories: List<Category> = emptyList()
     private var searchCatalogTitles: List<Title> = emptyList()
     private val tmdbMetadata = TmdbMetadataService(cacheDir)
-    private val unavailableUrls = ConcurrentHashMap.newKeySet<String>().apply {
-        addAll(readUnavailableUrls())
-    }
     @Volatile private var byId: Map<String, Title> = emptyMap()
     @Volatile private var searchIndex: List<Pair<String, Title>> = emptyList()
 
@@ -114,19 +110,83 @@ class M3uRepository(
     /** Añade el catálogo visual de TMDB sin mezclarlo con las fuentes de canales reales. */
     fun setCatalogCategories(categories: List<Category>) {
         synchronized(lock) {
-            catalogCategories = categories
+            // Si una película de TMDB también tiene un enlace real en las listas M3U,
+            // conserva la ficha de TMDB pero conecta su URL reproducible.
+            catalogCategories = categories.map { category ->
+                category.copy(items = category.items.map(::resolveCatalogTitle))
+            }
             rebuildPublishedState()
         }
     }
 
-    /** Registra resultados de búsqueda para que sus fichas y favoritos resuelvan el título. */
+    /** Registra resultados de búsqueda y conecta películas cuando existe una URL M3U coincidente. */
     fun registerCatalogTitles(titles: List<Title>) {
         if (titles.isEmpty()) return
         synchronized(lock) {
-            searchCatalogTitles = (titles + searchCatalogTitles).distinctBy { it.id }.take(120)
+            searchCatalogTitles = (titles.map(::resolveCatalogTitle) + searchCatalogTitles).distinctBy { it.id }.take(120)
             rebuildPublishedState()
         }
     }
+
+    private fun resolveCatalogTitle(title: Title): Title {
+        if (title.contentKind != ContentKind.MOVIE || title.streamUrl.isNotBlank()) return title
+        val match = findPlayableMovie(title.name) ?: return title
+        return title.copy(streamUrl = match.streamUrl, isLive = false)
+    }
+
+    /** Busca una película con nombre equivalente en las fuentes M3U, sin confundirla con un episodio. */
+    private fun findPlayableMovie(name: String): Title? {
+        val target = normalizeContentTitle(name)
+        if (target.isBlank()) return null
+        return entriesBySource.values.asSequence().flatten().map { it.title }
+            .filter { !it.isLive && it.streamUrl.isNotBlank() && it.contentKind in setOf(ContentKind.MOVIE, ContentKind.OTHER_VOD) }
+            .filter { normalizeContentTitle(it.name) == target }
+            .sortedBy { if (it.contentKind == ContentKind.MOVIE) 0 else 1 }
+            .firstOrNull()
+    }
+
+    /** Alternativas reales de reproducción para el mismo título, ordenadas por fuente. */
+    fun getPlayableAlternatives(titleId: String): List<Title> {
+        val current = byId[titleId] ?: return emptyList()
+        if (current.streamUrl.isBlank()) return emptyList()
+        val currentEpisode = episodeKey(current.name)
+        val targetName = normalizeContentTitle(current.name)
+        val matches = entriesBySource.entries.sortedBy { it.key }.flatMap { (_, entries) ->
+            entries.map { it.title }.filter { candidate ->
+                if (candidate.streamUrl.isBlank()) return@filter false
+                if (current.isLive) {
+                    candidate.isLive && normalizeContentTitle(candidate.name) == targetName
+                } else if (currentEpisode != null) {
+                    if (candidate.isLive) return@filter false
+                    val candidateEpisode = episodeKey(candidate.name)
+                    candidateEpisode != null && candidateEpisode.first == currentEpisode.first &&
+                        candidateEpisode.second == currentEpisode.second && candidateEpisode.third == currentEpisode.third
+                } else {
+                    !candidate.isLive && candidate.contentKind in setOf(ContentKind.MOVIE, ContentKind.OTHER_VOD) &&
+                        normalizeContentTitle(candidate.name) == targetName
+                }
+            }
+        }.distinctBy { it.streamUrl }
+        return matches
+    }
+
+    /** Vincula un episodio de TMDB con el stream M3U si coinciden serie, temporada y episodio. */
+    fun findPlayableEpisode(seriesName: String, seasonNumber: Int, episodeNumber: Int): Title? {
+        val expected = normalizeContentTitle(seriesName)
+        if (expected.isBlank()) return null
+        return entriesBySource.values.asSequence().flatten().map { it.title }
+            .filter { !it.isLive && it.streamUrl.isNotBlank() && it.contentKind in setOf(ContentKind.SERIES, ContentKind.OTHER_VOD) }
+            .mapNotNull { title -> episodeKey(title.name)?.let { key -> title to key } }
+            .firstOrNull { (_, key) -> key.first == expected && key.second == seasonNumber && key.third == episodeNumber }
+            ?.first
+    }
+
+    private fun normalizeContentTitle(raw: String): String = normalize(raw)
+        .replace(Regex("\\[[^]]*]"), " ")
+        .replace(Regex("(?i)\\b(?:2160p|1080p|720p|480p|4k|uhd|fhd|hd|sd|h264|h265|hevc|x264|x265)\\b"), " ")
+        .replace(Regex("\\b(?:19|20)\\d{2}\\b"), " ")
+        .replace(Regex("[^a-zA-Z0-9 ]"), " ")
+        .replace(Regex("\\s+"), " ").trim()
 
     private fun rebuildPublishedState() {
         val visibleCatalog = catalogCategories.toMutableList()
@@ -198,30 +258,21 @@ class M3uRepository(
             val episode: Int
             if (index == 3) { season = 1; episode = match.groupValues[1].toIntOrNull() ?: continue }
             else { season = match.groupValues[1].toIntOrNull() ?: continue; episode = match.groupValues[2].toIntOrNull() ?: continue }
-            val base = normalize(raw.removeRange(match.range).replace(Regex("[-_.:]+"), " ").trim())
+            val prefix = raw.substring(0, match.range.first)
+            val suffix = raw.substring(match.range.last + 1)
+            val baseRaw = when {
+                prefix.isNotBlank() -> prefix
+                suffix.isNotBlank() -> suffix
+                else -> raw.removeRange(match.range)
+            }
+            val base = normalizeContentTitle(baseRaw)
             if (base.isNotBlank()) return Triple(base, season, episode)
         }
         return null
     }
 
-    /** Oculta del catálogo los streams que ExoPlayer confirma que fallan. */
-    override suspend fun markUnavailable(id: String) {
-        withContext(Dispatchers.IO) {
-            val sourceIndex = sources.indices.firstOrNull { id.startsWith("s$it-") } ?: return@withContext
-            synchronized(lock) {
-                val current = entriesBySource[sourceIndex] ?: readCache(sourceIndex) ?: return@synchronized
-                val failed = current.firstOrNull { it.title.id == id } ?: return@synchronized
-                unavailableUrls.add(failed.title.streamUrl)
-                writeUnavailableUrls()
-                val updated = current.filterNot { it.title.id == id }
-                if (updated.size != current.size) {
-                    entriesBySource[sourceIndex] = updated
-                    writeCache(sourceIndex, updated)
-                    rebuildPublishedState()
-                }
-            }
-        }
-    }
+    /** Un fallo de reproducción puede ser transitorio: no bloquea ni borra la fuente M3U. */
+    override suspend fun markUnavailable(id: String) = Unit
 
     override fun search(query: String, limit: Int): List<Title> {
         val tokens = normalize(query).split(' ').filter { it.isNotBlank() }
@@ -365,7 +416,7 @@ class M3uRepository(
                 continue
             } else {
                 val a = attrs
-                if (a != null && name.isNotBlank() && isPlayable(line) && line !in unavailableUrls) {
+                if (a != null && name.isNotBlank() && isPlayable(line)) {
                     val rawGroup = a["group-title"]?.split(";")?.firstOrNull()?.trim()
                     val group = rawGroup.takeUnless {
                         it.isNullOrBlank() || it.equals("N/A", ignoreCase = true) ||
@@ -385,7 +436,14 @@ class M3uRepository(
     }
 
     private fun makeTitle(id: String, name: String, logo: String, url: String, group: String, contentHint: ContentKind? = null): Title {
-        val kind = contentHint ?: classifyContent(name, group, url)
+        val detectedKind = classifyContent(name, group, url)
+        // En una lista VOD explícita, las entradas ambiguas son bajo demanda;
+        // si nombre/ruta identifica serie o película, se conserva esa clasificación.
+        val kind = when {
+            contentHint == ContentKind.OTHER_VOD && detectedKind == ContentKind.LIVE -> ContentKind.OTHER_VOD
+            contentHint != null -> contentHint
+            else -> detectedKind
+        }
         val live = kind == ContentKind.LIVE
         val kindLabel = when (kind) {
             ContentKind.LIVE -> "TV en vivo"
@@ -433,10 +491,13 @@ class M3uRepository(
         val seriesPath = Regex("(^|/)(series|serie|shows|tvshows)(/|$)").containsMatchIn(path)
         val episodePattern = Regex("\\b(s\\d{1,2}\\s*e\\d{1,3}|\\d{1,2}x\\d{1,3}|season\\s*\\d+|temporada\\s*\\d+|episode\\s*\\d+|episodio\\s*\\d+|ep\\s*\\d+)\\b")
         val seriesWords = listOf("series vod", "tv series", "series on demand", "series a la carta", "episodios", "episodes")
-        val seriesGroup = g in setOf("series", "series tv", "episodios", "episodes", "series completas")
+        val seriesGroup = g in setOf("series", "serie", "series tv", "episodios", "episodes", "series completas", "tv shows", "temporadas")
         if (seriesPath || episodePattern.containsMatchIn(n) || seriesGroup || seriesWords.any { it in metadata }) {
             return ContentKind.SERIES
         }
+
+        val movieGroup = g in setOf("peliculas", "pelicula", "movies", "movie", "films", "film", "largometrajes", "peliculas completas", "movies vod")
+        if (movieGroup) return ContentKind.MOVIE
 
         val moviePath = Regex("(^|/)(movie|movies|peliculas|films)(/|$)").containsMatchIn(path)
         val videoExtension = listOf(".mp4", ".mkv", ".avi", ".mov", ".webm").any { path.substringBefore('?').endsWith(it) }
@@ -509,22 +570,9 @@ class M3uRepository(
                         isLive = runCatching { ContentKind.valueOf(p[9]) }.getOrDefault(base.contentKind) == ContentKind.LIVE,
                     ) else base)
                 }
-            }.filterNot { it.title.streamUrl in unavailableUrls }.toList()
+            }.toList()
         }.takeIf { it.isNotEmpty() }
     }.getOrNull()
-
-    private fun unavailableFile() = File(cacheDir, "unavailable_streams.txt")
-
-    private fun readUnavailableUrls(): List<String> = runCatching {
-        val file = unavailableFile()
-        if (file.exists()) file.readLines().filter { it.isNotBlank() } else emptyList()
-    }.getOrDefault(emptyList())
-
-    private fun writeUnavailableUrls() {
-        runCatching {
-            unavailableFile().writeText(unavailableUrls.joinToString("\n"), Charsets.UTF_8)
-        }
-    }
 
     // ---------------------------------------------------------------- varios
 

@@ -58,11 +58,31 @@ fun HomeScreen(
         val gh = argentina.filter { isGranHermano(it.name) }
         val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
         val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
+        val vodSourceNames = setOf("vod general", "agrupado por contenido", "peliculas")
+        val vodSources = sections.filter { normalizeCatalogLabel(it.name) in vodSourceNames }
+        val seenUrls = HashSet<String>()
+        val mergedVodRows = linkedMapOf<String, Pair<String, MutableList<Title>>>()
+        vodSources.forEach { section ->
+            section.categories.forEach { category ->
+                val available = category.items.filter { !it.isLive && it.streamUrl.isNotBlank() && seenUrls.add(it.streamUrl) }
+                if (available.isNotEmpty()) {
+                    val key = normalizeCatalogLabel(category.title)
+                    val row = mergedVodRows.getOrPut(key) { category.id to mutableListOf() }
+                    row.second.addAll(available)
+                }
+            }
+        }
+        val vodRows = mergedVodRows.map { (key, pair) ->
+            val label = vodSources.asSequence().flatMap { it.categories.asSequence() }
+                .firstOrNull { normalizeCatalogLabel(it.title) == key }?.title ?: "Películas y series"
+            Category("vod-added-${pair.first}", label, pair.second.toList())
+        }
         val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
         buildList {
             if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
             if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
             if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
+            addAll(vodRows)
             addAll(tmdbRows)
         }
     }
@@ -168,3 +188,7 @@ private fun isArgentinaSports(name: String): Boolean = listOf(
 private fun yearForSort(title: Title): Int = title.year?.toIntOrNull()
     ?: Regex("\\b(?:19|20)\\d{2}\\b").find(title.name)?.value?.toIntOrNull()
     ?: 0
+
+private fun normalizeCatalogLabel(value: String): String =
+    java.text.Normalizer.normalize(value.lowercase(), java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "").trim()

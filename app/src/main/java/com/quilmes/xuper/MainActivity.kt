@@ -22,9 +22,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * Para cambiar/agregar listas IPTV: editá esta lista. Cada M3uSource es un
- * ítem de la barra lateral. Para otra fuente (Xtream, backend propio)
- * implementá ContentRepository y devolvela acá.
+ * Las listas M3U alimentan el catálogo y la búsqueda, pero no agregan opciones
+ * a la barra lateral. Para otra fuente (Xtream, backend propio), implementá
+ * ContentRepository y devolvela acá.
  */
 private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
     cacheDir = cacheDir,
@@ -49,6 +49,43 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxPerRow = 100,
             maxRows = 1,
         ),
+        M3uSource(
+            name = "VOD General",
+            url = "https://raw.githubusercontent.com/jromero88/iptv/master/VOD.m3u",
+            icon = "🎬",
+            homeRows = 0,
+            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
+            maxPerRow = 60,
+            maxRows = 80,
+        ),
+        M3uSource(
+            name = "Agrupado por contenido",
+            url = "https://raw.githubusercontent.com/jromero88/iptv/master/index.content.m3u",
+            icon = "🗂️",
+            homeRows = 0,
+            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
+            maxPerRow = 60,
+            maxRows = 80,
+        ),
+        M3uSource(
+            name = "Películas",
+            url = "https://raw.githubusercontent.com/jromero88/iptv/master/categories/movies.m3u",
+            icon = "🍿",
+            homeRows = 0,
+            contentHint = com.quilmes.xuper.data.ContentKind.MOVIE,
+            maxPerRow = 60,
+            maxRows = 40,
+        ),
+        M3uSource(
+            name = "Mickflix VOD",
+            url = "https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u",
+            icon = "🎞️",
+            homeRows = 0,
+            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
+            enrichMetadata = false,
+            maxPerRow = 80,
+            maxRows = 120,
+        ),
     ),
 )
 
@@ -61,15 +98,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
-        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv")
+        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_vod_general.tsv", "catalog_3_agrupado_por_contenido.tsv", "catalog_4_peliculas.tsv", "catalog_4_pel_culas.tsv", "catalog_5_mickflix_vod.tsv")
         filesDir.listFiles()?.forEach { file ->
             val oldCatalogCache = file.name.startsWith("catalog_") && file.name.endsWith(".tsv") && file.name !in activeCaches
             val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u")
-            if (oldCatalogCache || oldPlaylist) file.delete()
+            val oldFailureBlacklist = file.name == "unavailable_streams.txt"
+            if (oldCatalogCache || oldPlaylist || oldFailureBlacklist) file.delete()
         }
 
-        // Instala únicamente la lista argentina adicional. Las antiguas listas mixtas
-        // dejaron de cargarse para mantener la app ligera; el catálogo VOD viene de TMDB.
+        // Instala únicamente la lista argentina adicional. Las listas VOD se descargan
+        // desde sus URLs y se cachean; TMDB aporta metadatos, no los videos.
         runCatching {
             assets.open("argentina-extra.m3u").use { input ->
                 File(filesDir, "argentina-extra.m3u").outputStream().use { output -> input.copyTo(output) }
@@ -106,7 +144,14 @@ class MainActivity : ComponentActivity() {
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
-                        if (title != null) DetailScreen(title = title, catalogService = tmdbCatalogService, onPlay = { navController.navigate("player/$id") })
+                        if (title != null) DetailScreen(
+                            title = title,
+                            catalogService = tmdbCatalogService,
+                            onPlay = { playableId -> navController.navigate("player/$playableId") },
+                            findPlayableEpisode = { seriesName, season, episode ->
+                                (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
+                            },
+                        )
                     }
                     composable(
                         route = "player/{titleId}",
@@ -127,6 +172,11 @@ class MainActivity : ComponentActivity() {
                                 channelQueue = (repository as? M3uRepository)?.getChannelQueue(id).orEmpty(),
                                 currentTitleId = id,
                                 nextEpisode = (repository as? M3uRepository)?.getNextEpisode(id),
+                                alternatePlayers = (repository as? M3uRepository)?.getPlayableAlternatives(id).orEmpty(),
+                                onChangePlayer = { alternativeId ->
+                                    navController.popBackStack("main", false)
+                                    navController.navigate("player/$alternativeId")
+                                },
                                 onPlayNextEpisode = { nextId ->
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")
@@ -135,7 +185,6 @@ class MainActivity : ComponentActivity() {
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")
                                 },
-                                onPlaybackError = { lifecycleScope.launch { repository.markUnavailable(id) } },
                             )
                         }
                     }
