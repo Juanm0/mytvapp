@@ -1,5 +1,6 @@
 package com.quilmes.xuper.ui.screens
 
+import android.view.KeyEvent as AndroidKeyEvent
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -112,8 +113,18 @@ fun PlayerScreen(
 
     LaunchedEffect(exoPlayer, streamUrl) {
         setUrl(streamUrl, streamHeaders)
-        delay(250)
-        runCatching { playFocusRequester.requestFocus() }
+    }
+    // Antes el foco solo se fijaba una vez al abrir la pantalla. Si los controles se
+    // ocultaban (a los 6 s) y volvían a aparecer con una tecla, el foco se quedaba
+    // "perdido" en el contenedor de fondo: por eso hacía falta tocar abajo dos veces
+    // y después OK para recién poder moverse entre los botones. Ahora se reenfoca el
+    // botón de Pausar/Reproducir cada vez que los controles se muestran, sea la
+    // primera vez o después de reaparecer, así quedan listos para navegar al toque.
+    LaunchedEffect(streamUrl, showControls) {
+        if (showControls) {
+            delay(80)
+            runCatching { playFocusRequester.requestFocus() }
+        }
     }
     LaunchedEffect(exoPlayer, showControls) {
         if (showControls) {
@@ -160,6 +171,18 @@ fun PlayerScreen(
 
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
 
+    // CH+/CH-: recorre channelQueue (ya armada en MainActivity según la sección/grupo
+    // del canal actual) y da la vuelta en bucle: del último pasa al primero y viceversa.
+    fun changeChannelBy(delta: Int) {
+        if (channelQueue.size <= 1 || currentTitleId.isBlank()) return
+        val index = channelQueue.indexOfFirst { it.id == currentTitleId }
+        if (index < 0) return
+        val size = channelQueue.size
+        val nextIndex = ((index + delta) % size + size) % size
+        val next = channelQueue[nextIndex]
+        if (next.id != currentTitleId) onChangeChannel(next.id)
+    }
+
     fun changeSource() {
         if (alternatePlayers.isEmpty()) {
             error = "No hay otra fuente coincidente en las listas cargadas."
@@ -187,6 +210,11 @@ fun PlayerScreen(
         Modifier.fillMaxSize().background(Color.Black).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                // CH+/CH- funcionan siempre, se vean o no los controles, como en cualquier TV.
+                when (event.nativeKeyEvent.keyCode) {
+                    AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
+                    AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
+                }
                 when (event.key) {
                     Key.DirectionCenter, Key.Enter -> {
                         if (!showControls) { showControls = true; true } else false

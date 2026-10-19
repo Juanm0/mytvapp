@@ -110,13 +110,17 @@ class M3uRepository(
     /** Añade el catálogo visual de TMDB sin mezclarlo con las fuentes de canales reales. */
     fun setCatalogCategories(categories: List<Category>) {
         synchronized(lock) {
-            // Si una película de TMDB también tiene un enlace real en las listas M3U,
-            // conserva la ficha de TMDB pero conecta su URL reproducible.
+            // Inicio ya no muestra estas filas (lo arma HomeScreen aparte, solo con
+            // Argentina/GH/Deportes y el VOD de las listas M3U). Esto se guarda
+            // igual para alimentar el buscador: antes se descartaba cualquier título
+            // de TMDB sin un enlace real en las listas M3U, así que si no había match
+            // la ficha directamente no existía en ningún lado (ni en Inicio ni
+            // buscándola). Ahora se guardan todos; resolveCatalogTitle conecta la URL
+            // cuando hay una coincidencia real, y si no la hay la ficha igual aparece
+            // en el buscador, solo que sin reproducción disponible.
             catalogCategories = categories.mapNotNull { category ->
-                // El catálogo visual no muestra fichas imposibles de reproducir: solo títulos
-                // para los que encontramos una URL real en alguna de las listas cargadas.
-                val playable = category.items.map(::resolveCatalogTitle).filter { it.streamUrl.isNotBlank() }
-                category.copy(items = playable).takeIf { playable.isNotEmpty() }
+                val resolved = category.items.map(::resolveCatalogTitle)
+                category.copy(items = resolved).takeIf { resolved.isNotEmpty() }
             }
             rebuildPublishedState()
         }
@@ -126,7 +130,12 @@ class M3uRepository(
     fun registerCatalogTitles(titles: List<Title>) {
         if (titles.isEmpty()) return
         synchronized(lock) {
-            searchCatalogTitles = (titles.map(::resolveCatalogTitle).filter { it.streamUrl.isNotBlank() } + searchCatalogTitles).distinctBy { it.id }.take(120)
+            // Antes se descartaba cualquier resultado de TMDB sin enlace reproducible,
+            // así que buscar un título que solo estaba en listas que ya no están activas
+            // (por ejemplo, tras cambiar las fuentes M3U de esta versión) no devolvía nada.
+            // Ahora se guardan todos los resultados; la ficha se puede abrir igual, con
+            // el botón de reproducción deshabilitado si no hay ninguna URL real conectada.
+            searchCatalogTitles = (titles.map(::resolveCatalogTitle) + searchCatalogTitles).distinctBy { it.id }.take(120)
             rebuildPublishedState()
         }
     }

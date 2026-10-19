@@ -1,5 +1,20 @@
 # Xuper Quilmes TV — Android TV
 
+## Cambios de esta entrega (sobre la del fix de freeze)
+
+**1. Inicio ya no muestra el catálogo completo de TMDB — eso queda para el buscador.**
+Antes `HomeScreen` agregaba, después de los canales y el VOD real, las filas editoriales de TMDB (tendencias, populares, plataformas). Se sacaron: Inicio ahora solo muestra Argentina (con Gran Hermano y Deportes separados) y las películas/series que vienen de las listas M3U activas (`buildHomeRows` en `HomeScreen.kt` ya no agrega `tmdbRows`). El catálogo de TMDB se sigue pudiendo buscar por nombre desde el buscador, sin cambios ahí.
+
+**2. "Breaking Bad" y "Prison Break" desaparecieron — causa real, no es un bug de interfaz.**
+Se verificaron las listas M3U activas (`vod-original.m3u`, `movies.m3u` y `series.m3u` de `onlinem3u/publicdomainm3u`, y `mickflix/Mickflix-IPTV`): ninguna contiene esos dos títulos ahora mismo. Lo más probable es que antes coincidían con una URL de las listas `jromero88/iptv` que se sacaron en la versión anterior por devolver 404. Además, el código descartaba por completo cualquier ficha de TMDB sin un enlace reproducible encontrado — ni siquiera se podía buscar. Se corrigió eso (`registerCatalogTitles` y `setCatalogCategories` en `M3uRepository.kt` ya no filtran por `streamUrl` no vacío), así que ahora **sí van a aparecer en el buscador** con su ficha completa, pero con el botón de reproducción deshabilitado ("Video no disponible") porque ninguna lista activa tiene un link real para ellos. Si el usuario consigue una URL real para alguno, se puede sumar como entrada nueva a `vod-original.m3u`.
+
+**3. Gran Hermano desapareció — mismo tipo de causa, no hay fuente activa.**
+Se revisó `argentina-extra.m3u` (local) y `Mickflix-IPTV/playlist.m3u` (remota): ninguna de las dos trae un canal de Gran Hermano en vivo ahora mismo. El motor que arma la sección Argentina sí busca canales de Gran Hermano en **todas** las fuentes activas automáticamente (no hace falta tocar código para que aparezca si alguna lista llega a tenerlo), pero hoy ninguna lo tiene. No se agregó ninguna URL de Gran Hermano a mano porque no hay una fuente propia verificada para eso — si el usuario consigue un link que funcione, se agrega a `argentina-extra.m3u` y aparece solo.
+
+**4. Reproductor: ergonomía del control remoto.**
+- Antes, cuando los controles del reproductor se ocultaban (a los 6 s) y volvían a aparecer con una tecla, el foco quedaba "perdido" fuera de los botones — por eso hacía falta tocar abajo dos veces y después OK para recién poder navegar entre Pausar/Avanzar/Subtítulos. Se corrigió: ahora el botón de Pausar/Reproducir se vuelve a enfocar automáticamente cada vez que los controles aparecen (`PlayerScreen.kt`), así que con un solo toque ya queda un botón enfocado y navegable.
+- CH+/CH- (`KEYCODE_CHANNEL_UP`/`KEYCODE_CHANNEL_DOWN`) estaban completamente sin implementar en el reproductor — los parámetros `channelQueue`/`onChangeChannel` llegaban desde `MainActivity` pero nunca se usaban. Se implementaron: cambian de canal dentro de la cola de la sección actual (la misma que ya arma `M3uRepository.getChannelQueue`) y dan la vuelta en bucle (del último canal pasa al primero y viceversa), funcionan se vean o no los controles en pantalla, igual que en cualquier TV.
+
 ## Fix de esta entrega: la app se congelaba al abrir
 
 **Síntoma reportado:** al abrir la app, la interfaz se ponía muy lenta o directamente se congelaba (no respondía al control remoto) durante varios segundos.

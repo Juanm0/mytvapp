@@ -56,8 +56,10 @@ fun HomeScreen(
     val sections by repository.sections.collectAsState()
     val loading by repository.loading.collectAsState()
 
-    // Inicio combina TV real de Argentina con filas editoriales del catálogo TMDB.
-    // El catálogo de TMDB aporta metadatos e imágenes, no enlaces de video.
+    // Inicio muestra solo contenido real y reproducible: canales de Argentina
+    // (con Gran Hermano y Deportes separados) y las películas/series de las
+    // listas M3U activas. El catálogo editorial de TMDB (tendencias, populares,
+    // plataformas) no se muestra acá; se puede encontrar desde el buscador.
     //
     // `sections` se actualiza una vez por cada fuente M3U a medida que termina de
     // cargar (hasta 6 veces seguidas al abrir la app). Antes este cálculo corría
@@ -72,10 +74,10 @@ fun HomeScreen(
         val computed = withContext(Dispatchers.Default) { buildHomeRows(sections) }
         rows = computed
     }
-    val featured = remember(sections) {
-        sections.firstOrNull { it.id == "tmdb-catalog" }?.categories
-            ?.firstOrNull { it.title.contains("Tendencias", ignoreCase = true) }
-            ?.items?.firstOrNull()
+    // El banner destacado ahora toma el primer título VOD reproducible de `rows`
+    // (ya no depende de la fila "Tendencias" de TMDB, que se sacó de Inicio).
+    val featured = remember(rows) {
+        rows.firstOrNull { it.id.startsWith("vod-added-") }?.items?.firstOrNull()
     }
 
     if (rows.isEmpty()) {
@@ -190,13 +192,16 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
             .firstOrNull { normalizeCatalogLabel(it.title) == key }?.title ?: "Películas y series"
         Category("vod-added-${pair.first}", label, pair.second.toList())
     }
-    val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
+    // El catálogo editorial de TMDB (tendencias, populares, plataformas) ya no se
+    // muestra en Inicio: el usuario lo pidió así porque mezclaba fichas sin
+    // reproducción disponible con el contenido real. Ese catálogo sigue existiendo
+    // y se puede encontrar enteramente desde el buscador (ver registerCatalogTitles /
+    // setCatalogCategories en M3uRepository).
     return buildList {
         if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
         if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
         if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
         addAll(vodRows)
-        addAll(tmdbRows)
     }
 }
 
