@@ -1,5 +1,16 @@
 # Xuper Quilmes TV — Android TV
 
+## Correcciones de listas argentinas y reproducción (19/10/2026)
+
+- Se vuelven a instalar desde `assets` y registrar en el catálogo las listas locales `iptv-extra.m3u`, `lista-extendida.m3u`, `mi-lista.m3u` y `peliculas-dominio-publico.m3u`, además de `argentina-extra.m3u` y `vod-original.m3u`.
+- La sección **Argentina** ya no desaparece cuando la lista pública `iptv-org` falla: se muestra igualmente con las señales locales de `argentina-extra.m3u`.
+- La actualización de listas se serializa para evitar dos descargas completas simultáneas cuando se abre una ficha y se pulsa **Buscar fuente**.
+- Las fichas sin enlace muestran **Buscar fuente** y permiten reintentar las listas; si se encuentra una coincidencia, se abre el reproductor.
+- Los enlaces se prueban primero como medios directos. Si un enlace sin extensión reconocida falla y parece una página web, Xuper intenta resolver la página; los enlaces directos HLS/DASH con parámetros conservan su tipo de medio.
+
+**Límite de verificación:** este entorno no tiene Android SDK ni Gradle instalados, así que no pude generar un APK real. La comprobación de sintaxis de Kotlin no mostró errores de análisis, pero la compilación definitiva debe ejecutarse en GitHub Actions o Android Studio. Que una URL se prepare no garantiza que el servidor permita reproducirla ni que el contenido corresponda al título esperado.
+
+
 ## Cambios de esta entrega (por qué no se veía nada + reproductor tipo streaming grande)
 
 **1. "No pude ver ninguna película o serie" — causa real, confirmada en el código (no era la API de TMDB).**
@@ -221,21 +232,3 @@ Antes de cambiar, revisá el código real. Después de cada iteración actualiz�
 - Cada fuente publica sus resultados cuando termina; si aparece una coincidencia, se puede reproducir sin esperar al resto.
 - Las fuentes restantes continúan cargando en segundo plano y sus coincidencias se agregan como alternativas de reproducción.
 - El catálogo visual usa caché de TMDB cuando está disponible. La disponibilidad real de una película depende de que alguna fuente IPTV tenga una coincidencia reproducible.
-
-## Fallback y memoria de fuentes de reproducción
-
-- La ficha siempre ofrece una acción principal: **Reproducir** si ya hay una fuente vinculada o **Buscar fuente** si todavía no la hay.
-- Al abrir el reproductor, Xuper reúne las coincidencias de las listas M3U disponibles y prueba primero la fuente preferida guardada para ese contenido; si no existe, respeta el orden de las listas.
-- Si ExoPlayer informa un error, el reproductor pasa automáticamente a la siguiente alternativa coincidente que todavía no haya probado.
-- Cuando una fuente alcanza el estado `STATE_READY`, se guarda su URL en `SharedPreferences` usando la clave estable del contenido. En próximas reproducciones se intenta primero esa URL y, si falla o ya no figura en las listas, se continúa con las demás.
-- Si no hay coincidencias, la pantalla informa que no encontró una fuente y permite volver a intentar la búsqueda de listas.
-- `STATE_READY` confirma que el reproductor preparó el stream, no que haya verificado semánticamente que el vídeo sea la película correcta. Las listas IPTV pueden cambiar, expirar o devolver contenido distinto; por eso se conserva el fallback.
-
-## Fallback y memoria de fuentes de reproducción
-
-- La ficha siempre ofrece una acción principal: **Reproducir** si ya hay una fuente vinculada o **Buscar fuente** si todavía no la hay.
-- Al abrir el reproductor, Xuper reúne las coincidencias de las listas M3U disponibles y prueba primero la fuente preferida guardada para ese contenido; si no existe, respeta el orden de las listas.
-- Si ExoPlayer informa un error, el reproductor pasa automáticamente a la siguiente alternativa coincidente que todavía no haya probado.
-- Cuando una fuente alcanza el estado `STATE_READY`, se guarda su URL en `SharedPreferences` usando la clave estable del contenido. En próximas reproducciones se intenta primero esa URL y, si falla o ya no figura en las listas, se continúa con las demás.
-- Si no hay coincidencias, la pantalla informa que no encontró una fuente y permite volver a intentar la búsqueda de listas.
-- `STATE_READY` confirma que el reproductor preparó el stream, no que haya verificado semánticamente que el vídeo sea la película correcta. Las listas IPTV pueden cambiar, expirar o devolver contenido distinto; por eso se conserva el fallback.

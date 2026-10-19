@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.nio.charset.Charset
@@ -162,6 +164,7 @@ class M3uRepository(
     override val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
     private val lock = Any()
+    private val refreshMutex = Mutex()
     private val entriesBySource = HashMap<Int, List<Entry>>() // protegido por `lock`
     @Volatile private var allEntries: List<Entry> = emptyList()
     @Volatile private var catalogCategories: List<Category> = emptyList()
@@ -172,7 +175,7 @@ class M3uRepository(
     @Volatile private var byId: Map<String, Title> = emptyMap()
     @Volatile private var searchIndex: List<Pair<String, Title>> = emptyList()
 
-    override suspend fun refresh() {
+    override suspend fun refresh() = refreshMutex.withLock {
         withContext(Dispatchers.IO) {
             iptvRefreshInProgress = true
             _loading.value = true
@@ -392,7 +395,17 @@ class M3uRepository(
             visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", searchCatalogTitles))
         }
         val secs = sources.indices.mapNotNull { n ->
-            entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
+            val source = sources[n]
+            if (source.mergeIntoArgentina) return@mapNotNull null
+            val entries = entriesBySource[n]
+            val isArgentinaBase = source.name.equals("Argentina", ignoreCase = true) && source.flattenIntoOneCategory
+            val hasArgentinaExtras = isArgentinaBase && sources.indices.any { index ->
+                sources[index].mergeIntoArgentina && entriesBySource[index].orEmpty().isNotEmpty()
+            }
+            // No ocultar las señales argentinas locales si la lista pública principal falla.
+            // Antes, como el origen Argentina no tenía entradas propias, tampoco se construía
+            // su sección y las 280 entradas de "Argentina · agregados" quedaban invisibles.
+            if (entries != null || hasArgentinaExtras) buildSection(n, source, entries.orEmpty()) else null
         }.toMutableList()
         if (visibleCatalog.isNotEmpty()) secs.add(Section("tmdb-catalog", "Catálogo", "🎬", visibleCatalog, visibleCatalog.size))
 

@@ -66,7 +66,6 @@ import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
-import com.quilmes.xuper.data.PlaybackSourceRegistry
 import com.quilmes.xuper.data.WebPageMediaResolver
 import kotlinx.coroutines.delay
 
@@ -82,7 +81,11 @@ private fun isWebPageUrl(raw: String): Boolean {
     val parsed = runCatching { URI(raw) }.getOrNull() ?: return false
     if (parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank()) return false
     val path = parsed.path.orEmpty().lowercase()
-    return !listOf(".m3u8", ".mpd", ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".ts", ".aac", ".mp3").any(path::endsWith)
+    return !listOf(
+        ".m3u", ".m3u8", ".mpd", ".mp4", ".m4v", ".webm", ".mkv", ".mov",
+        ".ts", ".m2ts", ".mts", ".3gp", ".flv", ".avi", ".mpg", ".mpeg",
+        ".aac", ".m4a", ".mp3", ".ogg", ".wav", ".wmv"
+    ).any(path::endsWith)
 }
 
 @OptIn(UnstableApi::class)
@@ -93,20 +96,54 @@ fun PlayerScreen(
     streamHeaders: Map<String, String> = emptyMap(),
     channelQueue: List<Title> = emptyList(),
     currentTitleId: String = "",
-    playbackKey: String = currentTitleId,
     nextEpisode: Title? = null,
     alternatePlayers: List<Title> = emptyList(),
     onChangeChannel: (String) -> Unit = {},
     onChangePlayer: (String) -> Unit = {},
     onPlayNextEpisode: (String) -> Unit = {},
     onExit: () -> Unit = {},
+    directOnly: Boolean = false,
 ) {
-    if (isWebPageUrl(streamUrl)) {
-        // Primero intenta resolver HTML público a un medio directo para usar ExoPlayer nativo.
-        // Solo cae al WebView embebido si el proveedor no expone una URL de vídeo directa.
+    var resolveAsWebPage by remember(streamUrl) { mutableStateOf(false) }
+    val resolvePageCallback = remember(streamUrl, directOnly) { { if (!directOnly) resolveAsWebPage = true } }
+    if (resolveAsWebPage && !directOnly) {
         WebPageResolverPlayer(name = name, pageUrl = streamUrl)
         return
     }
+    NativePlayerScreen(
+        name = name,
+        streamUrl = streamUrl,
+        streamHeaders = streamHeaders,
+        channelQueue = channelQueue,
+        currentTitleId = currentTitleId,
+        nextEpisode = nextEpisode,
+        alternatePlayers = alternatePlayers,
+        onChangeChannel = onChangeChannel,
+        onChangePlayer = onChangePlayer,
+        onPlayNextEpisode = onPlayNextEpisode,
+        onExit = onExit,
+        directOnly = directOnly,
+        onResolveAsWebPage = resolvePageCallback,
+    )
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun NativePlayerScreen(
+    name: String,
+    streamUrl: String,
+    streamHeaders: Map<String, String>,
+    channelQueue: List<Title>,
+    currentTitleId: String,
+    nextEpisode: Title?,
+    alternatePlayers: List<Title>,
+    onChangeChannel: (String) -> Unit,
+    onChangePlayer: (String) -> Unit,
+    onPlayNextEpisode: (String) -> Unit,
+    onExit: () -> Unit,
+    directOnly: Boolean,
+    onResolveAsWebPage: () -> Unit,
+) {
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl) { mutableStateOf(true) }
@@ -150,10 +187,11 @@ fun PlayerScreen(
     fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
         dataSourceFactory.setDefaultRequestProperties(headers)
         val cleanUrl = url.substringBefore('?').lowercase()
+        val fullLowerUrl = url.lowercase()
         val item = MediaItem.Builder().setUri(url).apply {
             when {
-                cleanUrl.endsWith(".m3u8") -> setMimeType(MimeTypes.APPLICATION_M3U8)
-                cleanUrl.endsWith(".mpd") -> setMimeType(MimeTypes.APPLICATION_MPD)
+                cleanUrl.endsWith(".m3u8") || fullLowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
+                cleanUrl.endsWith(".mpd") || fullLowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
         }.build()
         attemptedUrls = attemptedUrls + url
@@ -216,17 +254,16 @@ fun PlayerScreen(
 
     // Si una URL falla, intenta automáticamente la siguiente fuente disponible. El botón manual
     // permite recorrerlas incluso cuando el stream abre pero corresponde a otra película/episodio.
-    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, playbackKey) {
+    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, directOnly, onResolveAsWebPage) {
         val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) {
-                    val activeUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
-                    if (activeUrl.isNotBlank()) PlaybackSourceRegistry.savePreferredUrl(context, playbackKey, activeUrl)
-                }
-            }
-
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+                // Una URL sin extensión puede ser un stream directo o una página de reproducción.
+                // Primero la probamos como medio; solo si falla el enlace inicial intentamos resolver HTML.
+                if (!directOnly && currentUrl == streamUrl && isWebPageUrl(streamUrl)) {
+                    onResolveAsWebPage()
+                    return
+                }
                 val nextIndex = (1..alternatePlayers.size).asSequence()
                     .map { (sourceIndex + it) % alternatePlayers.size.coerceAtLeast(1) }
                     .firstOrNull { index ->
@@ -448,7 +485,7 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
                 Text("Esto puede tardar unos segundos", color = Color(0xFF9CCBD4), fontSize = 13.sp)
             }
         }
-        is WebPageMediaResolver.Result.DirectMedia -> PlayerScreen(name = name, streamUrl = resolved.url)
+        is WebPageMediaResolver.Result.DirectMedia -> PlayerScreen(name = name, streamUrl = resolved.url, directOnly = true)
         is WebPageMediaResolver.Result.EmbedPage -> WebEmbedPlayer(url = resolved.url)
         is WebPageMediaResolver.Result.NotFound -> Box(
             Modifier.fillMaxSize().background(Color(0xFF07111B)).padding(32.dp),

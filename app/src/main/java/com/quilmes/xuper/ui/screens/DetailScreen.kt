@@ -53,6 +53,7 @@ fun DetailScreen(
     findPlayableEpisode: (String, Int, Int) -> Title? = { _, _, _ -> null },
     onPlayStream: (String, String) -> Unit = { _, _ -> },
     onOpenTitle: (Title) -> Unit = {},
+    onSearchSource: (String, (Title?) -> Unit) -> Unit = { _, done -> done(null) },
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("xuper-library", Context.MODE_PRIVATE) }
@@ -66,6 +67,8 @@ fun DetailScreen(
     var relatedTitles by remember(title.id) { mutableStateOf<List<Title>>(emptyList()) }
     var imdbId by remember(title.id) { mutableStateOf<String?>(null) }
     var loadingImdbId by remember(title.id) { mutableStateOf(false) }
+    var searchingSource by remember(title.id) { mutableStateOf(false) }
+    var sourceSearchMessage by remember(title.id) { mutableStateOf<String?>(null) }
     val isTmdb = title.id.startsWith("tmdb-")
     val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
 
@@ -146,8 +149,21 @@ fun DetailScreen(
                         )
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(onClick = { onPlay(title.id) }) {
-                                Text(if (title.streamUrl.isNotBlank()) "▶  Reproducir" else "🔎  Buscar fuente")
+                            if (title.streamUrl.isNotBlank()) {
+                                Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
+                            } else {
+                                Button(onClick = {
+                                    if (!searchingSource) {
+                                        searchingSource = true
+                                        sourceSearchMessage = "Buscando en las listas IPTV…"
+                                        onSearchSource(title.id) { result ->
+                                            searchingSource = false
+                                            sourceSearchMessage = if (result != null) "Fuente encontrada." else "No se encontró una fuente. Revisá las listas o intentá más tarde."
+                                        }
+                                    }
+                                }, enabled = !searchingSource) {
+                                    Text(if (searchingSource) "Buscando…" else "🔎 Buscar fuente")
+                                }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -156,11 +172,8 @@ fun DetailScreen(
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
                         }
-                        if (title.streamUrl.isBlank()) {
-                            Text(
-                                "Todavía no hay una fuente IPTV vinculada. Xuper va a probar las listas disponibles en orden y recordar la fuente que funcione.",
-                                color = XuperTextSecondary, fontSize = 12.sp,
-                            )
+                        sourceSearchMessage?.let { message ->
+                            Text(message, color = XuperTextSecondary, fontSize = 12.sp)
                         }
                         val qrKey = sourceKey ?: WebSourceRegistry.titleKey(title.id)
                         SourceQrEditor(
