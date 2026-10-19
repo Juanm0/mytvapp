@@ -39,6 +39,9 @@ La lista compartida `https://raw.githubusercontent.com/srfarias/Arg-IpTv/master/
 
 ## Configurar TMDB
 
+**Nota de compilación:** en `app/build.gradle.kts`, las propiedades se cargan con `import java.util.Properties` y `this.load(it)`. Si aparece `Unresolved reference: util` o `Unresolved reference: load`, verificá que estés compilando esta versión corregida del archivo.
+
+
 La clave de TMDB ya quedó cargada en el archivo local `local.properties` de este ZIP, así que no necesitás copiarla manualmente. Ese archivo está incluido en `.gitignore` para evitar que se suba accidentalmente al repositorio. Si Android Studio no detecta tu Android SDK, dejá que configure `sdk.dir` o agregá esa ruta sin borrar `TMDB_API_KEY`.
 
 Para compilar, abrí el proyecto en Android Studio y generá el APK desde **Build → Build APK(s)**. En GitHub Actions, agregá la clave como secreto del repositorio llamado `TMDB_API_KEY` en **Settings → Secrets and variables → Actions**; el workflow ya la lee desde ahí.
