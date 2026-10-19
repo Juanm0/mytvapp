@@ -50,38 +50,32 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxRows = 1,
         ),
         M3uSource(
-            name = "VOD General",
-            url = "https://raw.githubusercontent.com/jromero88/iptv/master/VOD.m3u",
-            icon = "🎬",
-            homeRows = 0,
-            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
-            maxPerRow = 60,
-            maxRows = 80,
-        ),
-        M3uSource(
-            name = "Agrupado por contenido",
-            url = "https://raw.githubusercontent.com/jromero88/iptv/master/index.content.m3u",
-            icon = "🗂️",
-            homeRows = 0,
-            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
-            maxPerRow = 60,
-            maxRows = 80,
-        ),
-        M3uSource(
-            name = "Películas",
-            url = "https://raw.githubusercontent.com/jromero88/iptv/master/categories/movies.m3u",
+            name = "Películas gratis",
+            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/movies.m3u",
             icon = "🍿",
-            homeRows = 0,
+            homeRows = 2,
             contentHint = com.quilmes.xuper.data.ContentKind.MOVIE,
+            enrichMetadata = false,
             maxPerRow = 60,
-            maxRows = 40,
+            maxRows = 4,
         ),
         M3uSource(
-            name = "Mickflix VOD",
+            name = "Series gratis",
+            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/series.m3u",
+            icon = "📺",
+            homeRows = 1,
+            contentHint = com.quilmes.xuper.data.ContentKind.SERIES,
+            enrichMetadata = false,
+            maxPerRow = 60,
+            maxRows = 4,
+        ),
+        M3uSource(
+            name = "Mickflix canales",
             url = "https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u",
             icon = "🎞️",
             homeRows = 0,
-            contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
+            // Mickflix contiene canales lineales; no clasificarlos como películas/VOD.
+            contentHint = null,
             enrichMetadata = false,
             maxPerRow = 80,
             maxRows = 120,
@@ -98,7 +92,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
-        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_vod_general.tsv", "catalog_3_agrupado_por_contenido.tsv", "catalog_4_peliculas.tsv", "catalog_4_pel_culas.tsv", "catalog_5_mickflix_vod.tsv")
+        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_pel_culas_gratis.tsv", "catalog_3_series_gratis.tsv", "catalog_4_mickflix_canales.tsv")
         filesDir.listFiles()?.forEach { file ->
             val oldCatalogCache = file.name.startsWith("catalog_") && file.name.endsWith(".tsv") && file.name !in activeCaches
             val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u")
@@ -169,6 +163,7 @@ class MainActivity : ComponentActivity() {
                             PlayerScreen(
                                 name = title.name,
                                 streamUrl = title.streamUrl,
+                                streamHeaders = title.requestHeaders,
                                 channelQueue = (repository as? M3uRepository)?.getChannelQueue(id).orEmpty(),
                                 currentTitleId = id,
                                 nextEpisode = (repository as? M3uRepository)?.getNextEpisode(id),

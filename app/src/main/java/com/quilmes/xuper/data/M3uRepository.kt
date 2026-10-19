@@ -112,8 +112,11 @@ class M3uRepository(
         synchronized(lock) {
             // Si una película de TMDB también tiene un enlace real en las listas M3U,
             // conserva la ficha de TMDB pero conecta su URL reproducible.
-            catalogCategories = categories.map { category ->
-                category.copy(items = category.items.map(::resolveCatalogTitle))
+            catalogCategories = categories.mapNotNull { category ->
+                // El catálogo visual no muestra fichas imposibles de reproducir: solo títulos
+                // para los que encontramos una URL real en alguna de las listas cargadas.
+                val playable = category.items.map(::resolveCatalogTitle).filter { it.streamUrl.isNotBlank() }
+                category.copy(items = playable).takeIf { playable.isNotEmpty() }
             }
             rebuildPublishedState()
         }
@@ -123,47 +126,88 @@ class M3uRepository(
     fun registerCatalogTitles(titles: List<Title>) {
         if (titles.isEmpty()) return
         synchronized(lock) {
-            searchCatalogTitles = (titles.map(::resolveCatalogTitle) + searchCatalogTitles).distinctBy { it.id }.take(120)
+            searchCatalogTitles = (titles.map(::resolveCatalogTitle).filter { it.streamUrl.isNotBlank() } + searchCatalogTitles).distinctBy { it.id }.take(120)
             rebuildPublishedState()
         }
     }
 
     private fun resolveCatalogTitle(title: Title): Title {
-        if (title.contentKind != ContentKind.MOVIE || title.streamUrl.isNotBlank()) return title
-        val match = findPlayableMovie(title.name) ?: return title
-        return title.copy(streamUrl = match.streamUrl, isLive = false)
+        if (title.streamUrl.isNotBlank()) return title
+        if (title.contentKind == ContentKind.MOVIE) {
+            val match = findPlayableMovie(title.name) ?: return title
+            return title.copy(streamUrl = match.streamUrl, isLive = false)
+        }
+        if (title.contentKind == ContentKind.SERIES) {
+            val firstEpisode = findFirstPlayableEpisode(title.name) ?: return title
+            // El botón principal de la ficha de una serie empieza por su primer episodio disponible.
+            return title.copy(streamUrl = firstEpisode.streamUrl, isLive = false)
+        }
+        return title
     }
 
-    /** Busca una película con nombre equivalente en las fuentes M3U, sin confundirla con un episodio. */
-    private fun findPlayableMovie(name: String): Title? {
+    /** Búsqueda pública de película por nombre en todas las listas VOD activas. */
+    fun findPlayableMovie(name: String): Title? {
         val target = normalizeContentTitle(name)
         if (target.isBlank()) return null
         return entriesBySource.values.asSequence().flatten().map { it.title }
             .filter { !it.isLive && it.streamUrl.isNotBlank() && it.contentKind in setOf(ContentKind.MOVIE, ContentKind.OTHER_VOD) }
-            .filter { normalizeContentTitle(it.name) == target }
-            .sortedBy { if (it.contentKind == ContentKind.MOVIE) 0 else 1 }
-            .firstOrNull()
+            .map { it to titleMatchScore(target, normalizeContentTitle(it.name)) }
+            .filter { it.second >= 0.80 }
+            .sortedWith(compareByDescending<Pair<Title, Double>> { it.second }.thenBy { if (it.first.contentKind == ContentKind.MOVIE) 0 else 1 })
+            .firstOrNull()?.first
+    }
+
+    /** Primer episodio disponible para arrancar una serie desde su ficha. */
+    fun findFirstPlayableEpisode(seriesName: String): Title? {
+        val target = normalizeContentTitle(seriesName)
+        if (target.isBlank()) return null
+        return entriesBySource.values.asSequence().flatten().map { it.title }
+            .filter { !it.isLive && it.streamUrl.isNotBlank() }
+            .mapNotNull { title -> episodeKey(title.name)?.let { key -> title to key } }
+            .map { (title, key) -> Triple(title, key, titleMatchScore(target, key.first)) }
+            .filter { it.third >= 0.80 }
+            .sortedWith(compareBy<Triple<Title, Triple<String, Int, Int>, Double>>({ it.second.second }, { it.second.third }, { -it.third }))
+            .firstOrNull()?.first
+    }
+
+    private fun titleMatchScore(a: String, b: String): Double {
+        if (a.isBlank() || b.isBlank()) return 0.0
+        if (a == b) return 1.0
+        if (minOf(a.length, b.length) >= 8 && (a.contains(b) || b.contains(a)) && kotlin.math.abs(a.length - b.length) <= 14) return 0.86
+        val left = a.split(' ').filter { it.length > 1 }.toSet()
+        val right = b.split(' ').filter { it.length > 1 }.toSet()
+        if (left.isEmpty() || right.isEmpty()) return 0.0
+        val overlap = left.intersect(right).size.toDouble()
+        val union = left.union(right).size.toDouble()
+        val jaccard = overlap / union
+        val containment = overlap / minOf(left.size, right.size).toDouble()
+        return maxOf(jaccard, if (containment >= 0.8 && overlap >= 2) 0.82 else 0.0)
     }
 
     /** Alternativas reales de reproducción para el mismo título, ordenadas por fuente. */
     fun getPlayableAlternatives(titleId: String): List<Title> {
         val current = byId[titleId] ?: return emptyList()
         if (current.streamUrl.isBlank()) return emptyList()
-        val currentEpisode = episodeKey(current.name)
+        val currentEpisode = episodeKey(current.name) ?: if (current.contentKind == ContentKind.SERIES) {
+            entriesBySource.values.asSequence().flatten().map { it.title }
+                .mapNotNull { candidate -> episodeKey(candidate.name)?.let { key -> candidate to key } }
+                .firstOrNull { (_, key) -> titleMatchScore(normalizeContentTitle(current.name), key.first) >= 0.80 }
+                ?.second
+        } else null
         val targetName = normalizeContentTitle(current.name)
         val matches = entriesBySource.entries.sortedBy { it.key }.flatMap { (_, entries) ->
             entries.map { it.title }.filter { candidate ->
                 if (candidate.streamUrl.isBlank()) return@filter false
                 if (current.isLive) {
-                    candidate.isLive && normalizeContentTitle(candidate.name) == targetName
+                    candidate.isLive && titleMatchScore(targetName, normalizeContentTitle(candidate.name)) >= 0.80
                 } else if (currentEpisode != null) {
                     if (candidate.isLive) return@filter false
                     val candidateEpisode = episodeKey(candidate.name)
-                    candidateEpisode != null && candidateEpisode.first == currentEpisode.first &&
+                    candidateEpisode != null && titleMatchScore(currentEpisode.first, candidateEpisode.first) >= 0.80 &&
                         candidateEpisode.second == currentEpisode.second && candidateEpisode.third == currentEpisode.third
                 } else {
                     !candidate.isLive && candidate.contentKind in setOf(ContentKind.MOVIE, ContentKind.OTHER_VOD) &&
-                        normalizeContentTitle(candidate.name) == targetName
+                        titleMatchScore(targetName, normalizeContentTitle(candidate.name)) >= 0.80
                 }
             }
         }.distinctBy { it.streamUrl }
@@ -177,7 +221,7 @@ class M3uRepository(
         return entriesBySource.values.asSequence().flatten().map { it.title }
             .filter { !it.isLive && it.streamUrl.isNotBlank() && it.contentKind in setOf(ContentKind.SERIES, ContentKind.OTHER_VOD) }
             .mapNotNull { title -> episodeKey(title.name)?.let { key -> title to key } }
-            .firstOrNull { (_, key) -> key.first == expected && key.second == seasonNumber && key.third == episodeNumber }
+            .firstOrNull { (_, key) -> titleMatchScore(expected, key.first) >= 0.80 && key.second == seasonNumber && key.third == episodeNumber }
             ?.first
     }
 
@@ -405,18 +449,35 @@ class M3uRepository(
         val result = ArrayList<Entry>()
         var attrs: Map<String, String>? = null
         var name = ""
+        var pendingHeaders = linkedMapOf<String, String>()
         var counter = 0
         for (raw in text.lineSequence()) {
             val line = raw.trim()
-            if (line.startsWith("#EXTINF")) {
+            if (line.startsWith("#EXTINF", ignoreCase = true)) {
                 val (a, n) = parseExtInf(line)
                 attrs = a
                 name = n
-            } else if (line.isEmpty() || line.startsWith("#")) {
+                pendingHeaders = linkedMapOf()
+            } else if (line.startsWith("#EXTVLCOPT:", ignoreCase = true)) {
+                // Keep the common HTTP options used by M3U streams. Other VLC-only
+                // options (subtitle delay, subtitle file, etc.) are intentionally ignored.
+                val option = line.substringAfter(':')
+                val key = option.substringBefore('=', "").trim().lowercase()
+                val value = option.substringAfter('=', "").trim()
+                if (value.isNotBlank()) when (key) {
+                    "http-referrer", "http-referer" -> pendingHeaders["Referer"] = value
+                    "http-user-agent" -> pendingHeaders["User-Agent"] = value
+                    "http-origin" -> pendingHeaders["Origin"] = value
+                }
+            } else if (line.isEmpty() || line == "#EXTM3U" || line.startsWith("#EXTGRP")) {
                 continue
             } else {
+                // Some lists incorrectly prefix a valid URL with an extra '#': ##https://...
+                // Treat that common malformed form as a URL rather than silently dropping it.
+                val streamLine = if (line.startsWith("##http://", true) || line.startsWith("##https://", true)) line.drop(1) else line
+                if (streamLine.startsWith("#")) continue
                 val a = attrs
-                if (a != null && name.isNotBlank() && isPlayable(line)) {
+                if (a != null && name.isNotBlank() && isPlayable(streamLine)) {
                     val rawGroup = a["group-title"]?.split(";")?.firstOrNull()?.trim()
                     val group = rawGroup.takeUnless {
                         it.isNullOrBlank() || it.equals("N/A", ignoreCase = true) ||
@@ -425,11 +486,14 @@ class M3uRepository(
                     result.add(
                         Entry(
                             group,
-                            makeTitle("$idPrefix-${counter++}", name, a["tvg-logo"].orEmpty(), line, group, contentHint),
+                            makeTitle("$idPrefix-${counter++}", name, a["tvg-logo"].orEmpty(), streamLine, group, contentHint)
+                                .copy(requestHeaders = pendingHeaders.toMap()),
                         )
                     )
                 }
                 attrs = null
+                name = ""
+                pendingHeaders = linkedMapOf()
             }
         }
         return result
@@ -496,7 +560,16 @@ class M3uRepository(
             return ContentKind.SERIES
         }
 
-        val movieGroup = g in setOf("peliculas", "pelicula", "movies", "movie", "films", "film", "largometrajes", "peliculas completas", "movies vod")
+        // Besides generic names, many M3U VOD lists use editorial groups like
+        // "TERBARU", "HITS", "BEST OF", "MARVEL" or "Box office". Their URLs
+        // often hide behind short redirect paths without a .mp4 extension, so relying
+        // only on the URL made these movies incorrectly appear as live TV channels.
+        val movieGroup = g in setOf(
+            "peliculas", "pelicula", "movies", "movie", "films", "film", "largometrajes",
+            "peliculas completas", "movies vod", "terbaru", "hits", "best of", "marvel",
+            "netflix", "box office", "pantasi", "fantasi", "twilight saga", "transformers",
+            "komik", "perang jadul", "china dll", "vidio.com"
+        )
         if (movieGroup) return ContentKind.MOVIE
 
         val moviePath = Regex("(^|/)(movie|movies|peliculas|films)(/|$)").containsMatchIn(path)
@@ -545,8 +618,11 @@ class M3uRepository(
             val tmp = File(cacheDir, "catalog_$i.tmp")
             tmp.bufferedWriter().use { w ->
                 for (e in entries) {
+                    val encodedHeaders = e.title.requestHeaders.entries.joinToString("&") { (k, v) ->
+                        java.net.URLEncoder.encode(k, "UTF-8") + "=" + java.net.URLEncoder.encode(v, "UTF-8")
+                    }
                     val cols = listOf(e.group, e.title.id, e.title.name, e.title.posterUrl, e.title.streamUrl,
-                        e.title.backdropUrl, e.title.description, e.title.year.orEmpty(), e.title.rating.orEmpty(), e.title.contentKind.name)
+                        e.title.backdropUrl, e.title.description, e.title.year.orEmpty(), e.title.rating.orEmpty(), e.title.contentKind.name, encodedHeaders)
                     w.write(cols.joinToString("\t") { it.replace('\t', ' ').replace('\n', ' ') })
                     w.write("\n")
                 }
@@ -568,6 +644,12 @@ class M3uRepository(
                         year = p[7].ifBlank { null }, rating = p[8].ifBlank { null },
                         contentKind = runCatching { ContentKind.valueOf(p[9]) }.getOrDefault(base.contentKind),
                         isLive = runCatching { ContentKind.valueOf(p[9]) }.getOrDefault(base.contentKind) == ContentKind.LIVE,
+                        requestHeaders = p.getOrNull(10).orEmpty().split('&').mapNotNull { pair ->
+                            if (pair.isBlank() || !pair.contains('=')) null else runCatching {
+                                java.net.URLDecoder.decode(pair.substringBefore('='), "UTF-8") to
+                                    java.net.URLDecoder.decode(pair.substringAfter('='), "UTF-8")
+                            }.getOrNull()
+                        }.toMap(),
                     ) else base)
                 }
             }.toList()

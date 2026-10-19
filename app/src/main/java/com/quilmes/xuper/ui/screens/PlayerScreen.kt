@@ -1,6 +1,5 @@
 package com.quilmes.xuper.ui.screens
 
-import android.view.KeyEvent
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,10 +23,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusable
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.MimeTypes
@@ -49,6 +57,7 @@ import kotlinx.coroutines.delay
 fun PlayerScreen(
     name: String,
     streamUrl: String,
+    streamHeaders: Map<String, String> = emptyMap(),
     channelQueue: List<Title> = emptyList(),
     currentTitleId: String = "",
     nextEpisode: Title? = null,
@@ -62,17 +71,21 @@ fun PlayerScreen(
     var showControls by remember(streamUrl) { mutableStateOf(true) }
     var showNextEpisode by remember { mutableStateOf(false) }
     var sourceIndex by remember(streamUrl, alternatePlayers) {
-        mutableStateOf(alternatePlayers.indexOfFirst { it.streamUrl == streamUrl }.coerceAtLeast(0))
+        mutableStateOf(alternatePlayers.indexOfFirst { it.streamUrl == streamUrl })
     }
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
     var failedSources by remember(streamUrl) { mutableStateOf(0) }
+    var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
+    val playFocusRequester = remember { FocusRequester() }
 
-    val exoPlayer = remember {
-        val dataSourceFactory = DefaultHttpDataSource.Factory()
+    val dataSourceFactory = remember {
+        DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
+    }
+    val exoPlayer = remember {
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setSeekBackIncrementMs(10_000)
@@ -80,7 +93,8 @@ fun PlayerScreen(
             .build()
     }
 
-    fun setUrl(url: String) {
+    fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
+        dataSourceFactory.setDefaultRequestProperties(headers)
         val cleanUrl = url.substringBefore('?').lowercase()
         val item = MediaItem.Builder().setUri(url).apply {
             when {
@@ -88,6 +102,7 @@ fun PlayerScreen(
                 cleanUrl.endsWith(".mpd") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
         }.build()
+        attemptedUrls = attemptedUrls + url
         exoPlayer.setMediaItem(item)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -95,7 +110,11 @@ fun PlayerScreen(
         isPlaying = true
     }
 
-    LaunchedEffect(exoPlayer, streamUrl) { setUrl(streamUrl) }
+    LaunchedEffect(exoPlayer, streamUrl) {
+        setUrl(streamUrl, streamHeaders)
+        delay(250)
+        runCatching { playFocusRequester.requestFocus() }
+    }
     LaunchedEffect(exoPlayer, showControls) {
         if (showControls) {
             delay(6000)
@@ -120,14 +139,17 @@ fun PlayerScreen(
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
                 val nextIndex = (1..alternatePlayers.size).asSequence()
                     .map { (sourceIndex + it) % alternatePlayers.size.coerceAtLeast(1) }
-                    .firstOrNull { alternatePlayers.getOrNull(it)?.streamUrl?.isNotBlank() == true && alternatePlayers[it].streamUrl != currentUrl }
+                    .firstOrNull { index ->
+                        val candidateUrl = alternatePlayers.getOrNull(index)?.streamUrl.orEmpty()
+                        candidateUrl.isNotBlank() && candidateUrl != currentUrl && candidateUrl !in attemptedUrls
+                    }
                 if (nextIndex != null) {
                     sourceIndex = nextIndex
                     failedSources++
-                    setUrl(alternatePlayers[nextIndex].streamUrl)
+                    setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
                     showControls = true
                 } else {
-                    error = "No se pudo reproducir esta fuente (${e.errorCodeName}). Probá cambiar de reproductor."
+                    error = "No se encontró otro enlace coincidente que no se haya probado. Puede que esta película o episodio no esté disponible en las listas cargadas."
                     showControls = true
                 }
             }
@@ -150,8 +172,10 @@ fun PlayerScreen(
             .firstOrNull { alternatePlayers[it].streamUrl.isNotBlank() && alternatePlayers[it].streamUrl != currentUrl }
         if (nextIndex != null) {
             sourceIndex = nextIndex
-            onChangePlayer(alternatePlayers[nextIndex].id)
-            setUrl(alternatePlayers[nextIndex].streamUrl)
+            // Switch locally: don't navigate away from the player, otherwise focus/controls
+            // are recreated and the user loses the playback overlay.
+            setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
+            error = null
             showControls = true
         } else {
             error = "No se encontraron más enlaces distintos para este contenido."
@@ -159,49 +183,35 @@ fun PlayerScreen(
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black).focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.DirectionCenter, Key.Enter -> {
+                        if (!showControls) { showControls = true; true } else false
+                    }
+                    Key.DirectionUp, Key.DirectionDown -> {
+                        if (!showControls) { showControls = true; true } else false
+                    }
+                    Key.DirectionLeft -> if (!showControls) { exoPlayer.seekBack(); showControls = true; true } else false
+                    Key.DirectionRight -> if (!showControls) { exoPlayer.seekForward(); showControls = true; true } else false
+                    else -> false
+                }
+            }
+    ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
-                object : PlayerView(context) {
-                    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            when (event.keyCode) {
-                                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                    showControls = !showControls
-                                    return true
-                                }
-                                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                                    showControls = true
-                                }
-                                KeyEvent.KEYCODE_CHANNEL_UP -> {
-                                    val index = channelQueue.indexOfFirst { it.id == currentTitleId }
-                                    if (index >= 0 && channelQueue.isNotEmpty()) {
-                                        onChangeChannel(channelQueue[(index + 1) % channelQueue.size].id); return true
-                                    }
-                                }
-                                KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                                    val index = channelQueue.indexOfFirst { it.id == currentTitleId }
-                                    if (index >= 0 && channelQueue.isNotEmpty()) {
-                                        onChangeChannel(channelQueue[(index - 1 + channelQueue.size) % channelQueue.size].id); return true
-                                    }
-                                }
-                                KeyEvent.KEYCODE_DPAD_LEFT -> { exoPlayer.seekBack(); showControls = true; return true }
-                                KeyEvent.KEYCODE_DPAD_RIGHT -> { exoPlayer.seekForward(); showControls = true; return true }
-                            }
-                        }
-                        return super.dispatchKeyEvent(event)
-                    }
-                }.apply {
+                PlayerView(context).apply {
                     player = exoPlayer
                     useController = false
                     keepScreenOn = true
-                    isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                    setOnClickListener { showControls = !showControls }
+                    setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    post { requestFocus() }
                 }
             },
             update = { it.player = exoPlayer },
@@ -223,21 +233,29 @@ fun PlayerScreen(
                         Text("−${formatTime((duration - position).coerceAtLeast(0))}", color = Color.White, fontSize = 13.sp)
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play(); showControls = true }) {
+                // Two visible rows keep every action inside the TV safe area and reachable
+                // with a remote; a single six-button row pushed CC/source buttons off-screen.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(modifier = Modifier.focusRequester(playFocusRequester), onClick = { if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play(); showControls = true }) {
                         Text(if (isPlaying) "Ⅱ  Pausar" else "▶  Reproducir")
                     }
                     Button(onClick = { exoPlayer.seekBack(); showControls = true }) { Text("↶ 10 s") }
                     Button(onClick = { exoPlayer.seekForward(); showControls = true }) { Text("10 s ↷") }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(onClick = { changeSource() }) { Text("⟳  Cambiar reproductor") }
                     Button(onClick = {
-                        TrackSelectionDialogBuilder(context, "Audio y subtítulos", exoPlayer, 0).build().show()
                         showControls = true
-                    }) { Text("♫  Audio / subtítulos") }
+                        TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
+                    }) { Text("♫  Audio") }
+                    Button(onClick = {
+                        showControls = true
+                        TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
+                    }) { Text("CC  Subtítulos") }
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
-                    Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl) }) { Text("Reintentar") }
+                    Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
                 }
             }
         }

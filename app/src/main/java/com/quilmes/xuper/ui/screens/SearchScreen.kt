@@ -60,10 +60,11 @@ fun SearchScreen(
         if (query.isBlank()) {
             results = emptyList()
         } else {
-            val local = withContext(Dispatchers.Default) { repository.search(query) }
             val tmdb = catalogService.search(query)
             (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
-            results = (local + tmdb).distinctBy { it.id }.take(120)
+            // Releer el índice después de registrar TMDB: el repositorio descarta fichas
+            // que no tengan ningún enlace reproducible en las listas activas.
+            results = withContext(Dispatchers.Default) { repository.search(query) }.distinctBy { it.id }.take(120)
         }
     }
 

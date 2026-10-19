@@ -18,6 +18,8 @@ data class Title(
     val year: String? = null,
     val rating: String? = null,
     val contentKind: ContentKind = if (isLive) ContentKind.LIVE else ContentKind.OTHER_VOD,
+    /** HTTP headers required by some M3U streams (e.g. Referer). */
+    val requestHeaders: Map<String, String> = emptyMap(),
 )
 
 /** Una fila horizontal (ej: "Noticias", "Deportes"). */
