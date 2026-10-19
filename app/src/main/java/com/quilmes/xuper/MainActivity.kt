@@ -20,6 +20,7 @@ import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
@@ -305,7 +306,18 @@ class MainActivity : ComponentActivity() {
                         if (title != null) DetailScreen(
                             title = title,
                             catalogService = tmdbCatalogService,
-                            onPlay = { playableId -> navController.navigate("player/$playableId") },
+                            onPlay = { playableId ->
+                                val frameXUrl = WebSourceRegistry.frameXEmbedUrl(title.id)
+                                if (frameXUrl != null) {
+                                    val encodedUrl = Base64.encodeToString(
+                                        frameXUrl.toByteArray(StandardCharsets.UTF_8),
+                                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                    )
+                                    navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
+                                } else {
+                                    navController.navigate("player/$playableId")
+                                }
+                            },
                             onOpenTitle = { relatedTitle ->
                                 pendingDetailTitle.value = relatedTitle
                                 navController.navigate("detail/${relatedTitle.id}")

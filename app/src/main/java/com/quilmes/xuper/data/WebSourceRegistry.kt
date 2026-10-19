@@ -15,6 +15,12 @@ object WebSourceRegistry {
 
     const val FRAME_XTV_EXAMPLE = "https://framextv.xyz/watch/1396/3/11"
     const val FRAME_XTV_HOME = "https://framextv.xyz/"
+
+    /** Build the FrameXTV embed URL from the numeric TMDB movie/TV ID. */
+    fun frameXEmbedUrl(tmdbCatalogId: String): String? {
+        val match = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(tmdbCatalogId) ?: return null
+        return "https://framextv.xyz/embed/${match.groupValues[1]}?autoplay=1&muted=0"
+    }
     // Servidor predeterminado para episodios: se genera con TMDB ID/temporada/episodio.
     const val DEFAULT_SERIES_PROVIDER = "FrameXTV.xyz"
     const val STREAMIMDB_MOVIE_TEMPLATE = "https://streamimdb.ru/embed/movie/"
@@ -80,7 +86,7 @@ object WebSourceRegistry {
             } else if (!isSeries) {
                 // FrameXTV se prueba también para películas en todo el catálogo. La ruta por ID
                 // de película es una candidata, no una garantía de que el proveedor la implemente.
-                if (movieId != null) add("https://framextv.xyz/watch/$movieId")
+                if (movieId != null) add("https://framextv.xyz/embed/$movieId?autoplay=1&muted=0")
                 // The provider's documented template requires an IMDb tt ID; don't fabricate one.
                 if (!imdbId.isNullOrBlank() && imdbId.matches(Regex("tt\\d{5,12}"))) {
                     add("$STREAMIMDB_MOVIE_TEMPLATE$imdbId/")

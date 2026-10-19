@@ -149,7 +149,9 @@ fun DetailScreen(
                         )
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (title.streamUrl.isNotBlank()) {
+                            // TMDB catalog items use FrameXTV as the default player, even if
+                            // no IPTV stream is associated with the catalog entry yet.
+                            if (WebSourceRegistry.frameXEmbedUrl(title.id) != null || title.streamUrl.isNotBlank()) {
                                 Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
                             } else {
                                 Button(onClick = {
