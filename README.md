@@ -10,7 +10,7 @@ Aplicación personal de streaming para Android TV, escrita en Kotlin + Jetpack C
 - **Mi lista / Continuar viendo / Perfil:** utilidades locales de la aplicación.
 - **Ficha de una serie:** selector de temporadas, lista de episodios con título, sinopsis, duración e imagen cuando está disponible. El usuario elige el episodio concreto antes de abrir sus fuentes.
 - **Fuentes web alternativas globales:** películas generan el embed de StreamIMDB usando el IMDb ID real consultado en TMDB (`/embed/movie/{imdb_id}/`), más búsqueda en Movies2Watch y búsqueda/catálogo de RePelisHD. Movies2Watch usa rutas internas con slug e identificador propio; Xuper genera una URL candidata de búsqueda (`/?s=...`) a partir del título y no inventa IDs internos. Esa ruta de búsqueda debe verificarse contra el sitio activo. Episodios generan las dos variantes de FrameXTV (`/watch/{TMDB_ID}/{temporada}/{episodio}` y el orden inverso) y búsqueda de Movies2Watch y búsqueda/catálogo de RePelisHD. Se muestran botones Reproducir, sin exigir pegar URLs con el mando. Las rutas de FrameXTV y RePelisHD son candidatas y no garantizan que el proveedor encuentre o reproduzca ese título.
-- **IPTV:** las URL M3U8/MP4 y otros medios directos se reproducen con Media3/ExoPlayer. Las páginas web se abren dentro de WebView, con protección publicitaria compartida.
+- **IPTV:** las URL M3U8/MP4 y otros medios directos se reproducen con Media3/ExoPlayer. Las páginas web se abren dentro de WebView, con filtro publicitario local compartido.
 
 ## Fuentes web y límites
 
@@ -66,3 +66,8 @@ El ZIP de trabajo contiene configuración local y una clave de firma personal. N
 - El motor Brave se integra en WebView; no abrir un navegador externo ni incorporar las funciones generales de Brave.
 - Los controles del reproductor deben mantener el comportamiento del mando descrito en el código existente.
 - Si un sitio muestra anuncios, registrar el dominio/patrón concreto antes de añadir una regla; bloquear agresivamente un dominio completo puede romper el vídeo.
+
+
+## Nota sobre el filtro publicitario
+
+Para que el proyecto compile con Android SDK 36 y repositorios Maven estándar, se retiró la dependencia `io.github.mlm-games:adblock`: la versión 0.1.2 no está publicada en los repositorios configurados y la 0.1.3 exige compileSdk 37. Xuper conserva el filtro local de dominios y URL en WebView; ya no incluye el motor nativo Brave/adblock-rust ni sus listas cosméticas.
