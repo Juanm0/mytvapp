@@ -8,7 +8,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
@@ -42,6 +46,8 @@ data class M3uSource(
     val mergeIntoArgentina: Boolean = false,
     /** Avoid expensive metadata lookups for huge, mixed legacy playlists. */
     val enrichMetadata: Boolean = true,
+    /** User-supplied IPTV accounts used as ordered per-content fallback sources. */
+    val isUserIptvAccount: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------------------------
@@ -66,6 +72,7 @@ private val SERIES_PATH_RE = Regex("(^|/)(series|serie|shows|tvshows)(/|$)")
 private val EPISODE_NAME_RE = Regex("\\b(s\\d{1,2}\\s*e\\d{1,3}|\\d{1,2}x\\d{1,3}|season\\s*\\d+|temporada\\s*\\d+|episode\\s*\\d+|episodio\\s*\\d+|ep\\s*\\d+)\\b")
 private val MOVIE_PATH_RE = Regex("(^|/)(movie|movies|peliculas|films)(/|$)")
 private val CACHE_NAME_RE = Regex("[^a-z0-9]+")
+private val SOURCE_INDEX_RE = Regex("^s(\\d+)-")
 
 private fun normalizeText(s: String): String =
     Normalizer.normalize(s, Normalizer.Form.NFD).replace(MARKS_RE, "").lowercase().trim()
@@ -178,18 +185,28 @@ class M3uRepository(
                         }
                     }
                 }
+                // No abrir decenas de conexiones simultáneas: límite pequeño para evitar saturar
+                // el dispositivo o proveedores lentos. Un fallo aislado no cancela las demás listas.
+                val networkSlots = Semaphore(3)
                 coroutineScope {
                     sources.mapIndexed { i, source ->
-                        async {
-                            runCatching {
-                                val parsed = parse(download(source.url), "s$i", source.contentHint)
-                                if (parsed.isNotEmpty()) {
-                                    val enriched = if (tmdbMetadata.enabled && source.enrichMetadata) {
-                                        tmdbMetadata.enrich(parsed.map { EntryForMetadata(it.group, it.title) })
-                                            .map { entryOf(it.group, it.title) }
-                                    } else parsed
-                                    writeCache(i, enriched)
-                                    publish(i, enriched)
+                        async(Dispatchers.IO) {
+                            networkSlots.withPermit {
+                                runCatching {
+                                    val parsed = parse(downloadWithRetry(source.url), "s$i", source.contentHint)
+                                    if (parsed.isNotEmpty()) {
+                                        val enriched = if (tmdbMetadata.enabled && source.enrichMetadata) {
+                                            tmdbMetadata.enrich(parsed.map { EntryForMetadata(it.group, it.title) })
+                                                .map { entryOf(it.group, it.title) }
+                                        } else parsed
+                                        writeCache(i, enriched)
+                                        publish(i, enriched)
+                                    } else {
+                                        android.util.Log.w("XuperM3U", "Lista sin entradas válidas: ${source.name}")
+                                    }
+                                }.onFailure { error ->
+                                    // El catálogo cacheado se conserva si el proveedor falla o expiró.
+                                    android.util.Log.w("XuperM3U", "No se pudo actualizar la fuente ${source.name}; se conserva el caché si existe", error)
                                 }
                             }
                         }
@@ -287,16 +304,23 @@ class M3uRepository(
         return best
     }
 
-    /** Alternativas reales de reproducción para el mismo título, ordenadas por fuente. */
-    fun getPlayableAlternatives(titleId: String): List<Title> {
-        val current = byId[titleId] ?: return emptyList()
-        if (current.streamUrl.isBlank()) return emptyList()
-        val entries = allEntries
+    /** Alternativas reales del mismo contenido. Si hay cuentas manuales, usa SOLO esas
+     * fuentes y devuelve como máximo una alternativa por lista, en el orden configurado. */
+    fun getPlayableAlternatives(titleId: String): List<Title> =
+        (byId[titleId]?.let { getPlayableAlternatives(it) }).orEmpty()
+
+    /** Variante que también acepta fichas TMDB ya vinculadas a un stream reproducible. */
+    fun getPlayableAlternatives(current: Title): List<Title> {
+        if (current.streamUrl.isBlank() && !current.id.startsWith("tmdb-")) return emptyList()
+        val all = allEntries
+        val accountIndices = sources.indices.filter { sources[it].isUserIptvAccount }.toSet()
+        val useAccountSources = accountIndices.isNotEmpty()
+        val entries = if (useAccountSources) all.filter { sourceIndexOf(it.title.id) in accountIndices } else all
         val currentKey = ContentKey(contentTitleOf(current.name))
         val currentEpisode: EpisodeInfo? = episodeOf(current.name) ?: if (current.contentKind == ContentKind.SERIES) {
             entries.firstNotNullOfOrNull { e -> e.episode?.takeIf { matchScore(currentKey, it.series) >= 0.80 } }
         } else null
-        return entries.filter { e ->
+        val matches = entries.filter { e ->
             val candidate = e.title
             if (candidate.streamUrl.isBlank()) return@filter false
             if (current.isLive) {
@@ -311,8 +335,17 @@ class M3uRepository(
                     (candidate.contentKind == ContentKind.MOVIE || candidate.contentKind == ContentKind.OTHER_VOD) &&
                     matchScore(currentKey, e.key) >= 0.80
             }
-        }.map { it.title }.distinctBy { it.streamUrl }
+        }
+        // Una alternativa por fuente: lista 1, después lista 2, después lista 3.
+        val seenSources = HashSet<Int>()
+        val ordered = matches.sortedBy { sourceIndexOf(it.title.id) }
+            .filter { seenSources.add(sourceIndexOf(it.title.id)) }
+            .map { it.title }
+        return ordered.distinctBy { it.streamUrl }
     }
+
+    private fun sourceIndexOf(titleId: String): Int =
+        SOURCE_INDEX_RE.find(titleId)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: Int.MAX_VALUE
 
     /** Vincula un episodio de TMDB con el stream M3U si coinciden serie, temporada y episodio. */
     fun findPlayableEpisode(seriesName: String, seasonNumber: Int, episodeNumber: Int): Title? {
@@ -524,15 +557,62 @@ class M3uRepository(
 
     // ------------------------------------------------------------------- red
 
+    private fun downloadWithRetry(url: String): String {
+        var lastError: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                return download(url)
+            } catch (error: Exception) {
+                lastError = error
+                if (attempt < 2) Thread.sleep(350L * (attempt + 1))
+            }
+        }
+        throw lastError ?: IllegalStateException("No se pudo descargar la lista")
+    }
+
     private fun download(url: String): String {
         val conn = URL(url).openConnection()
-        conn.connectTimeout = 15_000
-        conn.readTimeout = 30_000
+        conn.connectTimeout = 25_000
+        conn.readTimeout = 45_000
+        conn.useCaches = false
         if (conn is HttpURLConnection) {
             conn.instanceFollowRedirects = true
+            conn.requestMethod = "GET"
             conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
+            conn.setRequestProperty("Accept", "application/x-mpegURL, audio/mpegurl, text/plain, */*")
+            val status = conn.responseCode
+            if (status !in 200..299) {
+                conn.disconnect()
+                throw java.io.IOException("HTTP $status al descargar una lista")
+            }
         }
-        return conn.getInputStream().bufferedReader().use { it.readText() }
+        try {
+            val bytes = conn.getInputStream().use { it.readBytes() }
+            return decodePlaylist(bytes, conn.contentType)
+        } finally {
+            (conn as? HttpURLConnection)?.disconnect()
+        }
+    }
+
+    /** Decodifica BOM/charset del servidor y cae de UTF-8 a Windows-1252/Latin-1 si hace falta. */
+    private fun decodePlaylist(bytes: ByteArray, contentType: String?): String {
+        if (bytes.isEmpty()) return ""
+        if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
+            return String(bytes, 3, bytes.size - 3, StandardCharsets.UTF_8)
+        }
+        if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()) {
+            return String(bytes, 2, bytes.size - 2, StandardCharsets.UTF_16LE)
+        }
+        if (bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()) {
+            return String(bytes, 2, bytes.size - 2, StandardCharsets.UTF_16BE)
+        }
+        val charsetName = Regex("""(?i)charset=([^;\s]+)""").find(contentType.orEmpty())?.groupValues?.get(1)?.trim('"', '\'')
+        if (!charsetName.isNullOrBlank()) {
+            runCatching { return String(bytes, Charset.forName(charsetName)) }
+        }
+        val utf8 = String(bytes, StandardCharsets.UTF_8)
+        // ISO-8859-1 decodifica cualquier byte; se usa como fallback para playlists antiguas.
+        return if (utf8.contains('\uFFFD')) String(bytes, StandardCharsets.ISO_8859_1) else utf8
     }
 
     /** Ignora URLs que ExoPlayer no puede reproducir (YouTube, Twitch). */
@@ -677,8 +757,13 @@ class M3uRepository(
         }
         val head = if (commaIdx >= 0) line.substring(0, commaIdx) else line
         val name = if (commaIdx >= 0) line.substring(commaIdx + 1).trim() else ""
-        val attrs = ATTR.findAll(head).associate { it.groupValues[1] to it.groupValues[2] }
-        return attrs to name
+        val attrs = ATTR.findAll(head).associate { match ->
+            val value = (2..4).asSequence().map { match.groupValues[it] }.firstOrNull { it.isNotEmpty() }.orEmpty()
+            match.groupValues[1].lowercase() to value
+        }
+        // Algunas listas omiten la coma y colocan el nombre en tvg-name o tvg-id.
+        val fallbackName = attrs["tvg-name"].orEmpty().ifBlank { attrs["tvg-id"].orEmpty() }
+        return attrs to name.ifBlank { fallbackName }
     }
 
     // ----------------------------------------------------------------- caché
@@ -733,7 +818,7 @@ class M3uRepository(
     }.getOrNull()
 
     private companion object {
-        val ATTR = Regex("""([\w-]+)="([^"]*)"""")
+        val ATTR = Regex("""([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s,]+))""")
         val LAST_GROUPS = setOf("undefined", "otros")
     }
 }

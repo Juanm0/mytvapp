@@ -14,17 +14,15 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 17
 
-      # Instalar Android SDK 36, compatible con AGP 8.10.1.
-      - name: Instalar Android SDK 36 y aceptar licencias
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+      # El runner ya trae el Android SDK; solo aceptamos licencias por las dudas
+      - name: Aceptar licencias del SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.14.4
+          gradle-version: 8.7
 
       - name: Configurar local.properties (TMDB opcional)
         env:

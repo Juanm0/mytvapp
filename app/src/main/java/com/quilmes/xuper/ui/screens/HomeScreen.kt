@@ -45,10 +45,13 @@ import com.quilmes.xuper.ui.theme.XuperTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// Inicio prioriza el catálogo editorial tipo streaming (tendencias y catálogos por plataforma)
-// que llega desde TMDB. IPTV en vivo y canales argentinos viven exclusivamente en ARGENTINA.
-// Los M3U antiguos de dominio público no se mezclan en Inicio para evitar pósters viejos o
-// títulos que parezcan una oferta principal sin una fuente de reproducción válida.
+// Inicio YA NO muestra filas de TMDB (Tendencias/Populares, etc.): esas fichas no tienen
+// video real detrás casi nunca (TMDB trae metadata de estrenos actuales; nuestras listas M3U
+// son películas de dominio público viejas, así que el nombre casi nunca coincide). Mostrarlas
+// en Inicio como si fueran "contenido disponible" es lo que generaba "no puedo ver nada": el
+// usuario tocaba el póster más vistoso de la pantalla y resultaba ser un estreno sin fuente.
+// El catálogo de TMDB sigue existiendo para el buscador (ahí sí tiene sentido: el usuario ya
+// sabe que puede no tener video y lo usa para descubrir, no como oferta principal).
 private const val HOME_VOD_ITEMS = 40
 
 @Composable
@@ -59,19 +62,25 @@ fun HomeScreen(
     val sections by repository.sections.collectAsState()
     val loading by repository.loading.collectAsState()
 
-    // Inicio es el escaparate de películas y series, como una app de streaming. IPTV argentino
-    // está únicamente en la sección ARGENTINA de la barra lateral.
+    // Inicio = un poco de todo: canales de Argentina (con Gran Hermano y Deportes aparte),
+    // las primeras filas de películas/series de las listas M3U, y unas pocas filas de TMDB
+    // (tendencias y populares). El catálogo COMPLETO de TMDB (plataformas, etc.) se encuentra
+    // desde el buscador.
+    //
+    // El cálculo corre en un hilo de fondo para no bloquear la composición.
     var rows by remember { mutableStateOf<List<Category>>(emptyList()) }
     LaunchedEffect(sections) {
         val computed = withContext(Dispatchers.Default) { buildHomeRows(sections) }
         rows = computed
     }
-    // Banner editorial: abre la ficha del título destacado. Si no hay un stream directo,
-    // el botón dice "Ver detalles" en vez de prometer una reproducción que no existe.
+    // Banner destacado: SIEMPRE un título que realmente se pueda reproducir (streamUrl no
+    // vacío). Antes podía caer una ficha de TMDB sin video — era literalmente lo primero que
+    // el usuario veía y tocaba, y no andaba.
     val featured = remember(rows) {
-        rows.firstOrNull { it.id.startsWith("tmdb-") }
+        rows.firstOrNull { it.id.startsWith("home-vod-") }
             ?.items?.firstOrNull { it.backdropUrl.isNotBlank() }
-            ?: rows.firstOrNull()?.items?.firstOrNull()
+            ?: rows.firstOrNull { it.id.startsWith("home-vod-") }?.items?.firstOrNull()
+            ?: rows.firstOrNull { it.id == "home-argentina" }?.items?.firstOrNull()
     }
 
     if (rows.isEmpty()) {
@@ -165,31 +174,44 @@ private fun HeroBanner(title: Title, onPlay: () -> Unit) {
             )
             Button(onClick = onPlay) {
                 val playable = title.streamUrl.isNotBlank() || title.contentKind == ContentKind.LIVE
-                Text(if (playable) "▶  Reproducir" else "Ver detalles")
+                Text(if (playable) "▶  Reproducir" else "Ver ficha")
             }
         }
     }
 }
 
 private fun buildHomeRows(sections: List<Section>): List<Category> {
-    // Las filas TMDB contienen novedades, tendencias y catálogos de plataformas en Argentina.
-    // Son metadatos/editorial; al abrir una ficha se muestran las fuentes web guardadas para ese
-    // contenido. Nunca fingimos que una ficha TMDB por sí sola tenga un vídeo reproducible.
-    val tmdb = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
-    val preferredOrder = listOf(
-        "Tendencias · Películas", "Tendencias · Series", "Películas populares", "Series populares",
-        "Netflix · Series", "Netflix · Películas", "Prime Video · Series", "Prime Video · Películas",
-        "Disney+ · Series", "Disney+ · Películas", "Max · Series", "Max · Películas",
-        "Apple TV+ · Series", "Apple TV+ · Películas", "Paramount+ · Series", "Paramount+ · Películas",
-        "Crunchyroll · Series", "Crunchyroll · Películas", "MUBI · Películas", "MUBI · Series"
-    )
-    val byTitle = tmdb.associateBy { it.title }
-    return preferredOrder.mapNotNull { name ->
-        byTitle[name]?.takeIf { it.items.isNotEmpty() }?.let { category ->
-            category.copy(items = category.items.take(HOME_VOD_ITEMS))
+    // --- Canales argentinos (en vivo) ---
+    val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+        ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+    val gh = argentina.filter { isGranHermano(it.name) }
+    val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
+    val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
+
+    // --- Películas / series / VOD de las listas M3U: las primeras `homeRows` filas de cada fuente ---
+    val seenUrls = HashSet<String>()
+    val vodRows = sections
+        .filter { it.id != "tmdb-catalog" && it.homeRows > 0 && !it.name.startsWith("Argentina", ignoreCase = true) }
+        .flatMap { section ->
+            section.categories.take(section.homeRows).mapNotNull { category ->
+                val available = category.items
+                    .filter { !it.isLive && it.streamUrl.isNotBlank() && seenUrls.add(it.streamUrl) }
+                    .take(HOME_VOD_ITEMS)
+                if (available.isEmpty()) null
+                else Category("home-vod-${category.id}", "${section.name} · ${category.title}", available)
+            }
         }
-    }.ifEmpty {
-        tmdb.filter { it.items.isNotEmpty() }.take(12).map { it.copy(items = it.items.take(HOME_VOD_ITEMS)) }
+
+    return buildList {
+        if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
+        if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
+        if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
+        addAll(vodRows)
     }
 }
 
+private fun isGranHermano(name: String): Boolean = name.contains("gran hermano", ignoreCase = true) || name.trim().equals("GH", ignoreCase = true)
+
+private fun isArgentinaSports(name: String): Boolean = listOf(
+    "directv sports", "espn", "fox sports", "tyc sports", "tnt sports", "deportes argentina"
+).any { name.contains(it, ignoreCase = true) }

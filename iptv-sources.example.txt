@@ -1,0 +1,5 @@
+# Copiá este archivo como iptv-sources.txt en el almacenamiento privado de la app (filesDir).
+# Una fuente por línea: nombre|URL_M3U_o_Xtream_get.php|icono|tipo|filas_inicio
+# Tipos: auto, live, movie, series, vod. Las URLs deben ser de servicios que tengas permiso para usar.
+# Ejemplo genérico sin credenciales reales:
+Mi lista de prueba|https://example.org/playlist.m3u|📺|auto|0

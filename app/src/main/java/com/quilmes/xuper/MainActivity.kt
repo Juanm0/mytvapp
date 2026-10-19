@@ -1,11 +1,11 @@
 package com.quilmes.xuper
 
 import android.os.Bundle
-import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -15,27 +15,24 @@ import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
+import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
-import com.quilmes.xuper.ui.screens.XuperBraveAdblock
 import com.quilmes.xuper.ui.theme.XuperTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import android.util.Base64
-import java.nio.charset.StandardCharsets
 
 /**
  * Las listas M3U alimentan el catálogo y la búsqueda, pero no agregan opciones
  * a la barra lateral. Para otra fuente (Xtream, backend propio), implementá
  * ContentRepository y devolvela acá.
  */
-private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
-    cacheDir = cacheDir,
-    sources = listOf(
+private fun buildRepository(cacheDir: File, assets: android.content.res.AssetManager): ContentRepository {
+    val builtInSources = listOf(
         M3uSource(
             name = "Argentina",
             url = "https://iptv-org.github.io/iptv/countries/ar.m3u",
@@ -100,24 +97,85 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxPerRow = 80,
             maxRows = 120,
         ),
-    ),
-)
+    )
+    val rawAccountText = runCatching {
+        assets.open("iptv-accounts-raw.txt").bufferedReader(Charsets.UTF_8).use { it.readText() }
+    }.getOrDefault("")
+    val accountSources = IptvAccountTextParser.parse(rawAccountText).accounts.mapIndexed { index, account ->
+        M3uSource(
+            name = "IPTV ${index + 1}",
+            url = account.m3uUrl,
+            icon = "📺",
+            homeRows = 0,
+            enrichMetadata = false,
+            maxPerRow = 80,
+            maxRows = 120,
+            isUserIptvAccount = true,
+        )
+    }
+    return M3uRepository(
+        cacheDir = cacheDir,
+        // Las cuentas del TXT siempre tienen prioridad sobre las fuentes públicas/integradas.
+        sources = accountSources + loadCustomM3uSources(cacheDir) + builtInSources,
+    )
+}
+
+/**
+ * Fuentes opcionales definidas localmente en filesDir/iptv-sources.txt.
+ * Formato por línea: nombre|URL_M3U_o_Xtream_get.php|icono|tipo|filas_inicio.
+ * Esta configuración opcional se lee desde el almacenamiento privado de la app; las cuentas
+ * principales editables para compilar se definen por separado en config/iptv-accounts-raw.txt.
+ */
+private fun loadCustomM3uSources(cacheDir: File): List<M3uSource> {
+    val config = File(cacheDir, "iptv-sources.txt")
+    if (!config.isFile) return emptyList()
+    return runCatching {
+        config.readLines(Charsets.UTF_8).mapNotNull { raw ->
+            val line = raw.trim()
+            if (line.isBlank() || line.startsWith("#")) return@mapNotNull null
+            val fields = line.split('|', limit = 5).map(String::trim)
+            if (fields.size < 2) return@mapNotNull null
+            val name = fields[0].takeIf(String::isNotBlank) ?: return@mapNotNull null
+            val url = fields[1].takeIf { it.startsWith("https://", true) || it.startsWith("http://", true) }
+                ?: return@mapNotNull null
+            val kind = when (fields.getOrNull(3)?.lowercase()) {
+                "live" -> com.quilmes.xuper.data.ContentKind.LIVE
+                "movie" -> com.quilmes.xuper.data.ContentKind.MOVIE
+                "series" -> com.quilmes.xuper.data.ContentKind.SERIES
+                "vod" -> com.quilmes.xuper.data.ContentKind.OTHER_VOD
+                else -> null
+            }
+            M3uSource(
+                name = name,
+                url = url,
+                icon = fields.getOrNull(2)?.takeIf(String::isNotBlank) ?: "📺",
+                homeRows = fields.getOrNull(4)?.toIntOrNull()?.coerceIn(0, 5) ?: 0,
+                contentHint = kind,
+                enrichMetadata = false,
+                maxPerRow = 80,
+                maxRows = 120,
+            )
+        }.distinctBy { it.url }
+    }.onFailure { android.util.Log.w("XuperSources", "No se pudo leer iptv-sources.txt", it) }
+        .getOrDefault(emptyList())
+}
 
 class MainActivity : ComponentActivity() {
 
-    private val repository: ContentRepository by lazy { buildRepository(filesDir) }
+    private val pendingStremioStream = mutableStateOf<Pair<String, String>?>(null)
+
+    private val repository: ContentRepository by lazy { buildRepository(filesDir, assets) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
 
 
     /** Corre en un hilo de fondo (Dispatchers.IO). */
     private fun prepareLocalFiles() {
         // Limpia cachés/listas de catálogos antiguos que ya no se usan en esta versión.
-        val activeCaches = setOf("catalog_0_argentina.tsv", "catalog_1_argentina_agregados.tsv", "catalog_2_pel_culas_gratis.tsv", "catalog_3_series_gratis.tsv", "catalog_4_mickflix_canales.tsv", "catalog_5_vod_original.tsv")
         filesDir.listFiles()?.forEach { file ->
-            val oldCatalogCache = file.name.startsWith("catalog_") && file.name.endsWith(".tsv") && file.name !in activeCaches
+            // No borrar catalog_*.tsv desconocidos: pueden pertenecer a fuentes configuradas por el usuario.
             val oldPlaylist = file.name in setOf("iptv-extra.m3u", "mi-lista.m3u", "lista-extendida.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u")
             val oldFailureBlacklist = file.name == "unavailable_streams.txt"
-            if (oldCatalogCache || oldPlaylist || oldFailureBlacklist) file.delete()
+            if (oldPlaylist || oldFailureBlacklist) file.delete()
         }
         // Instala las listas locales (argentina adicional y VOD original) en el almacenamiento privado.
         // Las listas remotas se descargan y cachean; TMDB aporta metadatos, no los videos.
@@ -134,8 +192,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // El motor de Brave se inicializa y actualiza sus listas en segundo plano.
-        XuperBraveAdblock.initialize(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
         // Antes se copiaban archivos acá y, sobre todo, setCatalogCategories() corría en el hilo
@@ -177,27 +233,26 @@ class MainActivity : ComponentActivity() {
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { playableId -> navController.navigate("player/$playableId") },
+                            onPlayStremio = { streamName, streamUrl ->
+                                pendingStremioStream.value = streamName to streamUrl
+                                navController.navigate("stremio-player")
+                            },
                             findPlayableEpisode = { seriesName, season, episode ->
                                 (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
                             },
-                            onPlayStream = { streamName, streamUrl ->
-                                val encodedUrl = Base64.encodeToString(streamUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                                navController.navigate("external-player/${Uri.encode(streamName)}/$encodedUrl")
-                            },
                         )
                     }
-                    composable(
-                        route = "external-player/{streamName}/{streamUrl}",
-                        arguments = listOf(
-                            navArgument("streamName") { type = NavType.StringType },
-                            navArgument("streamUrl") { type = NavType.StringType },
-                        ),
-                    ) { entry ->
-                        val streamName = entry.arguments?.getString("streamName").orEmpty()
-                        val encodedUrl = entry.arguments?.getString("streamUrl").orEmpty()
-                        val streamUrl = runCatching { String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8) }.getOrDefault("")
-                        if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
-                            PlayerScreen(name = streamName, streamUrl = streamUrl)
+                    composable("stremio-player") {
+                        val selected = pendingStremioStream.value
+                        if (selected != null) {
+                            PlayerScreen(
+                                name = selected.first,
+                                streamUrl = selected.second,
+                                onExit = {
+                                    pendingStremioStream.value = null
+                                    navController.popBackStack()
+                                },
+                            )
                         }
                     }
                     composable(
@@ -216,15 +271,19 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             val m3u = repository as? M3uRepository
-                            val channelQueue = remember(id) { m3u?.getChannelQueue(id).orEmpty() }
-                            val nextEpisode = remember(id) { m3u?.getNextEpisode(id) }
-                            val alternatePlayers = remember(id) { m3u?.getPlayableAlternatives(id).orEmpty() }
+                            val alternatePlayers = remember(id) { m3u?.getPlayableAlternatives(title).orEmpty() }
+                            // Cada reproducción empieza por la primera cuenta configurada que tenga
+                            // una coincidencia; el reproductor solo prueba las demás si esta falla.
+                            val preferredPlayback = alternatePlayers.firstOrNull() ?: title
+                            val playbackId = preferredPlayback.id
+                            val channelQueue = remember(playbackId) { m3u?.getChannelQueue(playbackId).orEmpty() }
+                            val nextEpisode = remember(playbackId) { m3u?.getNextEpisode(playbackId) }
                             PlayerScreen(
                                 name = title.name,
-                                streamUrl = title.streamUrl,
-                                streamHeaders = title.requestHeaders,
+                                streamUrl = preferredPlayback.streamUrl,
+                                streamHeaders = preferredPlayback.requestHeaders,
                                 channelQueue = channelQueue,
-                                currentTitleId = id,
+                                currentTitleId = playbackId,
                                 nextEpisode = nextEpisode,
                                 alternatePlayers = alternatePlayers,
                                 onChangePlayer = { alternativeId ->
@@ -239,6 +298,7 @@ class MainActivity : ComponentActivity() {
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")
                                 },
+                                onExit = { navController.popBackStack() },
                             )
                         }
                     }
