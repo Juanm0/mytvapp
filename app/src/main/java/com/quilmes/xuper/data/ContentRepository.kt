@@ -9,7 +9,7 @@ package com.quilmes.xuper.data
  * donde se instancia el repositorio. El resto de la UI no se toca.
  */
 interface ContentRepository {
-    suspend fun getFeatured(): Title
+    suspend fun getFeatured(): Title?
     suspend fun getCategories(): List<Category>
 }
 

@@ -43,9 +43,12 @@ fun HomeScreen(
     var featured by remember { mutableStateOf<Title?>(null) }
     var categories by remember { mutableStateOf<List<Category>>(emptyList()) }
 
+    var loaded by remember { mutableStateOf(false) }
+
     LaunchedEffect(Unit) {
-        featured = repository.getFeatured()
         categories = repository.getCategories()
+        featured = repository.getFeatured()
+        loaded = true
     }
 
     Box(modifier = Modifier.fillMaxSize().background(XuperBackground)) {
@@ -60,6 +63,15 @@ fun HomeScreen(
                     modifier = Modifier.padding(top = 24.dp),
                 )
             }
+        }
+
+        if (!loaded) {
+            Text("Cargando canales…", modifier = Modifier.align(Alignment.Center))
+        } else if (categories.isEmpty()) {
+            Text(
+                "No se pudo cargar ninguna lista. Revisá la conexión a internet.",
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
 
         // Logo chico arriba a la izquierda, siempre visible
@@ -84,8 +96,11 @@ private fun HeroBanner(title: Title, onPlay: () -> Unit) {
         AsyncImage(
             model = title.backdropUrl,
             contentDescription = title.name,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
+            contentScale = if (title.isLive) ContentScale.Fit else ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().padding(
+                horizontal = if (title.isLive) 120.dp else 0.dp,
+                vertical = if (title.isLive) 24.dp else 0.dp,
+            ),
         )
         // Degradado hacia el fondo para que el texto se lea bien
         Box(

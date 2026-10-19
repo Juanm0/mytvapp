@@ -35,8 +35,9 @@ completo para generar el instalable.
   Canales en vivo, Series, Recientes).
 - Pantalla de reproducción funcional (Media3), usando un stream HLS de
   prueba público.
-- Datos 100% mock (`MockContentRepository`, en `data/`) — imágenes de
-  picsum.photos y un único stream de prueba para todo.
+- Datos reales de prueba: `M3uRepository` lee listas IPTV (M3U) de iptv-org
+  y Free-TV (se configuran en `MainActivity.kt`). Filtra links de YouTube/Twitch
+  porque ExoPlayer no los reproduce. `MockContentRepository` queda como respaldo.
 
 ## Cómo conectar tus datos reales
 Todo el contenido pasa por una sola interfaz:

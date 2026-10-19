@@ -10,7 +10,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
-import com.quilmes.xuper.data.MockContentRepository
+import com.quilmes.xuper.data.M3uRepository
+import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.ui.screens.HomeScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.theme.XuperTheme
@@ -21,7 +22,37 @@ import kotlinx.coroutines.runBlocking
  * por tu implementación de ContentRepository. El resto de la app no
  * necesita tocarse.
  */
-private fun buildRepository(): ContentRepository = MockContentRepository()
+private fun buildRepository(): ContentRepository = M3uRepository(
+    listOf(
+        M3uSource(
+            name = "Español",
+            url = "https://iptv-org.github.io/iptv/languages/spa.m3u",
+            maxGroups = 4,
+        ),
+        M3uSource(
+            name = "España",
+            url = "https://iptv-org.github.io/iptv/countries/es.m3u",
+            maxGroups = 3,
+        ),
+        M3uSource(
+            name = "Deportes",
+            url = "https://iptv-org.github.io/iptv/categories/sports.m3u",
+            maxGroups = 2,
+        ),
+        M3uSource(
+            name = "Free-TV",
+            url = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
+            maxGroups = 5,
+            priorityGroups = listOf("Argentina", "Spain", "Uruguay", "Chile"),
+        ),
+        M3uSource(
+            name = "Mundo",
+            url = "https://iptv-org.github.io/iptv/index.m3u",
+            maxGroups = 3,
+        ),
+    )
+)
+// Para volver a los datos de ejemplo: MockContentRepository()
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -51,9 +82,8 @@ class MainActivity : ComponentActivity() {
                         val streamUrl = remember(titleId) {
                             runBlocking {
                                 val all = repository.getCategories().flatMap { it.items } +
-                                    repository.getFeatured()
-                                all.firstOrNull { it.id == titleId }?.streamUrl
-                                    ?: all.first().streamUrl
+                                    listOfNotNull(repository.getFeatured())
+                                all.firstOrNull { it.id == titleId }?.streamUrl.orEmpty()
                             }
                         }
                         PlayerScreen(streamUrl = streamUrl)
