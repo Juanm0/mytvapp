@@ -1,5 +1,20 @@
 # Xuper Quilmes TV — Android TV
 
+## Fix de esta entrega: la app se congelaba al abrir
+
+**Síntoma reportado:** al abrir la app, la interfaz se ponía muy lenta o directamente se congelaba (no respondía al control remoto) durante varios segundos.
+
+**Causa encontrada:** `HomeScreen` y `LibraryScreen` calculaban las filas de contenido (`rows`) dentro de un bloque `remember(sections) { ... }`, que se ejecuta de forma síncrona en el hilo principal durante la composición. Ese cálculo recorre **todas** las listas cargadas (Argentina, películas gratis, series gratis, Mickflix, VOD original — varios miles de ítems en conjunto), con filtros, `distinctBy`, `HashSet` y ordenamientos. El problema es que `M3uRepository.refresh()` publica el `StateFlow` de `sections` **una vez por cada una de las 6 fuentes** a medida que van terminando de descargar y parsear, así que ese recorrido pesado se repetía varias veces seguidas, en el hilo principal, justo en los primeros segundos después de abrir la app — exactamente el síntoma descripto.
+
+**Arreglo aplicado:** se movió ese cálculo fuera de la composición. Ahora `rows` es un `State` que se actualiza mediante un `LaunchedEffect(sections)` que ejecuta el cálculo con `withContext(Dispatchers.Default)` (hilo de fondo para trabajo de CPU) y solo publica el resultado cuando termina. La lógica es exactamente la misma que antes (no se cambió ningún criterio de orden ni de agrupación), solo se movió de hilo. Afecta:
+- `ui/screens/HomeScreen.kt` → función nueva `buildHomeRows(sections)`.
+- `ui/screens/LibraryScreen.kt` → función nueva `buildLibraryRows(...)` (mismo problema al entrar a Argentina / Mi lista / Continuar viendo).
+
+**No verificado por compilación real:** este entorno no tiene Android SDK/Gradle instalado, así que el cambio se revisó a mano (sintaxis, imports, balance de llaves) pero no se compiló. Si GitHub Actions marca error, mandalo para corregirlo.
+
+**Si después de este cambio la app sigue lenta/inestable:** lo más probable es que el cuello de botella esté en otro lado (por ejemplo, descargas de red muy lentas de alguna de las 6 listas M3U, o la cantidad de imágenes que Coil intenta cargar a la vez en las filas). Avisá qué se siente distinto (¿lenta todo el tiempo? ¿se congela en un momento puntual? ¿al reproducir?) para poder enfocar el diagnóstico ahí.
+
+
 App nativa en Kotlin + Jetpack Compose for TV + Media3/ExoPlayer. La experiencia visual ahora está organizada como una app de streaming: portada destacada, pósteres, búsqueda, fichas de contenido, temporadas/episodios, Mi lista y Continuar viendo. Se conserva la paleta azul noche/celeste original de Xuper.
 
 ## Cambios de esta versión

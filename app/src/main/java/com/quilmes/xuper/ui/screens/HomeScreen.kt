@@ -14,9 +14,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,6 +37,7 @@ import coil.compose.AsyncImage
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.Category
 import com.quilmes.xuper.data.ContentKind
+import com.quilmes.xuper.data.Section
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.ui.components.ContentRow
 import com.quilmes.xuper.ui.components.SkeletonRows
@@ -52,39 +58,19 @@ fun HomeScreen(
 
     // Inicio combina TV real de Argentina con filas editoriales del catálogo TMDB.
     // El catálogo de TMDB aporta metadatos e imágenes, no enlaces de video.
-    val rows = remember(sections) {
-        val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
-            ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
-        val gh = argentina.filter { isGranHermano(it.name) }
-        val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
-        val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
-        val vodSourceNames = setOf("vod general", "agrupado por contenido", "peliculas")
-        val vodSources = sections.filter { normalizeCatalogLabel(it.name) in vodSourceNames }
-        val seenUrls = HashSet<String>()
-        val mergedVodRows = linkedMapOf<String, Pair<String, MutableList<Title>>>()
-        vodSources.forEach { section ->
-            section.categories.forEach { category ->
-                val available = category.items.filter { !it.isLive && it.streamUrl.isNotBlank() && seenUrls.add(it.streamUrl) }
-                if (available.isNotEmpty()) {
-                    val key = normalizeCatalogLabel(category.title)
-                    val row = mergedVodRows.getOrPut(key) { category.id to mutableListOf() }
-                    row.second.addAll(available)
-                }
-            }
-        }
-        val vodRows = mergedVodRows.map { (key, pair) ->
-            val label = vodSources.asSequence().flatMap { it.categories.asSequence() }
-                .firstOrNull { normalizeCatalogLabel(it.title) == key }?.title ?: "Películas y series"
-            Category("vod-added-${pair.first}", label, pair.second.toList())
-        }
-        val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
-        buildList {
-            if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
-            if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
-            if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
-            addAll(vodRows)
-            addAll(tmdbRows)
-        }
+    //
+    // `sections` se actualiza una vez por cada fuente M3U a medida que termina de
+    // cargar (hasta 6 veces seguidas al abrir la app). Antes este cálculo corría
+    // sincrónicamente dentro de `remember`, es decir en el hilo principal, y como
+    // recorre TODAS las listas (canales + películas + series + Mickflix + VOD)
+    // cada vez que `sections` cambia, la interfaz se congelaba varias veces
+    // seguidas justo al abrir la app. Ahora se calcula en un hilo de fondo
+    // (Dispatchers.Default) y solo se publica el resultado cuando termina, sin
+    // bloquear la composición ni la navegación mientras tanto.
+    var rows by remember { mutableStateOf<List<Category>>(emptyList()) }
+    LaunchedEffect(sections) {
+        val computed = withContext(Dispatchers.Default) { buildHomeRows(sections) }
+        rows = computed
     }
     val featured = remember(sections) {
         sections.firstOrNull { it.id == "tmdb-catalog" }?.categories
@@ -176,6 +162,41 @@ private fun HeroBanner(title: Title, onPlay: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
             )
         }
+    }
+}
+
+private fun buildHomeRows(sections: List<Section>): List<Category> {
+    val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+        ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+    val gh = argentina.filter { isGranHermano(it.name) }
+    val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
+    val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
+    val vodSourceNames = setOf("vod general", "agrupado por contenido", "peliculas")
+    val vodSources = sections.filter { normalizeCatalogLabel(it.name) in vodSourceNames }
+    val seenUrls = HashSet<String>()
+    val mergedVodRows = linkedMapOf<String, Pair<String, MutableList<Title>>>()
+    vodSources.forEach { section ->
+        section.categories.forEach { category ->
+            val available = category.items.filter { !it.isLive && it.streamUrl.isNotBlank() && seenUrls.add(it.streamUrl) }
+            if (available.isNotEmpty()) {
+                val key = normalizeCatalogLabel(category.title)
+                val row = mergedVodRows.getOrPut(key) { category.id to mutableListOf() }
+                row.second.addAll(available)
+            }
+        }
+    }
+    val vodRows = mergedVodRows.map { (key, pair) ->
+        val label = vodSources.asSequence().flatMap { it.categories.asSequence() }
+            .firstOrNull { normalizeCatalogLabel(it.title) == key }?.title ?: "Películas y series"
+        Category("vod-added-${pair.first}", label, pair.second.toList())
+    }
+    val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
+    return buildList {
+        if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
+        if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
+        if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
+        addAll(vodRows)
+        addAll(tmdbRows)
     }
 }
 

@@ -8,7 +8,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,38 +38,16 @@ internal fun LibraryScreen(sections: List<Section>, mode: LibraryMode, onPlay: (
     val favoriteIds = remember(sections, mode) { prefs.getStringSet("favorites", emptySet())?.toSet().orEmpty() }
     val recentOrder = remember(sections, mode) { prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() }.asReversed() }
     val recentIds = recentOrder.toSet()
-    val allTitles = remember(sections) { sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.id } }
-    val rows = remember(sections, mode, favoriteIds, recentIds) {
-        when (mode) {
-            LibraryMode.FAVORITES -> listOfNotNull(
-                allTitles.filter { it.id in favoriteIds }.takeIf { it.isNotEmpty() }
-                    ?.let { Category("favorites", "Mi lista", it) }
-            )
-            LibraryMode.CONTINUE -> listOfNotNull(
-                allTitles.filter { it.id in recentIds && !it.isLive }
-                    .sortedBy { recentOrder.indexOf(it.id).let { index -> if (index < 0) Int.MAX_VALUE else index } }
-                    .takeIf { it.isNotEmpty() }?.let { Category("continue", "Continuar viendo", it) }
-            )
-            LibraryMode.ARGENTINA -> {
-                val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
-                    ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
-                val ordered = argentina.distinctBy { it.streamUrl }.distinctBy { title ->
-                    val name = normalizeName(title.name)
-                    if (name.contains("gran hermano") || name == "gh") "gh:${title.streamUrl}"
-                    else argentinaBrand(title.name) ?: "url:${title.streamUrl}"
-                }.sortedWith(compareBy<Title>({ argentinaPriority(it.name) }, { normalizeName(it.name) }))
-                val gh = ordered.filter { val n = normalizeName(it.name); n.contains("gran hermano") || n == "gh" }
-                val sports = ordered.filter { isArgentinaSport(it.name) }
-                val ghUrls = gh.map { it.streamUrl }.toSet()
-                val sportUrls = sports.map { it.streamUrl }.toSet()
-                val channels = ordered.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
-                listOfNotNull(
-                    channels.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) },
-                    gh.takeIf { it.isNotEmpty() }?.let { Category("argentina-gh", "Gran Hermano", it) },
-                    sports.takeIf { it.isNotEmpty() }?.let { Category("argentina-sports", "Deportes Argentina", it) },
-                )
-            }
+    // Igual que en HomeScreen: este cálculo recorre todas las listas cargadas
+    // (puede haber miles de entradas entre Argentina + VOD) y antes corría
+    // sincrónicamente en el hilo principal cada vez que se abría esta pestaña,
+    // congelando la navegación. Ahora se calcula en segundo plano.
+    var rows by remember { mutableStateOf<List<Category>>(emptyList()) }
+    LaunchedEffect(sections, mode, favoriteIds, recentIds) {
+        val computed = withContext(Dispatchers.Default) {
+            buildLibraryRows(sections, mode, favoriteIds, recentIds, recentOrder)
         }
+        rows = computed
     }
     val heading = when (mode) {
         LibraryMode.ARGENTINA -> "ARGENTINA"
@@ -97,6 +81,46 @@ internal fun LibraryScreen(sections: List<Section>, mode: LibraryMode, onPlay: (
             items(rows, key = { it.id }) { category ->
                 ContentRow(category = category, onItemClick = onPlay, modifier = Modifier.padding(top = 12.dp))
             }
+        }
+    }
+}
+
+private fun buildLibraryRows(
+    sections: List<Section>,
+    mode: LibraryMode,
+    favoriteIds: Set<String>,
+    recentIds: Set<String>,
+    recentOrder: List<String>,
+): List<Category> {
+    val allTitles by lazy { sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.id } }
+    return when (mode) {
+        LibraryMode.FAVORITES -> listOfNotNull(
+            allTitles.filter { it.id in favoriteIds }.takeIf { it.isNotEmpty() }
+                ?.let { Category("favorites", "Mi lista", it) }
+        )
+        LibraryMode.CONTINUE -> listOfNotNull(
+            allTitles.filter { it.id in recentIds && !it.isLive }
+                .sortedBy { recentOrder.indexOf(it.id).let { index -> if (index < 0) Int.MAX_VALUE else index } }
+                .takeIf { it.isNotEmpty() }?.let { Category("continue", "Continuar viendo", it) }
+        )
+        LibraryMode.ARGENTINA -> {
+            val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+                ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+            val ordered = argentina.distinctBy { it.streamUrl }.distinctBy { title ->
+                val name = normalizeName(title.name)
+                if (name.contains("gran hermano") || name == "gh") "gh:${title.streamUrl}"
+                else argentinaBrand(title.name) ?: "url:${title.streamUrl}"
+            }.sortedWith(compareBy<Title>({ argentinaPriority(it.name) }, { normalizeName(it.name) }))
+            val gh = ordered.filter { val n = normalizeName(it.name); n.contains("gran hermano") || n == "gh" }
+            val sports = ordered.filter { isArgentinaSport(it.name) }
+            val ghUrls = gh.map { it.streamUrl }.toSet()
+            val sportUrls = sports.map { it.streamUrl }.toSet()
+            val channels = ordered.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
+            listOfNotNull(
+                channels.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) },
+                gh.takeIf { it.isNotEmpty() }?.let { Category("argentina-gh", "Gran Hermano", it) },
+                sports.takeIf { it.isNotEmpty() }?.let { Category("argentina-sports", "Deportes Argentina", it) },
+            )
         }
     }
 }
