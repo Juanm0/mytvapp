@@ -15,6 +15,7 @@ import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.ui.screens.MainScreen
+import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.theme.XuperTheme
 import kotlinx.coroutines.launch
@@ -33,19 +34,20 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             url = "https://iptv-org.github.io/iptv/countries/ar.m3u",
             icon = "🇦🇷",
             homeRows = 5,
-            priorityNames = listOf("TN", "Crónica", "El Trece", "Eltrece", "Telefe", "América"),
+            priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública", "Gran Hermano"),
             flattenIntoOneCategory = true,
             maxPerRow = 80,
             maxRows = 1,
         ),
         M3uSource(
-            name = "Películas clásicas (catálogo local)",
-            url = File(cacheDir, "peliculas-dominio-publico.m3u").toURI().toString(),
-            icon = "🎞️",
-            homeRows = 4,
-            maxPerRow = 30,
-            maxRows = 30,
-            contentHint = ContentKind.MOVIE,
+            name = "Argentina · agregados",
+            url = File(cacheDir, "argentina-extra.m3u").toURI().toString(),
+            icon = "🇦🇷",
+            homeRows = 0,
+            mergeIntoArgentina = true,
+            enrichMetadata = false,
+            maxPerRow = 100,
+            maxRows = 1,
         ),
         M3uSource(
             name = "Free-TV",
@@ -105,6 +107,25 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             maxRows = 80,
             contentHint = ContentKind.SERIES,
         ),
+        M3uSource(
+            name = "Lista extendida (experimental)",
+            url = File(cacheDir, "lista-extendida.m3u").toURI().toString(),
+            icon = "🧪",
+            homeRows = 2,
+            priorityGroups = listOf("Argentina", "Reality Show'S Live", "TVI PLAYER", "🟢 KÊNH PHIM", "Cameras Ao Vivo", "NEWS WORLD"),
+            maxPerRow = 60,
+            maxRows = 120,
+            enrichMetadata = false,
+        ),
+        M3uSource(
+            name = "Mi lista",
+            url = File(cacheDir, "mi-lista.m3u").toURI().toString(),
+            icon = "📋",
+            homeRows = 3,
+            priorityGroups = listOf("24/7", "Animation", "Cine", "Religioso", "Radio"),
+            maxPerRow = 60,
+            maxRows = 80,
+        ),
     ),
 )
 
@@ -125,6 +146,13 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista IPTV adicional", error)
         }
         runCatching {
+            assets.open("mi-lista.m3u").use { input ->
+                File(filesDir, "mi-lista.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista M3U del usuario", error)
+        }
+        runCatching {
             assets.open("peliculas-dominio-publico.m3u").use { input ->
                 File(filesDir, "peliculas-dominio-publico.m3u").outputStream().use { output -> input.copyTo(output) }
             }
@@ -132,7 +160,21 @@ class MainActivity : ComponentActivity() {
             android.util.Log.e("XuperQuilmesTV", "No se pudo instalar el catálogo local de películas", error)
         }
 
-        // Arranca ya mismo: lee el caché del disco y baja las listas en segundo plano
+        runCatching {
+            assets.open("argentina-extra.m3u").use { input ->
+                File(filesDir, "argentina-extra.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista argentina adicional", error)
+        }
+        runCatching {
+            assets.open("lista-extendida.m3u").use { input ->
+                File(filesDir, "lista-extendida.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista extendida", error)
+        }
+        // Las listas locales ya están copiadas; ahora sí se puede iniciar la carga.
         lifecycleScope.launch { repository.refresh() }
 
         setContent {
@@ -142,8 +184,20 @@ class MainActivity : ComponentActivity() {
                     composable("main") {
                         MainScreen(
                             repository = repository,
-                            onPlay = { id -> navController.navigate("player/$id") },
+                            onPlay = { id ->
+                                val selected = repository.find(id)
+                                if (selected?.isLive == true) navController.navigate("player/$id")
+                                else navController.navigate("detail/$id")
+                            },
                         )
+                    }
+                    composable(
+                        route = "detail/{titleId}",
+                        arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
+                    ) { entry ->
+                        val id = entry.arguments?.getString("titleId").orEmpty()
+                        val title = remember(id) { repository.find(id) }
+                        if (title != null) DetailScreen(title = title, onPlay = { navController.navigate("player/$id") })
                     }
                     composable(
                         route = "player/{titleId}",
@@ -152,10 +206,16 @@ class MainActivity : ComponentActivity() {
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
                         if (title != null) {
+                            if (!title.isLive) {
+                                val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
+                                val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
+                                recent.add(id)
+                                prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
+                            }
                             PlayerScreen(
                                 name = title.name,
                                 streamUrl = title.streamUrl,
-                                channelQueue = (repository as? M3uRepository)?.getArgentinaChannels().orEmpty(),
+                                channelQueue = (repository as? M3uRepository)?.getChannelQueue(id).orEmpty(),
                                 currentTitleId = id,
                                 onChangeChannel = { nextId ->
                                     navController.popBackStack("main", false)

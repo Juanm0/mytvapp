@@ -27,12 +27,14 @@ import androidx.tv.material3.CardDefaults
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperLogoBackground
 import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
 
 val CardWidth = 168.dp
 val CardHeight = 132.dp
+private val VODCardHeight = 252.dp
 
 /**
  * Tarjeta de canal: logo sobre fondo claro (así se ve cualquier logo) y el
@@ -49,7 +51,7 @@ fun PosterCard(
         onClick = onClick,
         modifier = modifier
             .width(CardWidth)
-            .height(CardHeight),
+            .height(if (title.isLive || title.contentKind == ContentKind.LIVE) CardHeight else VODCardHeight),
         scale = CardDefaults.scale(focusedScale = 1.08f),
         border = CardDefaults.border(
             focusedBorder = Border(
@@ -62,17 +64,17 @@ fun PosterCard(
         Column(modifier = Modifier.fillMaxSize()) {
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(if (title.isLive || title.contentKind == ContentKind.LIVE) 1f else 4f)
                     .fillMaxWidth()
                     .background(XuperLogoBackground)
-                    .padding(10.dp),
+                    .padding(if (title.isLive || title.contentKind == ContentKind.LIVE) 10.dp else 0.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 if (title.posterUrl.isNotBlank()) {
                     AsyncImage(
                         model = title.posterUrl,
                         contentDescription = null,
-                        contentScale = ContentScale.Fit,
+                        contentScale = if (title.isLive || title.contentKind == ContentKind.LIVE) ContentScale.Fit else ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
@@ -87,7 +89,7 @@ fun PosterCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(46.dp)
+                    .height(if (title.isLive || title.contentKind == ContentKind.LIVE) 46.dp else 58.dp)
                     .background(XuperSurfaceVariant)
                     .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center,

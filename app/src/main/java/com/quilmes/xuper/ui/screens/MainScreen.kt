@@ -38,7 +38,8 @@ fun MainScreen(
         NavItem("animation", "🍥", "ANIMACIÓN"),
         NavItem("discover", "✨", "DESCUBRIR"),
         NavItem("countries", "🌎", "OTROS PAÍSES"),
-        NavItem("countries", "🌎", "OTROS PAÍSES"),
+        NavItem("favorites", "♥", "MIS FAVORITOS"),
+        NavItem("continue", "▶", "CONTINUAR VIENDO"),
     )
 
     BackHandler(enabled = dest != "home") { dest = "home" }
@@ -74,6 +75,8 @@ fun MainScreen(
                     onPlay = onPlay,
                 )
                 "discover" -> DiscoverScreen(sections = sections, onPlay = onPlay)
+                "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
+                "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
             }
         }
         SideBar(

@@ -39,6 +39,10 @@ data class M3uSource(
     val maxRows: Int = 40,
     /** Hint explícito para listas dedicadas a VOD; null para listas mixtas o de canales. */
     val contentHint: ContentKind? = null,
+    /** This source contributes to the curated Argentina row without a separate sidebar section. */
+    val mergeIntoArgentina: Boolean = false,
+    /** Avoid expensive metadata lookups for huge, mixed legacy playlists. */
+    val enrichMetadata: Boolean = true,
 )
 
 private data class Entry(val group: String, val title: Title)
@@ -64,6 +68,7 @@ class M3uRepository(
 
     private val lock = Any()
     private val entriesBySource = HashMap<Int, List<Entry>>()
+    private val tmdbMetadata = TmdbMetadataService(cacheDir)
     private val unavailableUrls = ConcurrentHashMap.newKeySet<String>().apply {
         addAll(readUnavailableUrls())
     }
@@ -83,10 +88,14 @@ class M3uRepository(
                     sources.mapIndexed { i, source ->
                         async {
                             runCatching {
-                                val entries = parse(download(source.url), "s$i", source.contentHint)
-                                if (entries.isNotEmpty()) {
-                                    writeCache(i, entries)
-                                    publish(i, entries)
+                                val parsed = parse(download(source.url), "s$i", source.contentHint)
+                                if (parsed.isNotEmpty()) {
+                                    val enriched = if (tmdbMetadata.enabled && source.enrichMetadata) {
+                                        tmdbMetadata.enrich(parsed.map { EntryForMetadata(it.group, it.title) })
+                                            .map { Entry(it.group, it.title) }
+                                    } else parsed
+                                    writeCache(i, enriched)
+                                    publish(i, enriched)
                                 }
                             }
                         }
@@ -99,6 +108,24 @@ class M3uRepository(
     }
 
     override fun find(id: String): Title? = byId[id]
+
+    /** Zapping local: usa la fila/categoría del canal actual (país o grupo), no fuerza Argentina. */
+    fun getChannelQueue(titleId: String): List<Title> {
+        val current = byId[titleId] ?: return getArgentinaChannels()
+        if (!current.isLive) return emptyList()
+        val sourceIndex = titleId.substringBefore('-').removePrefix("s").toIntOrNull()
+        val argentinaUrls = _sections.value.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+            ?.categories.orEmpty().flatMap { it.items }.map { it.streamUrl }.toSet()
+        if ((sourceIndex != null && sources.getOrNull(sourceIndex)?.name.equals("Argentina", ignoreCase = true)) || current.streamUrl in argentinaUrls) {
+            return getArgentinaChannels()
+        }
+        val entries = sourceIndex?.let { entriesBySource[it] }.orEmpty()
+        val group = entries.firstOrNull { it.title.id == titleId }?.group
+        val sameGroup = entries.filter { it.title.isLive && it.group == group }.map { it.title }
+        if (sameGroup.size > 1) return sameGroup.sortedWith(compareBy<Title>({ channelPriority(it.name) }, { normalize(it.name) }))
+        val sameSource = entries.filter { it.title.isLive }.map { it.title }
+        return if (sameSource.isNotEmpty()) sameSource.sortedWith(compareBy<Title>({ channelPriority(it.name) }, { normalize(it.name) })) else getArgentinaChannels()
+    }
 
     /** Oculta del catálogo los streams que ExoPlayer confirma que fallan. */
     override suspend fun markUnavailable(id: String) {
@@ -124,7 +151,7 @@ class M3uRepository(
                     byId = ids
                     searchIndex = index
                     _sections.value = sources.indices.mapNotNull { n ->
-                        entriesBySource[n]?.let { buildSection(n, sources[n], it) }
+                        entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
                     }
                 }
             }
@@ -153,7 +180,7 @@ class M3uRepository(
             entriesBySource[i] = entries
 
             val secs = sources.indices.mapNotNull { n ->
-                entriesBySource[n]?.let { buildSection(n, sources[n], it) }
+                entriesBySource[n]?.takeUnless { sources[n].mergeIntoArgentina }?.let { buildSection(n, sources[n], it) }
             }
             val ids = HashMap<String, Title>()
             val index = ArrayList<Pair<String, Title>>()
@@ -169,64 +196,69 @@ class M3uRepository(
         }
     }
 
-    /** Cola de zapping de Argentina. No incluye canales de otros países. */
+    /** Cola de zapping idéntica a la fila Argentina: top 9, todos los GH, luego el resto. */
     fun getArgentinaChannels(): List<Title> {
-        val all = synchronized(lock) {
-            entriesBySource.values.flatten().map { it.title }
-        }.distinctBy { it.streamUrl }
-        val argSection = _sections.value.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
-        val argUrls = argSection?.categories.orEmpty().flatMap { it.items }.map { it.streamUrl }.toSet()
-        val gh = all.firstOrNull { it.name.contains("gran hermano", ignoreCase = true) || it.name.equals("GH", ignoreCase = true) }
-            ?.let(::listOf).orEmpty()
-        val titles = all.filter { it.streamUrl in argUrls } + gh
-        val unique = titles.distinctBy { it.streamUrl }.distinctBy { title ->
-            val n = normalize(title.name)
-            when {
-                n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "brand:tn"
-                "cronica" in n -> "brand:cronica"
-                "el trece" in n || "eltrece" in n -> "brand:el trece"
-                "telefe" in n -> "brand:telefe"
-                n == "america" || n.startsWith("america ") || "america tv" in n -> "brand:america"
-                "gran hermano" in n || n == "gh" -> "brand:gran hermano"
-                else -> "url:${title.streamUrl}"
-            }
+        val row = _sections.value.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+            ?.categories.orEmpty().flatMap { it.items }
+        return row.ifEmpty {
+            synchronized(lock) { entriesBySource.values.flatten().map { it.title }.filter { it.isLive } }
+                .distinctBy { it.streamUrl }
+                .sortedWith(compareBy<Title>({ argentinaRank(it.name) }, { normalize(it.name) }))
         }
-        val priority = listOf("tn", "cronica", "el trece", "eltrece", "telefe", "america", "gran hermano")
-        fun rank(title: Title): Int {
-            val name = normalize(title.name)
-            return priority.indexOfFirst { key ->
-                when (key) {
-                    "tn" -> name == "tn" || name.startsWith("tn ") || name.startsWith("tn-")
-                    "cronica" -> "cronica" in name
-                    "el trece", "eltrece" -> "el trece" in name || "eltrece" in name
-                    "telefe" -> "telefe" in name
-                    "america" -> name == "america" || name.startsWith("america ") || "america tv" in name
-                    "gran hermano" -> "gran hermano" in name
-                    else -> key in name
-                }
-            }.let { if (it < 0) Int.MAX_VALUE else it }
+    }
+
+    /** Curated order: first nine familiar Argentine channels, then every Gran Hermano feed, then the rest. */
+    private fun argentinaRank(rawName: String): Int {
+        val n = normalize(rawName)
+        return when {
+            n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") || "todo noticias" in n -> 0
+            "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> 1
+            "cronica" in n -> 2
+            "el trece" in n || "eltrece" in n -> 3
+            "telefe" in n -> 4
+            n == "america" || n.startsWith("america ") || "america tv" in n -> 5
+            "c5n" in n -> 6
+            n.contains("canal 9") || n == "el nueve" || n.startsWith("canal nueve") -> 7
+            "tv publica" in n || "television publica" in n -> 8
+            n.contains("gran hermano") || n == "gh" -> 9
+            else -> 10
         }
-        return unique.sortedWith(compareBy<Title>({ rank(it) }, { normalize(it.name) }))
+    }
+
+    private fun argentinaDedupeKey(title: Title): String {
+        val n = normalize(title.name)
+        return when {
+            n.contains("gran hermano") || n == "gh" -> "gh:${title.streamUrl}"
+            n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") || "todo noticias" in n -> "tn"
+            "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> "ln"
+            "cronica" in n -> "cronica"
+            "el trece" in n || "eltrece" in n -> "eltrece"
+            "telefe" in n -> "telefe"
+            n == "america" || n.startsWith("america ") || "america tv" in n -> "america"
+            "c5n" in n -> "c5n"
+            n.contains("canal 9") || n == "el nueve" || n.startsWith("canal nueve") -> "canal9"
+            "tv publica" in n || "television publica" in n -> "tvpublica"
+            else -> "url:${title.streamUrl}"
+        }
     }
 
     private fun buildSection(i: Int, source: M3uSource, entries: List<Entry>): Section {
         if (source.flattenIntoOneCategory) {
-            val sorted = entries.map { it.title }.distinctBy { it.streamUrl }.sortedWith(
-                compareBy<Title>(
-                    { title ->
-                        val name = normalize(title.name)
-                        source.priorityNames.indexOfFirst { key ->
-                            val normalizedKey = normalize(key)
-                            when (normalizedKey) {
-                                "tn" -> name == "tn" || name.startsWith("tn ") || name.startsWith("tn-")
-                                "el trece", "eltrece" -> "el trece" in name || "eltrece" in name
-                                else -> name.contains(normalizedKey)
-                            }
-                        }.let { if (it < 0) Int.MAX_VALUE else it }
-                    },
-                    { normalize(it.name) },
-                )
-            )
+            val isArgentina = source.name.equals("Argentina", ignoreCase = true)
+            val mergedExtras = if (isArgentina) sources.indices
+                .filter { sources[it].mergeIntoArgentina }
+                .flatMap { entriesBySource[it].orEmpty() }
+                .filter { it.title.isLive } else emptyList()
+            val realityEntries = if (isArgentina) {
+                entriesBySource.values.flatten().filter { entry ->
+                    val n = normalize(entry.title.name)
+                    entry.title.isLive && (n.contains("gran hermano") || n == "gh")
+                }
+            } else emptyList()
+            val rawTitles = (entries + mergedExtras + realityEntries).map { it.title }
+            val dedupedTitles = if (isArgentina) rawTitles.distinctBy(::argentinaDedupeKey) else rawTitles.distinctBy { it.streamUrl }
+            val sorted = dedupedTitles
+                .sortedWith(compareBy<Title>({ if (isArgentina) argentinaRank(it.name) else Int.MAX_VALUE }, { normalize(it.name) }))
             val category = Category("s$i-argentina", "Canales argentinos", sorted)
             return Section("s$i", source.name, source.icon, listOf(category), source.homeRows)
         }
@@ -326,6 +358,20 @@ class M3uRepository(
      * lineales de cine en esas categorías. Se buscan señales fuertes en ruta, formato,
      * temporada/episodio o etiquetas inequívocas de VOD.
      */
+    private fun channelPriority(name: String): Int {
+        val n = normalize(name)
+        return when {
+            n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> 0
+            "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> 1
+            "cronica" in n -> 2
+            "eltrece" in n || "el trece" in n -> 3
+            "telefe" in n -> 4
+            "america" in n -> 5
+            "gran hermano" in n || n == "gh" -> 6
+            else -> 100
+        }
+    }
+
     private fun classifyContent(name: String, group: String, url: String): ContentKind {
         val n = normalize(name)
         val g = normalize(group)
@@ -375,14 +421,19 @@ class M3uRepository(
 
     // ----------------------------------------------------------------- caché
 
-    private fun cacheFile(i: Int) = File(cacheDir, "catalog_$i.tsv")
+    private fun cacheFile(i: Int): File {
+        val sourceName = sources.getOrNull(i)?.name.orEmpty().lowercase()
+            .replace(Regex("[^a-z0-9]+"), "_").trim('_').ifBlank { "source" }
+        return File(cacheDir, "catalog_${i}_${sourceName}.tsv")
+    }
 
     private fun writeCache(i: Int, entries: List<Entry>) {
         runCatching {
             val tmp = File(cacheDir, "catalog_$i.tmp")
             tmp.bufferedWriter().use { w ->
                 for (e in entries) {
-                    val cols = listOf(e.group, e.title.id, e.title.name, e.title.posterUrl, e.title.streamUrl)
+                    val cols = listOf(e.group, e.title.id, e.title.name, e.title.posterUrl, e.title.streamUrl,
+                        e.title.backdropUrl, e.title.description, e.title.year.orEmpty(), e.title.rating.orEmpty(), e.title.contentKind.name)
                     w.write(cols.joinToString("\t") { it.replace('\t', ' ').replace('\n', ' ') })
                     w.write("\n")
                 }
@@ -397,7 +448,15 @@ class M3uRepository(
         f.bufferedReader().useLines { lines ->
             lines.mapNotNull { l ->
                 val p = l.split('\t')
-                if (p.size < 5) null else Entry(p[0], makeTitle(p[1], p[2], p[3], p[4], p[0], sources.getOrNull(i)?.contentHint))
+                if (p.size < 5) null else {
+                    val base = makeTitle(p[1], p[2], p[3], p[4], p[0], sources.getOrNull(i)?.contentHint)
+                    Entry(p[0], if (p.size >= 10) base.copy(
+                        backdropUrl = p[5].ifBlank { base.backdropUrl }, description = p[6].ifBlank { base.description },
+                        year = p[7].ifBlank { null }, rating = p[8].ifBlank { null },
+                        contentKind = runCatching { ContentKind.valueOf(p[9]) }.getOrDefault(base.contentKind),
+                        isLive = runCatching { ContentKind.valueOf(p[9]) }.getOrDefault(base.contentKind) == ContentKind.LIVE,
+                    ) else base)
+                }
             }.filterNot { it.title.streamUrl in unavailableUrls }.toList()
         }.takeIf { it.isNotEmpty() }
     }.getOrNull()

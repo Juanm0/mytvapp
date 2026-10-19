@@ -53,7 +53,11 @@ fun HomeScreen(
     val rows = remember(sections) {
         val all = sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.streamUrl }
         val movies = all.filter { it.contentKind == ContentKind.MOVIE || it.contentKind == ContentKind.OTHER_VOD }
+            .sortedWith(compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
+                .thenByDescending { yearForSort(it) }.thenBy { it.name.lowercase() })
         val series = all.filter { it.contentKind == ContentKind.SERIES }
+            .sortedWith(compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
+                .thenByDescending { yearForSort(it) }.thenBy { it.name.lowercase() })
         val live = all.filter { it.isLive }
         buildList {
             if (movies.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-movies", "Películas", movies))
@@ -64,9 +68,9 @@ fun HomeScreen(
     val featured = remember(sections) {
         sections.asSequence().flatMap { it.categories.asSequence() }
             .flatMap { it.items.asSequence() }
-            .firstOrNull { !it.isLive && it.posterUrl.isNotBlank() }
-            ?: sections.asSequence().flatMap { it.categories.asSequence() }
-                .flatMap { it.items.asSequence() }.firstOrNull { !it.isLive }
+            .filter { !it.isLive && (it.rating?.toDoubleOrNull() != null || yearForSort(it) > 0) }
+            .maxWithOrNull(compareBy<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
+                .thenBy { yearForSort(it) }.thenBy { it.name.lowercase() })
     }
 
     if (rows.isEmpty()) {
@@ -155,3 +159,7 @@ private fun HeroBanner(title: Title, onPlay: () -> Unit) {
         }
     }
 }
+
+private fun yearForSort(title: Title): Int = title.year?.toIntOrNull()
+    ?: Regex("\\b(?:19|20)\\d{2}\\b").find(title.name)?.value?.toIntOrNull()
+    ?: 0

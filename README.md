@@ -7,11 +7,17 @@ Aplicación nativa para Android TV hecha con Kotlin, Jetpack Compose for TV y Me
 ## Estado actual (iteración de Argentina + VOD)
 
 - **Inicio:** pantalla inicial tipo Netflix; prioriza películas y series VOD cuando hay títulos disponibles.
-- **ARGENTINA:** reemplaza el antiguo rótulo TV EN VIVO. Usa una lista específica de canales argentinos, intenta ordenar TN, Crónica, El Trece, Telefe y América al principio, y coloca Gran Hermano inmediatamente después del top 5 cuando aparece en la lista adicional local.
+- **ARGENTINA:** combina la lista pública de canales argentinos con `argentina-extra.m3u`, que incluye los canales del fragmento del usuario y los canales deportivos. La fila prioriza nueve canales (TN, La Nación/LN+, Crónica, El Trece, Telefe, América, C5N, Canal 9 y TV Pública), luego coloca todas las entradas llamadas Gran Hermano una junto a otra y después el resto. Es un orden manual de favoritos, no una medición en vivo de audiencia. Los enlaces se conservan para probarlos, pero no se garantiza que sigan activos.
+- **Mi lista:** se agregó el fragmento M3U que pegaste como fuente local, conservando los grupos (24/7, Animation, Cine, Religioso y Radio). No se considera VOD solo porque un canal esté en el grupo “Cine”.
+- **TMDB opcional:** se configura una sola vez con una clave API propia en `local.properties`. Enriquece títulos VOD reales clasificados como MOVIE/SERIES con póster, fondo, sinopsis, año y puntuación; usa una coincidencia conservadora, conserva la URL M3U original y guarda metadata en caché. No crea enlaces de reproducción ni agrega títulos que no estén en las fuentes.
 - **OTROS PAÍSES:** agrupa las demás listas de canales. El zapping de Argentina no debe saltar a otros países.
 - **Cambio de canal:** en el reproductor, flecha arriba oculta los controles para despejar la imagen. Las teclas dedicadas CH+/CH- recorren la cola argentina en orden y no salen de ella. La compatibilidad depende de que el control remoto exponga esos keycodes; probar en dispositivo real.
-- **Catálogo VOD:** hay una fuente remota de películas de dominio público, otra de series y un pequeño catálogo local de películas clásicas empaquetado como M3U de respaldo. La lista anterior `iptv-extra.m3u` también incluye enlaces antiguos con apariencia VOD (por ejemplo, `GRANDE FRATELLO 2020 EP1/EP2` y una conferencia grabada); se ajustó la clasificación para reconocer episodios `EP1` y rutas `/vod`. El catálogo local garantiza que Películas tenga metadatos aunque la descarga remota falle, pero reproducir los videos requiere conexión y los enlaces de terceros pueden cambiar.
-- **SERIES:** muestra entradas clasificadas como series/episodios; la fuente remota actual puede no ofrecer muchas series o episodios con metadatos. No se inventan temporadas ni sinopsis.
+- **Catálogo VOD:** se conservan las fuentes separadas de películas y series de dominio público. También se agregó `Lista extendida (experimental)`, importada del archivo de 9.106 líneas que aportó el usuario. Es una lista mixta internacional con canales, cámaras, radios y algunos enlaces VOD/episodios antiguos; no es un catálogo limpio y varios enlaces pueden haber caducado. Se desactiva el enriquecimiento TMDB automático para esa fuente grande, para no disparar cientos de consultas ni retrasar la carga.
+- **SERIES:** muestra entradas clasificadas como series/episodios y agrupa episodios por temporada cuando el nombre contiene patrones como `S01E02`, `1x02` o `Temporada 1`. Si la fuente no aporta esos datos, no se inventan temporadas ni sinopsis.
+- **Fichas de contenido:** al seleccionar una película/serie se abre una ficha con póster, fondo, nombre, tipo, descripción disponible, indicador de temporada/episodio cuando se puede inferir y botones Reproducir y Favoritos. Las fichas de TV en vivo siguen abriendo directamente el reproductor.
+- **Favoritos:** se guardan localmente con SharedPreferences y aparecen en MIS FAVORITOS.
+- **Continuar viendo:** se registra el contenido VOD abierto recientemente y se muestra en CONTINUAR VIENDO. Por ahora guarda historial reciente, no posición exacta de reproducción; el progreso por timestamp queda pendiente.
+- **Pósteres:** las tarjetas VOD usan formato vertical y recorte tipo streaming; los canales en vivo mantienen formato apaisado y ajuste completo de logo. La fuente `tvg-logo` se reutiliza si existe; si no, se muestra una alternativa con iniciales, sin inventar carátulas.
 - **ANIMACIÓN:** filtro transversal por términos de anime, dibujos, infantil y animación.
 - **DESCUBRIR:** cuadrícula de elementos no clasificados como TV en vivo.
 - **Reproductor:** Media3/ExoPlayer con HLS, DASH y MP4.
@@ -27,9 +33,19 @@ Esta clasificación es heurística, no una garantía. Algunas listas M3U son sol
 
 ## Fuentes configuradas
 
-Las fuentes actuales se configuran en `buildRepository()` dentro de `app/src/main/java/com/quilmes/xuper/MainActivity.kt`. Incluyen una lista de canales de Argentina (`https://iptv-org.github.io/iptv/countries/ar.m3u`), listas públicas de canales, el archivo local `app/src/main/assets/iptv-extra.m3u`, un catálogo de respaldo `app/src/main/assets/peliculas-dominio-publico.m3u` y dos listas VOD remotas de OnlineM3U: películas y series. Las listas VOD dedicadas usan `contentHint` explícito. El catálogo local es una selección pequeña de clásicos de dominio público; sus URLs apuntan a terceros y no se garantiza disponibilidad permanente. Las listas públicas pueden cambiar, dejar de funcionar o contener enlaces no disponibles en ciertas regiones. No se consideran verificadas por el mero hecho de descargarse.
+Las fuentes actuales se configuran en `buildRepository()` dentro de `app/src/main/java/com/quilmes/xuper/MainActivity.kt`. Incluyen la lista pública argentina, `argentina-extra.m3u` (canales argentinos de la lista adjunta y los dos fragmentos escritos por el usuario), listas públicas de canales, `mi-lista.m3u`, `iptv-extra.m3u`, las listas VOD de dominio público y `lista-extendida.m3u` con el archivo completo aportado. `Argentina · agregados` se fusiona dentro de la fila Argentina y no aparece como sección separada. La lista extensa sí aparece en la barra lateral como experimental. Los enlaces pueden caducar o no funcionar en la región; no se verificó reproducción de cada uno.
 
 La lista compartida `https://raw.githubusercontent.com/srfarias/Arg-IpTv/master/m3u` puede evaluarse como una fuente adicional, pero **no debe tratarse automáticamente como catálogo de películas y series**: primero hay que revisar su estructura y confirmar si contiene VOD real o únicamente canales lineales de cine/series. No eliminar fuentes actuales sin comprobar antes su función.
+
+## Configurar TMDB
+
+La clave de TMDB ya quedó cargada en el archivo local `local.properties` de este ZIP, así que no necesitás copiarla manualmente. Ese archivo está incluido en `.gitignore` para evitar que se suba accidentalmente al repositorio. Si Android Studio no detecta tu Android SDK, dejá que configure `sdk.dir` o agregá esa ruta sin borrar `TMDB_API_KEY`.
+
+Para compilar, abrí el proyecto en Android Studio y generá el APK desde **Build → Build APK(s)**. En GitHub Actions, agregá la clave como secreto del repositorio llamado `TMDB_API_KEY` en **Settings → Secrets and variables → Actions**; el workflow ya la lee desde ahí.
+
+**Seguridad:** esta clave quedó en el ZIP personal y se compila dentro del APK. No compartas públicamente el ZIP ni el APK con la clave incorporada. Como la pegaste en el chat, lo más seguro es regenerarla en TMDB antes de distribuir la app. La primera actualización puede demorar mientras se buscan metadatos; los resultados se guardan en caché.
+
+**¿IMDb es más fácil?** IMDb no ofrece una API pública general, gratuita y sin clave que reemplace directamente este uso. Sus datasets públicos sirven para investigación y tablas de títulos, pero no son una API simple de pósteres y sinopsis. OMDb también requiere una API key. Para este proyecto, TMDB sigue siendo la opción más práctica: el registro es una única tarea y luego la app trabaja sola. La integración nunca proporciona el video; solo enriquece los títulos que ya existen en una lista.
 
 ## Stack
 
@@ -63,6 +79,7 @@ app/src/main/java/com/quilmes/xuper/
   ui/screens/LibraryScreen.kt -> TV en vivo, películas, series, animación y descubrir
   ui/screens/SearchScreen.kt  -> buscador
   ui/screens/PlayerScreen.kt  -> reproducción a pantalla completa
+  ui/screens/DetailScreen.kt  -> ficha de películas/series, favoritos y reproducción
 ```
 
 ## Seguridad y mantenimiento
@@ -77,7 +94,7 @@ app/src/main/java/com/quilmes/xuper/
 
 1. **Netflix-style:** mejorar el destacado y sumar filas “Agregados recientemente” solo cuando haya datos reales.
 2. **Modelo de series:** separar serie, temporada y episodio si la fuente lo permite; no inventar temporadas ni sinopsis. Agregar una pantalla de detalle antes de reproducir, con selección de episodio cuando exista información suficiente.
-3. **Metadatos:** aprovechar `tvg-logo` como póster cuando exista. Si se integra un proveedor externo de metadatos, hacerlo mediante una API autorizada y mantener separado el catálogo de metadatos de las URLs de reproducción.
+3. **Metadatos:** TMDB está integrado con `TMDB_API_KEY`; seguir los pasos de configuración de abajo, probar con una clave válida y revisar falsos positivos. Mantener separados los metadatos y las URLs reales de reproducción.
 4. **Favoritos y continuar viendo:** persistencia local y progreso solo para contenido bajo demanda; el progreso de TV en vivo debe manejarse distinto.
 5. **Robustez:** probar M3U con comas dentro de atributos, BOM/encoding, URLs con query strings, fuentes caídas y caché antigua.
 6. **Pruebas:** compilar APK, probar D-pad/foco, búsqueda, navegación atrás, reproducción y errores reales en Android TV.
@@ -86,10 +103,17 @@ app/src/main/java/com/quilmes/xuper/
 
 ## Registro de esta iteración
 
-- Se agregó la sección **Argentina** con fuente dedicada y orden de canales prioritarios.
+- La sección **Argentina** combina la fuente pública y un archivo local adicional; ordena nueve canales prioritarios, después todas las señales llamadas Gran Hermano y luego los demás canales.
 - Se agregó **Otros países** separado para que el zapping argentino no cambie de país.
-- El reproductor ahora intenta ocultar controles con flecha arriba y cambiar canales con teclas dedicadas CH+/CH-.
-- Se agregó una pequeña lista M3U local de respaldo para películas clásicas de dominio público, además de las fuentes VOD remotas.
+- El reproductor oculta los controles con flecha arriba y cambia canales con teclas dedicadas CH+/CH- usando la cola del grupo/fuente actual; el zapping debe quedarse dentro de la categoría/país actual y volver al inicio de esa cola al llegar al final.
+- Se retiró de las fuentes activas el pequeño catálogo local de clásicos, porque no coincide con la expectativa de catálogo moderno; se mantienen las fuentes VOD externas.
+- Se añadió como fuente local `Mi lista`, con el fragmento M3U que el usuario pegó (24/7, animación, canales de cine, religiosos y radio). Se preservaron URLs y grupos; las URLs no se pudieron comprobar en red desde este entorno.
+- Se integró TMDB opcional: la clave se lee desde `local.properties` (`TMDB_API_KEY`), las búsquedas distinguen película/serie, aplican un umbral conservador de similitud, cachean resultados y nunca reemplazan el stream real. Inicio/Películas priorizan por puntuación TMDB si existe. La integración requiere que el usuario configure su propia clave.
+- La fila Argentina conserva cada URL distinta de Gran Hermano y las coloca contiguas después de los nueve favoritos. El zapping usa la misma fila y vuelve al principio al llegar al final.
+- Se agregó una ficha de contenido con póster/backdrop, metadata disponible, botón reproducir y favoritos.
+- Se agregaron pantallas MIS FAVORITOS y CONTINUAR VIENDO con persistencia local. Continuar viendo aún guarda historial de títulos, no el punto exacto del video.
+- Las tarjetas de VOD usan proporción vertical y las de TV en vivo conservan formato de logo horizontal.
+- Series agrupa por temporada cuando puede inferirla de los nombres de episodios.
 - Se amplió la clasificación para detectar episodios etiquetados `EP1`/`EP2` y rutas `/vod`, lo que ayuda a recuperar entradas bajo demanda que ya existían en `iptv-extra.m3u` pero se clasificaban como canales en vivo.
 - La URL argentina `https://raw.githubusercontent.com/srfarias/Arg-IpTv/master/m3u` no se activó como VOD porque su descripción habla principalmente de canales premium de películas/series; eso normalmente significa canales lineales, no un catálogo individual bajo demanda. Puede añadirse como fuente de canales si se desea, sin etiquetarla como catálogo VOD.
 - No fue posible acceder a Internet desde el entorno de edición ni ejecutar una compilación Android completa. Las URLs y los keycodes de control remoto necesitan validación real.
@@ -100,7 +124,9 @@ Estás trabajando sobre el proyecto existente **Xuper Quilmes TV**, una app Andr
 
 ## Estado más reciente que debes respetar
 
-La barra lateral ya muestra **ARGENTINA** y **OTROS PAÍSES**. La lista argentina se configura en `MainActivity.kt` y se ordena en `M3uRepository.kt`; la cola de zapping argentina incluye los canales de esa fuente y un único canal Gran Hermano de la lista local cuando está disponible. La flecha arriba debe ocultar controles, y las teclas `KEYCODE_CHANNEL_UP/DOWN` cambian de canal sin salir de la cola. Hay un catálogo M3U local pequeño de películas en `app/src/main/assets/peliculas-dominio-publico.m3u`, además de las fuentes remotas. La lista `iptv-extra.m3u` también contiene dos entradas antiguas de episodios (`EP1`/`EP2`) y una conferencia grabada que deben clasificarse como VOD, no como canales en vivo. Comprobar que los cambios compilen y que el mando real entregue los keycodes esperados antes de rehacer la lógica.
+La barra lateral muestra **ARGENTINA**, **OTROS PAÍSES**, **MIS FAVORITOS**, **CONTINUAR VIENDO** y fuentes de listas. Se añadió `Mi lista`, `argentina-extra.m3u` (fragmentos de deportes, noticias, canales principales y entradas argentinas extraídas de la lista extensa) y `lista-extendida.m3u` como fuente experimental. La lista internacional puede contener feeds de Gran Hermano; todas las entradas con ese nombre se ponen juntas después de los nueve canales prioritarios, sin deduplicarlas por marca. No se pudo comprobar la disponibilidad actual de cada URL.
+
+TMDB está integrado en `data/TmdbMetadataService.kt`; configurar la clave siguiendo la sección anterior. Sin clave, no se hacen llamadas. El servicio enriquece MOVIE/SERIES clasificados, no crea enlaces de reproducción, usa coincidencia conservadora y conserva la URL de origen. La lista extensa de 9.106 líneas es mixta y experimental; contiene canales y algunos episodios/VOD antiguos, por lo que sus enlaces pueden estar caídos. Las listas de deportes y noticias del usuario se incorporaron a la fila Argentina. La flecha arriba debe ocultar controles y `KEYCODE_CHANNEL_UP/DOWN` debe recorrer en bucle la cola de la categoría/fuente actual. Verificar en dispositivo real; no afirmar que se compiló si no se ejecutó Gradle/Android SDK.
 
 ## Reglas de trabajo
 
@@ -124,4 +150,4 @@ La barra lateral ya muestra **ARGENTINA** y **OTROS PAÍSES**. La lista argentin
 - Inicio ahora es la pantalla inicial y prioriza VOD sobre TV en vivo; el destacado intenta elegir un título VOD con póster.
 - Se agregaron listas separadas de películas y series de dominio público de OnlineM3U, con clasificación forzada por fuente para evitar depender del nombre del grupo M3U.
 - Películas, series y Descubrir filtran por tipo de contenido en vez de asumir que todo elemento no-live es una película.
-- Pendiente de validar: compilación Android, disponibilidad real de los enlaces VOD en Android TV, pantalla de detalle VOD, agrupación de temporadas/episodios, favoritos/continuar viendo y una opción para restablecer streams marcados como fallidos.
+- Pendiente de validar: compilación Android, clave TMDB real y reproducción de enlaces VOD/deportes/Gran Hermano en Android TV. La ficha y favoritos están implementados; Continuar viendo registra títulos recientes, pero no el timestamp exacto. No hay API oficial pública de Netflix para reutilizar su catálogo. TMDB solo proporciona metadatos: hace falta una fuente VOD autorizada que proporcione los videos.

@@ -3,12 +3,20 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val xuperLocalProperties = java.util.Properties().apply {
+    val propertiesFile = rootProject.file("local.properties")
+    if (propertiesFile.exists()) propertiesFile.inputStream().use { load(it) }
+}
+val tmdbApiKey = xuperLocalProperties.getProperty("TMDB_API_KEY", "")
+val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.quilmes.xuper"
     compileSdk = 34
 
     defaultConfig {
         applicationId = "com.quilmes.xuper"
+        buildConfigField("String", "TMDB_API_KEY", "\"$escapedTmdbApiKey\"")
         minSdk = 24
         targetSdk = 34
         versionCode = 1
@@ -44,6 +52,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

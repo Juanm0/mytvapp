@@ -30,7 +30,7 @@ import com.quilmes.xuper.ui.components.SkeletonRows
 import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 
-internal enum class LibraryMode { ARGENTINA, OTHER_COUNTRIES, MOVIES, SERIES, ANIMATION }
+internal enum class LibraryMode { ARGENTINA, OTHER_COUNTRIES, MOVIES, SERIES, ANIMATION, FAVORITES, CONTINUE }
 
 @Composable
 internal fun LibraryScreen(
@@ -38,8 +38,16 @@ internal fun LibraryScreen(
     mode: LibraryMode,
     onPlay: (String) -> Unit,
 ) {
-    val rows = remember(sections, mode) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val prefs = remember { context.getSharedPreferences("xuper-library", android.content.Context.MODE_PRIVATE) }
+    val favoriteIds = remember { prefs.getStringSet("favorites", emptySet())?.toSet().orEmpty() }
+    val recentOrder = remember { prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() }.asReversed() }
+    val recentIds = recentOrder.toSet()
+    val rows = remember(sections, mode, favoriteIds, recentIds) {
+        val allTitles = sections.flatMap { it.categories }.flatMap { it.items }
         when (mode) {
+            LibraryMode.FAVORITES -> listOfNotNull(allTitles.filter { it.id in favoriteIds }.takeIf { it.isNotEmpty() }?.let { Category("favorites", "Mis favoritos", it) })
+            LibraryMode.CONTINUE -> listOfNotNull(allTitles.filter { it.id in recentIds && !it.isLive }.sortedBy { recentOrder.indexOf(it.id).let { index -> if (index < 0) Int.MAX_VALUE else index } }.takeIf { it.isNotEmpty() }?.let { Category("continue", "Continuar viendo", it) })
             LibraryMode.ARGENTINA -> {
                 val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
                     ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
@@ -70,7 +78,20 @@ internal fun LibraryScreen(
                             else -> false
                         }
                     }
-                    if (filtered.isEmpty()) null else Category("${mode.name}-${category.id}", category.title, filtered)
+                    if (filtered.isEmpty()) null else if (mode == LibraryMode.SERIES) {
+                        val grouped = filtered.groupBy { title ->
+                            val match = Regex("(?i)(?:s(\\d{1,2})\\s*e\\d{1,3}|(\\d{1,2})x\\d{1,3}|temporada\\s*(\\d+))").find(title.name)
+                            val season = match?.groupValues?.drop(1)?.firstOrNull { it.isNotBlank() }
+                            if (season != null) "Temporada $season" else category.title
+                        }
+                        grouped.entries.map { (season, items) -> Category("${mode.name}-${category.id}-$season", season, items.sortedBy { it.name }) }
+                    } else {
+                        val ordered = if (mode == LibraryMode.MOVIES) filtered.sortedWith(
+                            compareByDescending<Title> { it.rating?.toDoubleOrNull() ?: -1.0 }
+                                .thenByDescending { yearForSort(it) }.thenBy { normalizeName(it.name) }
+                        ) else filtered
+                        Category("${mode.name}-${category.id}", category.title, ordered)
+                    }
                 }
             }
         }
@@ -82,6 +103,8 @@ internal fun LibraryScreen(
         LibraryMode.MOVIES -> "PELÍCULAS"
         LibraryMode.SERIES -> "SERIES"
         LibraryMode.ANIMATION -> "ANIMACIÓN"
+        LibraryMode.FAVORITES -> "MIS FAVORITOS"
+        LibraryMode.CONTINUE -> "CONTINUAR VIENDO"
     }
 
     if (rows.isEmpty()) {
@@ -95,6 +118,8 @@ internal fun LibraryScreen(
                     LibraryMode.MOVIES -> "Todavía no hay películas"
                     LibraryMode.SERIES -> "Todavía no hay series"
                     LibraryMode.ANIMATION -> "No encontramos canales de animación"
+                    LibraryMode.FAVORITES -> "Todavía no guardaste favoritos"
+                    LibraryMode.CONTINUE -> "Todavía no hay contenido para continuar"
                 },
                 message = when (mode) {
                     LibraryMode.ARGENTINA -> "La lista de Argentina no devolvió canales reproducibles. Comprobá la conexión o actualizá la fuente."
@@ -102,6 +127,8 @@ internal fun LibraryScreen(
                     LibraryMode.MOVIES -> "Todavía no encontramos películas bajo demanda. Una lista de canales de cine en vivo no alcanza: la fuente tiene que incluir enlaces directos a películas."
                     LibraryMode.SERIES -> "Todavía no encontramos series o episodios bajo demanda. Agregá una fuente VOD autorizada con episodios y metadatos."
                     LibraryMode.ANIMATION -> "Cuando una lista incluya canales o títulos de anime, dibujos o animación, van a aparecer acá."
+                    LibraryMode.FAVORITES -> "Abrí la ficha de una película o serie y tocá Guardar en favoritos."
+                    LibraryMode.CONTINUE -> "Las películas y series reproducidas recientemente aparecerán acá."
                 },
             )
         }
@@ -185,6 +212,7 @@ private fun argentinaBrand(value: String): String? {
     val n = normalizeName(value)
     return when {
         n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "tn"
+        "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> "la nacion"
         "cronica" in n -> "cronica"
         "el trece" in n || "eltrece" in n -> "el trece"
         "telefe" in n -> "telefe"
@@ -198,11 +226,12 @@ private fun argentinaPriority(value: String): Int {
     val n = normalizeName(value)
     return when {
         n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> 0
-        "cronica" in n -> 1
-        "el trece" in n || "eltrece" in n -> 2
-        "telefe" in n -> 3
-        n == "america" || n.startsWith("america ") || "america tv" in n -> 4
-        "gran hermano" in n || n == "gh" -> 5
+        "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> 1
+        "cronica" in n -> 2
+        "el trece" in n || "eltrece" in n -> 3
+        "telefe" in n -> 4
+        n == "america" || n.startsWith("america ") || "america tv" in n -> 5
+        "gran hermano" in n || n == "gh" -> 6
         else -> 100
     }
 }
@@ -216,3 +245,7 @@ private fun isAnimation(title: Title): Boolean {
     return listOf("anime", "animacion", "animation", "cartoon", "dibujos", "kids", "infantil", "manga")
         .any { text.contains(it) }
 }
+
+private fun yearForSort(title: Title): Int = title.year?.toIntOrNull()
+    ?: Regex("\\b(?:19|20)\\d{2}\\b").find(title.name)?.value?.toIntOrNull()
+    ?: 0

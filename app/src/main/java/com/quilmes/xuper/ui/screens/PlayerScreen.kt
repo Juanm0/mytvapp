@@ -95,6 +95,8 @@ fun PlayerScreen(
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             when (event.keyCode) {
                                 KeyEvent.KEYCODE_DPAD_UP -> {
+                                    // Esta tecla siempre despeja: nunca debe volver a mostrar el overlay.
+                                    showName = false
                                     hideController()
                                     return true
                                 }
