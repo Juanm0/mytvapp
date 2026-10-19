@@ -17,5 +17,6 @@ interface ContentRepository {
     val loading: StateFlow<Boolean>
     suspend fun refresh()
     fun find(id: String): Title?
+    suspend fun markUnavailable(id: String)
     fun search(query: String, limit: Int = 120): List<Title>
 }

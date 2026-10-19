@@ -88,7 +88,11 @@ class MainActivity : ComponentActivity() {
                         val id = entry.arguments?.getString("titleId").orEmpty()
                         val title = remember(id) { repository.find(id) }
                         if (title != null) {
-                            PlayerScreen(name = title.name, streamUrl = title.streamUrl)
+                            PlayerScreen(
+                                name = title.name,
+                                streamUrl = title.streamUrl,
+                                onPlaybackError = { lifecycleScope.launch { repository.markUnavailable(id) } },
+                            )
                         }
                     }
                 }

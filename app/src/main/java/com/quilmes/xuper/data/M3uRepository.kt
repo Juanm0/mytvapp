@@ -12,6 +12,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Una lista M3U a mostrar en la app.
@@ -56,6 +57,9 @@ class M3uRepository(
 
     private val lock = Any()
     private val entriesBySource = HashMap<Int, List<Entry>>()
+    private val unavailableUrls = ConcurrentHashMap.newKeySet<String>().apply {
+        addAll(readUnavailableUrls())
+    }
     @Volatile private var byId: Map<String, Title> = emptyMap()
     @Volatile private var searchIndex: List<Pair<String, Title>> = emptyList()
 
@@ -88,6 +92,37 @@ class M3uRepository(
     }
 
     override fun find(id: String): Title? = byId[id]
+
+    /** Oculta del catálogo los streams que ExoPlayer confirma que fallan. */
+    override suspend fun markUnavailable(id: String) {
+        withContext(Dispatchers.IO) {
+            val sourceIndex = sources.indices.firstOrNull { id.startsWith("s$it-") } ?: return@withContext
+            synchronized(lock) {
+                val current = entriesBySource[sourceIndex] ?: readCache(sourceIndex) ?: return@synchronized
+                val failed = current.firstOrNull { it.title.id == id } ?: return@synchronized
+                unavailableUrls.add(failed.title.streamUrl)
+                writeUnavailableUrls()
+                val updated = current.filterNot { it.title.id == id }
+                if (updated.size != current.size) {
+                    entriesBySource[sourceIndex] = updated
+                    writeCache(sourceIndex, updated)
+                    val ids = HashMap<String, Title>()
+                    val index = ArrayList<Pair<String, Title>>()
+                    for (list in entriesBySource.values) {
+                        for (entry in list) {
+                            ids[entry.title.id] = entry.title
+                            index.add(normalize(entry.title.name) to entry.title)
+                        }
+                    }
+                    byId = ids
+                    searchIndex = index
+                    _sections.value = sources.indices.mapNotNull { n ->
+                        entriesBySource[n]?.let { buildSection(n, sources[n], it) }
+                    }
+                }
+            }
+        }
+    }
 
     override fun search(query: String, limit: Int): List<Title> {
         val tokens = normalize(query).split(' ').filter { it.isNotBlank() }
@@ -177,7 +212,7 @@ class M3uRepository(
                 continue
             } else {
                 val a = attrs
-                if (a != null && name.isNotBlank() && isPlayable(line)) {
+                if (a != null && name.isNotBlank() && isPlayable(line) && line !in unavailableUrls) {
                     val group = a["group-title"]?.split(";")?.firstOrNull()?.trim()
                         .takeUnless { it.isNullOrBlank() } ?: "Otros"
                     result.add(
@@ -193,14 +228,28 @@ class M3uRepository(
         return result
     }
 
-    private fun makeTitle(id: String, name: String, logo: String, url: String, group: String) = Title(
-        id = id,
-        name = name,
-        description = "En vivo · $group",
-        posterUrl = logo,
-        streamUrl = url,
-        isLive = true,
-    )
+    private fun makeTitle(id: String, name: String, logo: String, url: String, group: String): Title {
+        val isVod = isVideoOnDemand(name, group, url)
+        return Title(
+            id = id,
+            name = name,
+            description = if (isVod) "Película o serie · $group" else "En vivo · $group",
+            posterUrl = logo,
+            streamUrl = url,
+            isLive = !isVod,
+        )
+    }
+
+    private fun isVideoOnDemand(name: String, group: String, url: String): Boolean {
+        val metadata = normalize("$name $group $url")
+        val vodTerms = listOf(
+            "movie", "movies", "pelicula", "peliculas", "film", "films",
+            "series", "serie", "season", "episode", "episodio", "vod"
+        )
+        if (vodTerms.any { metadata.contains(it) }) return true
+        val path = runCatching { URL(url).path.lowercase() }.getOrDefault("")
+        return listOf(".mp4", ".mkv", ".avi", ".mov", ".webm").any { path.endsWith(it) }
+    }
 
     private fun isPlayable(url: String): Boolean {
         val u = url.lowercase()
@@ -248,9 +297,22 @@ class M3uRepository(
             lines.mapNotNull { l ->
                 val p = l.split('\t')
                 if (p.size < 5) null else Entry(p[0], makeTitle(p[1], p[2], p[3], p[4], p[0]))
-            }.toList()
+            }.filterNot { it.title.streamUrl in unavailableUrls }.toList()
         }.takeIf { it.isNotEmpty() }
     }.getOrNull()
+
+    private fun unavailableFile() = File(cacheDir, "unavailable_streams.txt")
+
+    private fun readUnavailableUrls(): List<String> = runCatching {
+        val file = unavailableFile()
+        if (file.exists()) file.readLines().filter { it.isNotBlank() } else emptyList()
+    }.getOrDefault(emptyList())
+
+    private fun writeUnavailableUrls() {
+        runCatching {
+            unavailableFile().writeText(unavailableUrls.joinToString("\n"), Charsets.UTF_8)
+        }
+    }
 
     // ---------------------------------------------------------------- varios
 

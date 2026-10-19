@@ -31,14 +31,13 @@ import androidx.tv.material3.Text
 import kotlinx.coroutines.delay
 
 /**
- * Reproductor de pantalla completa con controles (pausa, +10 s / -10 s, barra
- * de progreso). Con el control remoto: OK muestra/oculta los controles, las
- * flechas se mueven entre botones, y las teclas multimedia funcionan directo.
+ * Reproductor de pantalla completa con controles persistentes (pausa, ±10 s y
+ * barra de progreso). Los controles no se ocultan automáticamente.
  * En canales en vivo sin buffer de retroceso la barra aparece bloqueada: es normal.
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(name: String, streamUrl: String) {
+fun PlayerScreen(name: String, streamUrl: String, onPlaybackError: () -> Unit = {}) {
     val context = LocalContext.current
     var error by remember { mutableStateOf<String?>(null) }
     var showName by remember { mutableStateOf(true) }
@@ -67,7 +66,8 @@ fun PlayerScreen(name: String, streamUrl: String) {
     DisposableEffect(Unit) {
         val listener = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
-                error = "Este canal no está disponible (${e.errorCodeName}). Probá con otro."
+                error = "Este contenido no está disponible (${e.errorCodeName}). Se va a ocultar del catálogo."
+                onPlaybackError()
             }
         }
         exoPlayer.addListener(listener)
@@ -84,7 +84,10 @@ fun PlayerScreen(name: String, streamUrl: String) {
                 PlayerView(context).apply {
                     player = exoPlayer
                     useController = true
-                    controllerShowTimeoutMs = 4000
+                    // Los controles quedan visibles permanentemente: no desaparecen solos
+                    // y no hace falta acertar una tecla para volver a mostrarlos.
+                    controllerShowTimeoutMs = 0
+                    controllerHideOnTouch = false
                     keepScreenOn = true
                     isFocusable = true
                     isFocusableInTouchMode = true

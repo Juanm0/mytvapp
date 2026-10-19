@@ -1,106 +1,78 @@
 # Xuper Quilmes TV — app propia para Android TV
 
-App nativa para Android TV (estilo Netflix: barra lateral + filas de canales navegables con el
-control remoto), tema azul, logo del gato con anteojos. Sin backend ni licencias de terceros:
-lee listas IPTV en formato M3U.
+App nativa para Android TV hecha con Kotlin, Jetpack Compose for TV y Media3/ExoPlayer. Interfaz estilo streaming con barra lateral fija, navegación con control remoto y listas IPTV M3U.
+
+## Secciones actuales
+
+- **Buscar**: busca en los catálogos cargados.
+- **TV EN VIVO**: canales detectados como transmisiones en vivo.
+- **PELÍCULAS**: elementos VOD detectados por categoría, nombre o URL en las listas M3U.
+- **ANIMACIÓN**: canales o títulos cuyo nombre/metadatos indican anime, dibujos, infantil o animación.
+- **DESCUBRIR**: cuadrícula de películas y series VOD encontradas. Si las fuentes actuales solo traen canales en vivo, la sección muestra un mensaje explicativo en vez de inventar contenido.
+
+La navegación lateral ya no crea una entrada por cada lista M3U. Las listas configuradas se combinan en las secciones anteriores.
 
 ## Stack
+
 - Kotlin + Jetpack Compose for TV (`androidx.tv:tv-material` 1.0.0)
-- Media3 / ExoPlayer (HLS, DASH, mp4) con controles de reproductor
-- Coil (logos), Navigation Compose (Principal → Player)
+- Media3 / ExoPlayer (HLS, DASH y MP4)
+- Coil para logos e imágenes
+- Navigation Compose
 - Gradle Kotlin DSL, AGP 8.5.2, Kotlin 1.9.24, compileSdk 34, minSdk 24
 
-## Cómo se compila (SIN Android Studio)
-El repo tiene `.github/workflows/build-apk.yml`. Cada `push` a `main` compila en GitHub Actions:
-Actions → último "Build APK" → Artifacts → `XuperQuilmesTV-apk` → instalar el `.apk` en la TV.
-- El APK es **release** (más rápido que debug) firmado con `app/xuper.keystore` (clave fija):
-  cada APK nuevo se instala **encima** del anterior sin desinstalar.
-- Si el build falla: copiar el log rojo de Actions y pegárselo a la IA.
+## Cómo se compila (sin Android Studio)
+
+El workflow `.github/workflows/build-apk.yml` compila el proyecto en GitHub Actions cuando hay un `push` a `main`/`master` o se ejecuta manualmente:
+
+1. Abrir la pestaña **Actions** del repositorio.
+2. Entrar al último workflow **Build APK**.
+3. Descargar el artifact **XuperQuilmesTV-apk**.
+4. Instalar el APK en la Android TV.
+
+El proyecto conserva `app/xuper.keystore` para firmar actualizaciones con la misma clave. No compartas ese archivo ni la contraseña públicamente.
 
 ## Estructura
-```
+
+```text
 app/src/main/java/com/quilmes/xuper/
-  MainActivity.kt          -> lista de fuentes (buildRepository) + navegación main/player
-  data/Models.kt           -> Title, Category, Section
-  data/ContentRepository.kt-> interfaz (sections, loading, refresh, find, search)
-  data/M3uRepository.kt    -> descarga/parsea M3U, caché en disco, búsqueda
-  ui/theme/Theme.kt        -> colores + LocalContentColor (evita texto oscuro sobre fondo oscuro)
-  ui/components/           -> PosterCard, ContentRow, SideBar, SkeletonRows
-  ui/screens/              -> MainScreen (barra lateral), HomeScreen, CatalogScreen, SearchScreen, PlayerScreen
+  MainActivity.kt             -> fuentes M3U, repositorio y navegación principal/reproductor
+  data/Models.kt              -> Title, Category, Section
+  data/ContentRepository.kt   -> interfaz de datos
+  data/M3uRepository.kt       -> descarga y análisis M3U, caché y streams fallidos
+  ui/components/              -> tarjetas, filas, barra lateral y skeletons
+  ui/screens/MainScreen.kt    -> barra lateral y navegación fija
+  ui/screens/LibraryScreen.kt -> TV en vivo, películas, animación y descubrir
+  ui/screens/SearchScreen.kt  -> buscador
+  ui/screens/PlayerScreen.kt  -> reproducción a pantalla completa
 ```
 
-## Cómo funciona la carga rápida
-1. `MainActivity` llama `repository.refresh()` apenas arranca.
-2. `refresh()` primero lee el **caché del disco** (`filesDir/catalog_N.tsv`) → la app muestra todo al instante
-   desde el 2º arranque en adelante.
-3. En paralelo baja las listas; cada una se publica apenas termina (no espera a la más lenta) y se guarda en el caché.
-4. Mientras no hay datos se ven filas "fantasma" (`SkeletonRows`), no un cartel de "Cargando".
-5. La UI solo observa `repository.sections` (StateFlow).
+## Carga y caché
 
-## Agregar / cambiar listas
-Editar `buildRepository()` en `MainActivity.kt`: cada `M3uSource(name, url, icon, homeRows, priorityGroups)`
-es un ítem de la barra lateral. Se filtran links de YouTube/Twitch (ExoPlayer no los reproduce).
+- Al arrancar se lee el caché local y luego se actualizan las listas en segundo plano.
+- Cada lista se publica cuando termina de descargarse y analizarse.
+- Los canales que fallan durante la reproducción se eliminan del catálogo y del caché.
+- Sus URLs se guardan en `unavailable_streams.txt`, por lo que no vuelven a mostrarse en siguientes arranques aunque sigan presentes en la lista original.
+- Los enlaces de YouTube y Twitch se filtran porque ExoPlayer no los reproduce directamente.
 
-## Controles del reproductor
-OK/Enter muestra los controles (pausa, ±10 s, barra). En canales en vivo sin buffer de retroceso la
-barra de progreso aparece bloqueada: es normal. Atrás vuelve a la lista.
+**Importante sobre la detección de fallos:** la app no hace miles de conexiones de prueba a cada canal al iniciar, porque eso ralentizaría mucho la carga y algunos proveedores rechazan solicitudes de comprobación aunque el video sí reproduzca. Un stream se marca como no disponible cuando ExoPlayer informa un error real durante el intento de reproducción. La detección no puede garantizar que un canal vaya a funcionar en todas las redes o regiones.
 
-## Pendiente / ideas
-- [ ] Favoritos y "seguir viendo" (guardar en disco)
-- [ ] Filtros dentro de una lista (chips por categoría/país)
-- [ ] Reintentar/saltar al siguiente canal cuando uno está caído; ocultar canales caídos
-- [ ] Guía de programación (EPG: las listas traen `x-tvg-url`)
-- [ ] Soporte Xtream Codes (nueva clase que implemente `ContentRepository`)
-- [ ] Activar R8 (`isMinifyEnabled = true` en release) si hace falta más velocidad — puede pedir reglas proguard
-- [ ] Optimizar recomposiciones / baseline profile si todavía va lento en TVs viejas
+## Reproductor
 
-> Importante: el código **nunca se pudo compilar en el entorno de la IA** (no hay Android SDK); se
-> valida solo con el build de GitHub Actions. Puede haber errores de compilación; arreglarlos con el log.
+- Los controles quedan visibles y no se ocultan automáticamente.
+- Los controles disponibles incluyen pausa y saltos de ±10 segundos; en streams en vivo la barra de búsqueda puede no funcionar si la transmisión no tiene buffer de retroceso.
+- Si ExoPlayer informa un error, el elemento se oculta del catálogo y queda registrado como no disponible.
+- Los subtítulos solo pueden seleccionarse si la fuente de video incluye pistas compatibles. La velocidad de reproducción y otras opciones avanzadas pueden ampliarse en futuras versiones.
 
----
+## Fuentes IPTV
 
-## PROMPT PARA LA PRÓXIMA IA (copiar y pegar al empezar el chat, junto con el zip del proyecto)
+Las fuentes se configuran en `buildRepository()` dentro de `MainActivity.kt`. La detección de VOD se basa en los metadatos de M3U, nombres de grupo y extensiones de URL comunes. No todas las listas M3U contienen películas o series; las listas de canales abiertos suelen ser solo televisión en vivo.
 
-```
-Vas a continuar el desarrollo de "Xuper Quilmes TV", una app propia de Android TV (Kotlin + Jetpack
-Compose for TV + Media3). Te adjunto el zip del proyecto: leé primero el README.md completo, que
-explica arquitectura, estado y pendientes.
+## Próximas mejoras posibles
 
-CONTEXTO DEL USUARIO
-- Habla español rioplatense (Argentina); respondé siempre en español, directo y sin vueltas.
-- NO tiene Android Studio ni PC de desarrollo. Edita los archivos subiéndolos/editándolos desde la
-  web de GitHub y descarga el APK desde GitHub Actions (workflow .github/workflows/build-apk.yml,
-  artifact "XuperQuilmesTV-apk"). Lo prueba en una Android TV real.
-- No le gustan las preguntas aclaratorias innecesarias: si ya te dio la información, avanzá con la tarea.
-- Cuando algo falla me pega el log de error de Actions o describe qué ve en la TV: arreglalo y
-  devolvé los archivos COMPLETOS modificados (no fragmentos sueltos) y/o un zip actualizado,
-  indicando exactamente cuáles archivos cambiaron para que pueda reemplazarlos en GitHub.
-- Las listas IPTV que usa son públicas (iptv-org y Free-TV) y sirven de contenido de prueba.
+- Selector de velocidad de reproducción y selector de subtítulos más visibles.
+- Favoritos y continuar viendo.
+- Guía de programación (EPG) si la fuente la ofrece.
+- Integración con una fuente VOD autorizada o con Xtream Codes.
+- Reintentar streams fallidos o permitir restablecer manualmente la lista de streams marcados como no disponibles.
 
-ESTADO ACTUAL (resumen)
-- Barra lateral expandible estilo Netflix (Buscar, Inicio y una entrada por lista M3U), buscador que
-  filtra todas las listas sin tildes, filas de canales con logo sobre fondo claro y nombre en franja oscura.
-- Arranque rápido: caché en disco (TSV) + descarga en paralelo publicando cada lista al terminar +
-  filas "skeleton" en vez de "Cargando".
-- Reproductor ExoPlayer con controles (pausa, ±10 s), redirecciones http<->https, aviso si el canal está caído.
-- Build release firmado con app/xuper.keystore (clave fija, contraseña en build.gradle.kts).
-
-REGLAS TÉCNICAS / TRAMPAS CONOCIDAS
-- El código NO se pudo compilar localmente nunca: revisá cada import y cada firma de API antes de
-  entregar. Usá solo APIs estables de tv-material 1.0.0 (el Card NO tiene parámetro onFocus; el foco
-  se maneja con CardDefaults.scale/border). Evitá APIs experimentales.
-- tv-material: el color de texto por defecto puede salir oscuro; el tema ya provee LocalContentColor y
-  los Text importantes llevan color explícito. No dejes Text sin color sobre fondo oscuro.
-- Media3 1.3.1: las APIs de DefaultHttpDataSource/DefaultMediaSourceFactory son @UnstableApi → usar
-  @OptIn(UnstableApi::class).
-- ExoPlayer no reproduce links de YouTube/Twitch; ya se filtran en M3uRepository.
-- Los ids de Title son únicos por lista ("s{n}-{contador}"); se usan como key en LazyRow/LazyColumn
-  y como argumento de navegación: no pueden repetirse ni llevar "/".
-- Para fuentes nuevas implementá ContentRepository (sections, loading, refresh, find, search) y
-  cambiá solo buildRepository() en MainActivity.kt.
-- Minimizá el trabajo en el hilo principal (red y parseo van en Dispatchers.IO).
-
-PRÓXIMOS PASOS SUGERIDOS: ver "Pendiente / ideas" del README (favoritos, filtros por categoría,
-saltar canales caídos, EPG, Xtream Codes). Empezá preguntándome qué se ve mal o qué falla al probar
-la última versión, o seguí con el primer pendiente si no hay errores.
-```
+> El entorno de edición no incluye Android SDK ni wrapper de Gradle, por lo que la compilación final debe verificarse en GitHub Actions. Si falla, revisar el log de compilación de Actions.
