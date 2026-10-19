@@ -15,7 +15,7 @@ val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.quilmes.xuper"
-    compileSdk = 37
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.quilmes.xuper"
@@ -85,7 +85,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // Motor nativo adblock-rust de Brave, envuelto para Android/JNI y WebView.
-    implementation("io.github.mlm-games:adblock:0.1.3")
+    implementation("io.github.mlm-games:adblock:0.1.2")
 
     // Parseo HTML de páginas públicas; no ejecuta JavaScript ni resuelve players ofuscados.
     implementation("org.jsoup:jsoup:1.18.3")

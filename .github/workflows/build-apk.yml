@@ -16,11 +16,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      # Instalar el SDK requerido por la dependencia adblock (minCompileSdk 37).
-      - name: Instalar Android SDK 37 y aceptar licencias
+      # Instalar Android SDK 36, compatible con AGP 8.10.1.
+      - name: Instalar Android SDK 36 y aceptar licencias
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;37.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:

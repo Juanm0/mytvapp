@@ -22,7 +22,7 @@ Los proveedores cambian su estructura y pueden requerir JavaScript, cookies, acc
 
 ## Protección publicitaria basada en Brave
 
-`ui/screens/XuperBraveAdblock.kt` integra `io.github.mlm-games:adblock:0.1.3`, un wrapper JNI para el motor Rust `adblock-rust` que usa Brave. Intercepta solicitudes del WebView con reglas de red, inyecta CSS/scriptlets cosméticos cuando hay recursos disponibles y conserva `XuperWebRequestFilter.kt` como respaldo.
+`ui/screens/XuperBraveAdblock.kt` integra `io.github.mlm-games:adblock:0.1.2`, un wrapper JNI para el motor Rust `adblock-rust` que usa Brave. Intercepta solicitudes del WebView con reglas de red, inyecta CSS/scriptlets cosméticos cuando hay recursos disponibles y conserva `XuperWebRequestFilter.kt` como respaldo.
 
 En segundo plano intenta descargar y cachear EasyList, EasyPrivacy y AdGuard Annoyances; las reglas almacenadas se reutilizan cuando no hay conexión. La interfaz no espera estas descargas. El motor usa licencia MPL-2.0; ver https://github.com/brave/adblock-rust y https://github.com/mlm-games/adblock-rs-kt-wrapper.
 
@@ -50,7 +50,7 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 
 ## Compilar
 
-Requisitos: Android Studio, **JDK 21**, Android SDK Platform **37** y Gradle **8.11.1 o superior**. `compileSdk = 37` es necesario porque `io.github.mlm-games:adblock:0.1.3` declara ese nivel mínimo; `targetSdk = 34` y `minSdk = 26` se mantienen sin cambios. El workflow de GitHub Actions configura explícitamente JDK 21 y Gradle 8.11.1 (AGP 8.10.1 rechaza Gradle 8.7). La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
+Requisitos: Android Studio, **JDK 21**, Android SDK Platform **36** y Gradle **8.11.1 o superior**. `compileSdk = 36` se usa junto con `io.github.mlm-games:adblock:0.1.2` para evitar la exigencia de API 37 introducida por la versión 0.1.3, que no está disponible en los repositorios SDK del runner actual; `targetSdk = 34` y `minSdk = 26` se mantienen sin cambios. El workflow de GitHub Actions configura explícitamente JDK 21 y Gradle 8.11.1 (AGP 8.10.1 rechaza Gradle 8.7). La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
 
 El ZIP de trabajo contiene configuración local y una clave de firma personal. No publicar ni compartir públicamente esos archivos. Si se publica el proyecto, quitar `local.properties`, reemplazar la clave y sus contraseñas y no subir secretos al control de versiones.
 
