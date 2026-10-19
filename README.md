@@ -27,3 +27,7 @@ Los proveedores cambian su estructura y pueden requerir JavaScript, cookies, acc
 El motor intercepta solicitudes del WebView, carga EasyList, EasyPrivacy y AdGuard Annoyances en segundo plano, cachea las listas y aplica recursos cosméticos CSS/scriptlets cuando están disponibles. `XuperWebRequestFilter.kt` queda como respaldo. No convierte WebView en Chromium/Brave completo y no garantiza bloquear anuncios integrados directamente en un vídeo o servidos desde el mismo origen del contenido.
 
 La librería wrapper está documentada en https://github.com/mlm-games/adblock-rs-kt-wrapper y el motor en https://github.com/brave/adblock-rust.
+
+### Ajustes de compilación (octubre de 2026)
+- `app/build.gradle.kts` usa `kotlin.compilerOptions` con `JvmTarget.JVM_21`, requerido por Kotlin Gradle Plugin 2.4.x; se eliminó el uso obsoleto de `kotlinOptions.jvmTarget`.
+- GitHub Actions usa Gradle 8.14.4 para evitar la advertencia de compatibilidad de Gradle 8.11.1 con futuras versiones de Kotlin.
