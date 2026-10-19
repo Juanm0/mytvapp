@@ -23,6 +23,7 @@ import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.TmdbCatalogService
+import com.quilmes.xuper.data.TmdbExternalIdResolver
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
@@ -302,16 +303,24 @@ class MainActivity : ComponentActivity() {
                         if (title != null) DetailScreen(
                             title = title,
                             catalogService = tmdbCatalogService,
-                            onPlay = { playableId ->
-                                val frameXUrl = WebSourceRegistry.frameXEmbedUrl(playableId)
-                                if (frameXUrl != null) {
-                                    val encodedUrl = Base64.encodeToString(
-                                        frameXUrl.toByteArray(StandardCharsets.UTF_8),
-                                        Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                                    )
-                                    navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
+                            onPlay = { requestedId ->
+                                val usePlayLatinsrc = requestedId.startsWith("playlatinsrc::")
+                                val playableId = requestedId.removePrefix("playlatinsrc::")
+                                if (usePlayLatinsrc) {
+                                    lifecycleScope.launch {
+                                        val imdbId = TmdbExternalIdResolver(cacheDir).resolve(playableId)
+                                        val url = imdbId?.let { WebSourceRegistry.playLatinsrcUrl(it, playableId, "castellano") }
+                                        if (url != null) {
+                                            val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                            withContext(Dispatchers.Main) { navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl") }
+                                        }
+                                    }
                                 } else {
-                                    navController.navigate("player/$playableId")
+                                    val frameXUrl = WebSourceRegistry.frameXEmbedUrl(playableId)
+                                    if (frameXUrl != null) {
+                                        val encodedUrl = Base64.encodeToString(frameXUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                        navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
+                                    } else navController.navigate("player/$playableId")
                                 }
                             },
                             onOpenTitle = { relatedTitle ->

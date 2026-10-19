@@ -1,8 +1,7 @@
 package com.quilmes.xuper.data
 
-/** URL builders for configured web providers. FrameXTV remains the default provider. */
+/** Constructores de páginas de reproducción. FrameXTV sigue siendo el predeterminado. */
 object WebSourceRegistry {
-    /** TMDB IDs stay canonical for FrameXTV; episodes use the series ID + season + episode. */
     fun frameXEmbedUrl(catalogId: String): String? {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         if (episode != null) {
@@ -13,27 +12,18 @@ object WebSourceRegistry {
         return "https://framextv.xyz/embed/${title.groupValues[1]}?autoplay=1&muted=0"
     }
 
-    /** Builds a PLAYLATINSRC URL only after a real IMDb ID has been resolved. */
-    fun playLatinSrcMovieUrl(imdbId: String, language: String? = null): String? {
-        if (!imdbId.matches(Regex("tt\\d+"))) return null
-        val suffix = languageQuery(language) ?: ""
-        return "https://playlatinsrc.co/movie/$imdbId$suffix"
-    }
-
-    fun playLatinSrcSeriesUrl(imdbId: String, language: String? = null): String? {
-        if (!imdbId.matches(Regex("tt\\d+"))) return null
-        val suffix = languageQuery(language) ?: ""
-        return "https://playlatinsrc.co/serial/$imdbId$suffix"
-    }
-
-    fun playLatinSrcEpisodeUrl(imdbId: String, season: Int, episode: Int, language: String? = null): String? {
-        if (!imdbId.matches(Regex("tt\\d+")) || season < 0 || episode < 1) return null
-        val suffix = languageQuery(language) ?: ""
-        return "https://playlatinsrc.co/custom/serial/$imdbId/$season/$episode$suffix"
-    }
-
-    private fun languageQuery(language: String?): String? = when (language?.lowercase()) {
-        "castellano", "latino", "subtitulado" -> "?lang=$language"
-        else -> null
+    /** PLAYLATINSRC requires IMDb IDs; callers must resolve the ID through TMDB first. */
+    fun playLatinsrcUrl(imdbId: String, catalogId: String, language: String = "castellano"): String? {
+        if (!Regex("^tt\\d{5,12}$").matches(imdbId)) return null
+        val episode = Regex("^tmdb-tv-\\d+\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        val base = if (episode != null) {
+            val (season, number) = episode.destructured
+            "https://playlatinsrc.co/serial/$imdbId/$season/$number"
+        } else if (catalogId.startsWith("tmdb-tv-")) {
+            "https://playlatinsrc.co/serial/$imdbId"
+        } else {
+            "https://playlatinsrc.co/movie/$imdbId"
+        }
+        return "$base?lang=${java.net.URLEncoder.encode(language, "UTF-8")}" 
     }
 }

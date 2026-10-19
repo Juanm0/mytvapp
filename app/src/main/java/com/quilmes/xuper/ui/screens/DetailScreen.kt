@@ -113,7 +113,8 @@ fun DetailScreen(
                             val frameXPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
-                            Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  Reproducir") }
+                            Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  FrameXTV") }
+                            Button(onClick = { onPlay("playlatinsrc::$frameXPlaybackId") }) { Text("▷  Alternativo") }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
                                 if (favorites) ids.remove(title.id) else ids.add(title.id)

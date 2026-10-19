@@ -106,7 +106,7 @@ fun PlayerScreen(
 ) {
     // Los embeds FrameXTV son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://framextv.xyz/embed/")) {
+    if (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://playlatinsrc.co/")) {
         WebEmbedPlayer(url = streamUrl, onExit = onExit)
         return
     }
@@ -191,7 +191,7 @@ private fun NativePlayerScreen(
                 // Preferir subtítulos en español automáticamente cuando el stream los ofrece.
                 // Media3 conserva esta preferencia al cambiar de contenido dentro del reproductor.
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
-                    .setPreferredTextLanguage("es")
+                    .setPreferredTextLanguages(listOf("es", "es-419", "es-ES", "spa"))
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
             }
@@ -208,7 +208,10 @@ private fun NativePlayerScreen(
             }
         }.build()
         attemptedUrls = attemptedUrls + url
-        exoPlayer.setMediaItem(item)
+        val resumeKey = currentTitleId.ifBlank { streamUrl }
+        val savedPosition = context.getSharedPreferences("xuper-playback", android.content.Context.MODE_PRIVATE)
+            .getLong(resumeKey, 0L).coerceAtLeast(0L)
+        exoPlayer.setMediaItem(item, savedPosition)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         error = null
@@ -259,6 +262,11 @@ private fun NativePlayerScreen(
         while (true) {
             position = exoPlayer.currentPosition.coerceAtLeast(0L)
             duration = exoPlayer.duration.takeIf { it > 0 } ?: 0L
+            if (currentTitleId.isNotBlank() && duration > 0L) {
+                val savePosition = if (position >= duration - 15_000L) 0L else position
+                context.getSharedPreferences("xuper-playback", android.content.Context.MODE_PRIVATE)
+                    .edit().putLong(currentTitleId, savePosition).apply()
+            }
             isPlaying = exoPlayer.isPlaying
             showNextEpisode = nextEpisode != null && duration > 0 && position >= duration - 60_000L
             delay(500)
