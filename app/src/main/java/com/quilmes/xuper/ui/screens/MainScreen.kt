@@ -1,5 +1,7 @@
 package com.quilmes.xuper.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -17,9 +19,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import androidx.tv.material3.Button
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.components.NavItem
@@ -64,6 +68,16 @@ fun MainScreen(repository: ContentRepository, catalogService: TmdbCatalogService
 
 @Composable
 private fun ProfileScreen() {
+    val context = LocalContext.current
+    fun openStremio(uri: String) {
+        runCatching {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.onFailure {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://web.stremio.com/")))
+            }
+        }
+    }
     Column(
         modifier = Modifier.fillMaxSize().padding(start = 52.dp, end = 48.dp, top = 52.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -84,5 +98,22 @@ private fun ProfileScreen() {
         }
         Text("Preferencias", color = XuperAccentBright, fontSize = 20.sp)
         Text("La app conserva tus favoritos y el historial local en este dispositivo.", color = XuperTextSecondary, fontSize = 16.sp)
+        Text("Stremio · apaño temporal", color = XuperAccentBright, fontSize = 24.sp)
+        Text(
+            "Abrí Stremio para reproducir contenido de los addons instalados. El addon oficial Public Domain Movies ofrece películas de dominio público; está basado en torrents, así que requiere Stremio con soporte P2P. La integración de streams de addons directamente en Xuper queda pendiente.",
+            color = XuperTextSecondary,
+            fontSize = 16.sp,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { openStremio("stremio://") }) {
+                Text("Abrir Stremio", fontSize = 16.sp)
+            }
+            Button(onClick = { openStremio("stremio://caching.stremio.net/publicdomainmovies.now.sh/manifest.json") }) {
+                Text("Instalar addon de películas", fontSize = 16.sp)
+            }
+            Button(onClick = { openStremio("https://web.stremio.com/") }) {
+                Text("Stremio Web", fontSize = 16.sp)
+            }
+        }
     }
 }

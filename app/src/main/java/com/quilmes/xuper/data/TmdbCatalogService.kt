@@ -172,6 +172,18 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
+    /** Resuelve el IMDb ID que necesita el protocolo de streams de Stremio. */
+    suspend fun getImdbId(titleId: String): String? = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext null
+        val parsed = parseTmdbId(titleId) ?: return@withContext null
+        val endpoint = if (parsed.first == "tv") "tv" else "movie"
+        runCatching {
+            request("$endpoint/${parsed.second}/external_ids")
+                .optString("imdb_id")
+                .takeIf { it.matches(Regex("tt\\d{5,12}")) }
+        }.getOrNull()
+    }
+
     private fun parseTmdbId(id: String): Pair<String, Long>? {
         val match = Regex("^tmdb-(tv|movie)-(\\d+)$").matchEntire(id) ?: return null
         return match.groupValues[1] to (match.groupValues[2].toLongOrNull() ?: return null)

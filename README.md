@@ -213,6 +213,8 @@ Antes de cambiar, revisá el código real. Después de cada iteración actualiz�
 - Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
 - El panel se oculta tras 5 segundos sin interacción.
 
-## Stremio
+## Stremio (apaño temporal)
 
-No se incorporó un addon de Stremio de terceros preconfigurado. Para que la app obtenga streams de un addon real, hay que configurar su URL de manifiesto y mapear cada película/episodio a un ID externo compatible (por ejemplo IMDb). Los addons de metadatos no entregan video por sí solos y no es confiable prometer que un addon aleatorio tenga fuentes disponibles. Las URLs DASH/Widevine protegidas siguen requiriendo una licencia autorizada.
+En Perfil hay accesos para abrir Stremio, intentar instalar el addon oficial **Public Domain Movies** y abrir Stremio Web. El addon de películas ofrece contenido de dominio público, pero sus resultados están basados en torrents: se reproducen desde Stremio si el dispositivo tiene la app y soporte P2P. Esto es una apertura externa; todavía no es una integración de streams de addons dentro del reproductor Xuper. La integración nativa requiere consultar `/manifest.json`, catálogos y `/stream/{type}/{id}.json`, y solo pasar a Media3 enlaces HTTP(S) directos compatibles. Los enlaces magnet/torrent no los reproduce ExoPlayer por sí solo. Las URLs DASH/Widevine protegidas siguen requiriendo una licencia autorizada.
+
+Referencia del protocolo: https://stremio.github.io/stremio-addon-sdk/protocol.html

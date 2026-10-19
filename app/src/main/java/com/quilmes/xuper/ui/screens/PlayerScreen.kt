@@ -33,7 +33,6 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.nativeKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -98,6 +97,8 @@ fun PlayerScreen(
     // como en cualquier reproductor de streaming grande).
     var seekFlash by remember { mutableStateOf<String?>(null) }
     var seekFlashToken by remember { mutableStateOf(0) }
+    var repeatedKeyCode by remember { mutableStateOf(0) }
+    var repeatedKeyCount by remember { mutableStateOf(0) }
 
     // Fila de botones de abajo: en vez de depender de que izquierda/derecha muevan el foco
     // entre botones (eso es lo que quedaba "pegado" — la flecha derecha quedaba reservada
@@ -285,10 +286,20 @@ fun PlayerScreen(
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusable()
             .onPreviewKeyEvent { event ->
+                val keyCode = event.key.keyCode.toInt()
+                if (event.type == KeyEventType.KeyUp) {
+                    if (keyCode == repeatedKeyCode) {
+                        repeatedKeyCode = 0
+                        repeatedKeyCount = 0
+                    }
+                    return@onPreviewKeyEvent false
+                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                val native = event.nativeKeyEvent
-                val keyCode = native.keyCode
-                val repeat = native.repeatCount
+                if (keyCode == repeatedKeyCode) repeatedKeyCount++ else {
+                    repeatedKeyCode = keyCode
+                    repeatedKeyCount = 0
+                }
+                val repeat = repeatedKeyCount
                 when (keyCode) {
                     AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }

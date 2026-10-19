@@ -8,7 +8,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -26,6 +28,9 @@ import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.TmdbEpisode
 import com.quilmes.xuper.data.TmdbSeason
+import com.quilmes.xuper.data.StremioRepository
+import com.quilmes.xuper.data.StremioStream
+import kotlinx.coroutines.launch
 import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperBackground
 import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
@@ -37,9 +42,49 @@ fun DetailScreen(
     title: Title,
     catalogService: TmdbCatalogService,
     onPlay: (String) -> Unit,
+    onPlayStremio: (String, String) -> Unit = { _, _ -> },
     findPlayableEpisode: (String, Int, Int) -> Title? = { _, _, _ -> null },
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val stremioRepository = remember { StremioRepository() }
+    val addonPrefs = remember { context.getSharedPreferences("xuper-stremio", Context.MODE_PRIVATE) }
+    var addonManifest by remember { mutableStateOf(addonPrefs.getString("manifest", "https://caching.stremio.net/publicdomainmovies.now.sh/manifest.json").orEmpty()) }
+    var addonDraft by remember { mutableStateOf(addonManifest) }
+    var stremioStreams by remember { mutableStateOf<List<StremioStream>>(emptyList()) }
+    var stremioLoading by remember { mutableStateOf(false) }
+    var stremioMessage by remember { mutableStateOf("") }
+
+    fun searchStremio(type: String, videoIdSuffix: String = "", playbackName: String = title.name) {
+        scope.launch {
+            stremioLoading = true
+            stremioStreams = emptyList()
+            stremioMessage = "Buscando fuentes compatibles…"
+            try {
+                val imdbId = catalogService.getImdbId(title.id)
+                if (imdbId.isNullOrBlank()) {
+                    stremioMessage = "TMDB no devolvió un IMDb ID para este título."
+                } else {
+                    val id = imdbId + videoIdSuffix
+                    val addonUrls = addonManifest.split(',', ';').map { it.trim() }.filter { it.isNotBlank() }.distinct()
+                    val found = mutableListOf<StremioStream>()
+                    val failures = mutableListOf<String>()
+                    for (manifest in addonUrls) {
+                        runCatching { stremioRepository.getDirectStreams(manifest, type, id) }
+                            .onSuccess { found += it }
+                            .onFailure { failures += (it.message ?: "error") }
+                    }
+                    val streams = found.distinctBy { it.url }
+                    stremioStreams = streams
+                    stremioMessage = if (streams.isEmpty()) {
+                        "Ningún addon devolvió enlaces HTTP(S) directos compatibles. Puede ofrecer torrents, no tener este título o requerir configuración. " + failures.firstOrNull().orEmpty()
+                    } else "Fuentes directas encontradas: ${streams.size}"
+                }
+            } catch (e: Exception) {
+                stremioMessage = "No se pudo consultar el addon: ${e.message ?: "error de conexión"}"
+            } finally { stremioLoading = false }
+        }
+    }
     val prefs = remember { context.getSharedPreferences("xuper-library", Context.MODE_PRIVATE) }
     var favorites by remember(title.id) { mutableStateOf(prefs.getStringSet("favorites", emptySet())?.contains(title.id) == true) }
     var seasons by remember(title.id) { mutableStateOf<List<TmdbSeason>>(emptyList()) }
@@ -106,8 +151,15 @@ fun DetailScreen(
                         if (seasonEpisode != null) Text(seasonEpisode, color = XuperTextPrimary, fontSize = 16.sp)
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(onClick = { onPlay(title.id) }, enabled = title.streamUrl.isNotBlank()) {
-                                Text(if (title.streamUrl.isBlank()) "▶  Video no disponible" else "▶  Reproducir")
+                            if (title.streamUrl.isNotBlank()) {
+                                Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
+                            }
+                            if (title.contentKind == ContentKind.MOVIE || title.id.startsWith("tmdb-movie-")) {
+                                Button(onClick = { searchStremio("movie") }, enabled = !stremioLoading) {
+                                    Text(if (stremioLoading) "Buscando…" else "Buscar fuentes Stremio")
+                                }
+                            } else if (title.contentKind == ContentKind.SERIES || hasTmdbSeasons) {
+                                Text("Para series, elegí una temporada y buscá fuentes en el episodio.", color = XuperTextSecondary, fontSize = 12.sp)
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -119,6 +171,41 @@ fun DetailScreen(
                         if (title.year != null || title.rating != null || title.id.startsWith("tmdb-")) {
                             Text("Metadatos e imágenes: TMDB. Este producto no está respaldado ni certificado por TMDB.", color = XuperTextSecondary, fontSize = 10.sp)
                         }
+                    }
+                }
+            }
+        }
+        item {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Addons Stremio (URLs de manifest.json separadas por coma)", color = XuperTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    BasicTextField(
+                        value = addonDraft,
+                        onValueChange = { addonDraft = it },
+                        singleLine = true,
+                        textStyle = TextStyle(color = XuperTextPrimary, fontSize = 13.sp),
+                        modifier = Modifier.weight(1f).background(XuperSurfaceVariant, RoundedCornerShape(6.dp)).padding(10.dp),
+                        decorationBox = { inner -> if (addonDraft.isBlank()) Text("https://…/manifest.json, https://…/manifest.json", color = XuperTextSecondary); inner() },
+                    )
+                    Button(onClick = {
+                        val candidate = addonDraft.split(',', ';').map { it.trim() }.filter { it.isNotBlank() }.distinct()
+                        if (candidate.isNotEmpty() && candidate.all { it.startsWith("https://") || it.startsWith("http://") }) {
+                            addonManifest = candidate.joinToString(",")
+                            addonDraft = addonManifest
+                            addonPrefs.edit().putString("manifest", addonManifest).apply()
+                            stremioMessage = "${candidate.size} addon(s) guardado(s). La disponibilidad depende de las fuentes que ofrezcan."
+                            stremioStreams = emptyList()
+                        } else stremioMessage = "Ingresá una o más URLs HTTP(S) válidas de manifest.json, separadas por coma."
+                    }) { Text("Guardar addon") }
+                }
+                if (stremioMessage.isNotBlank()) Text(stremioMessage, color = XuperAccentBright, fontSize = 13.sp)
+                stremioStreams.forEach { stream ->
+                    Row(Modifier.fillMaxWidth().background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stream.displayName(), color = XuperTextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            stream.description?.takeIf { it.isNotBlank() }?.let { Text(it, color = XuperTextSecondary, fontSize = 12.sp, maxLines = 2) }
+                        }
+                        Button(onClick = { onPlayStremio("${title.name} · ${stream.displayName()}", stream.url.orEmpty()) }) { Text("▶ Reproducir") }
                     }
                 }
             }
@@ -168,11 +255,13 @@ fun DetailScreen(
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
                         if (playableEpisode != null) {
-                            Button(onClick = { onPlay(playableEpisode.id) }) {
-                                Text("▶  Reproducir episodio")
-                            }
-                        } else if (selectedEpisode == episode.number) {
-                            Text("Este episodio no tiene una fuente de video coincidente en las listas conectadas.", color = XuperAccentBright, fontSize = 12.sp)
+                            Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Reproducir episodio") }
+                        }
+                        Button(onClick = {
+                            searchStremio("series", ":${selectedSeason ?: 1}:${episode.number}", "${title.name} S${selectedSeason ?: 1}E${episode.number}")
+                        }, enabled = !stremioLoading) { Text("Buscar episodio en Stremio") }
+                        if (playableEpisode == null && selectedEpisode == episode.number) {
+                            Text("Sin fuente en las listas locales; probá buscar en el addon Stremio.", color = XuperAccentBright, fontSize = 12.sp)
                         }
                     }
                 }
