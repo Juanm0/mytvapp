@@ -2,6 +2,11 @@ package com.quilmes.xuper.ui.screens
 
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.ViewGroup
+import android.view.View
+import android.app.Activity
+import android.content.ContextWrapper
+import android.widget.FrameLayout
+import android.webkit.CookieManager
 import android.os.Build
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -18,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -109,6 +115,7 @@ fun PlayerScreen(
     // de forma explícita y predecible.
     val buttonCount = 4 // Reproducir/Pausar, Cambiar reproductor, Audio, Subtítulos
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
+    val rootFocusRequester = remember(streamUrl) { FocusRequester() }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
 
     val dataSourceFactory = remember {
@@ -161,6 +168,10 @@ fun PlayerScreen(
 
     LaunchedEffect(exoPlayer, streamUrl) {
         setUrl(streamUrl, streamHeaders)
+    }
+    LaunchedEffect(streamUrl) {
+        delay(100)
+        runCatching { rootFocusRequester.requestFocus() }
     }
     // El foco se reasigna al botón seleccionado cada vez que los controles aparecen (al abrir
     // o al reaparecer tras auto-ocultarse), así queda listo para navegar sin tocar dos veces.
@@ -262,7 +273,7 @@ fun PlayerScreen(
     }
 
     Box(
-        Modifier.fillMaxSize().background(Color.Black).focusable()
+        Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // CH+/CH- y las teclas físicas de medios (si el control remoto las tiene)
@@ -343,7 +354,7 @@ fun PlayerScreen(
                     }
                 }
                 Text(
-                    "◀  10 s        10 s  ▶        ▲▼  cambiar botón",
+                    "◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir",
                     color = Color(0x99FFFFFF),
                     fontSize = 11.sp,
                 )
@@ -396,40 +407,112 @@ private fun formatTime(ms: Long): String {
 }
 
 
-/** Web player for the IMDb embed source; ExoPlayer is reserved for direct media URLs. */
+/**
+ * Un embed es una página HTML, no un archivo de video: se renderiza en WebView.
+ * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
+ */
 @Composable
 private fun ImdbEmbedPlayer(url: String) {
-    AndroidView(
-        modifier = Modifier.fillMaxSize().background(Color.Black),
-        factory = { viewContext ->
-            WebView(viewContext).apply {
-                setBackgroundColor(android.graphics.Color.BLACK)
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.mediaPlaybackRequiresUserGesture = false
-                settings.javaScriptCanOpenWindowsAutomatically = false
-                settings.setSupportMultipleWindows(false)
-                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    settings.safeBrowsingEnabled = true
+    val context = LocalContext.current
+    var progress by remember(url) { mutableStateOf(0) }
+    var pageError by remember(url) { mutableStateOf<String?>(null) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    BackHandler(enabled = webViewRef?.canGoBack() == true) { webViewRef?.goBack() }
+
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext ->
+                val container = FrameLayout(viewContext).apply { setBackgroundColor(android.graphics.Color.BLACK) }
+                val webView = WebView(viewContext).apply {
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.setSupportMultipleWindows(false)
+                    settings.loadsImagesAutomatically = true
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    settings.userAgentString = settings.userAgentString + " XuperQuilmesTV/1.0"
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.safeBrowsingEnabled = true
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    webChromeClient = object : WebChromeClient() {
+                        private var fullscreenView: View? = null
+                        private var fullscreenCallback: CustomViewCallback? = null
+                        private var originalUi = 0
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            progress = newProgress
+                        }
+                        override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                            if (view == null || fullscreenView != null) { callback?.onCustomViewHidden(); return }
+                            val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+                            val decor = activity?.window?.decorView as? ViewGroup
+                            if (decor == null) { callback?.onCustomViewHidden(); return }
+                            fullscreenView = view
+                            fullscreenCallback = callback
+                            originalUi = decor.systemUiVisibility
+                            decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            decor.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        }
+                        override fun onHideCustomView() {
+                            val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
+                            val decor = activity?.window?.decorView as? ViewGroup
+                            fullscreenView?.let { decor?.removeView(it) }
+                            fullscreenView = null
+                            fullscreenCallback?.onCustomViewHidden()
+                            fullscreenCallback = null
+                            decor?.systemUiVisibility = originalUi
+                        }
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) { progress = 0; pageError = null }
+                        override fun onPageFinished(view: WebView?, pageUrl: String?) { progress = 100 }
+                        override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
+                            if (request?.isForMainFrame == true) pageError = "No se pudo cargar el reproductor web. Revisá la conexión o reintentá."
+                        }
+                        override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
+                            if (request?.isForMainFrame == true && (response?.statusCode ?: 200) >= 400) pageError = "El sitio respondió HTTP ${response?.statusCode}. Puede que el contenido no esté disponible."
+                        }
+                    }
+                    setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
+                    loadUrl(url)
+                    requestFocus()
                 }
-                isFocusable = true
-                isFocusableInTouchMode = true
-                webChromeClient = WebChromeClient()
-                webViewClient = WebViewClient()
-                loadUrl(url)
-                requestFocus()
+                webViewRef = webView
+                container.addView(webView)
+                container
+            },
+            update = { container ->
+                val webView = container.getChildAt(0) as? WebView
+                if (webView != null && webView.url != url && webView.tag != url) { webView.tag = url; webView.loadUrl(url) }
+            },
+            onRelease = { container ->
+                (container.getChildAt(0) as? WebView)?.let { it.stopLoading(); it.loadUrl("about:blank"); it.clearHistory(); it.removeAllViews(); it.destroy() }
+                webViewRef = null
+            },
+        )
+        if (progress < 100 && pageError == null) {
+            Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
+        }
+        if (pageError != null) {
+            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.78f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("No se pudo reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(pageError.orEmpty(), color = Color(0xFFD8E3EA), fontSize = 15.sp)
+                Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Button(onClick = { pageError = null; progress = 0; webViewRef?.reload() }) { Text("↻  Reintentar") }
+                    Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
+                }
             }
-        },
-        update = { webView ->
-            if (webView.url != url) webView.loadUrl(url)
-        },
-        onRelease = { webView ->
-            webView.stopLoading()
-            webView.loadUrl("about:blank")
-            webView.clearHistory()
-            webView.removeAllViews()
-            webView.destroy()
-        },
-    )
+        }
+        Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Text("OK: controles del sitio · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
+        }
+    }
 }

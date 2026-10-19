@@ -267,3 +267,11 @@ Si estás aplicando el ZIP sobre un checkout existente, reemplazá los archivos 
 - Un WebView no garantiza que un sitio externo reproduzca: el proveedor puede bloquear Android WebView, requerir cookies, DRM o headers, o cambiar su HTML. No se extraen ni se inventan enlaces internos.
 
 **Build:** no afirmar `assembleRelease` verificado salvo que se ejecute en un entorno con Android SDK/Gradle y resuelva todas las dependencias.
+
+## Diagnóstico del reproductor web y controles (2026-10-19)
+
+- Una URL `/embed/` apunta a una página HTML con un reproductor dentro; no es necesariamente el archivo de video. Se abre en WebView, mientras que URLs directas MP4/HLS (`.m3u8`)/DASH (`.mpd`) siguen usando ExoPlayer.
+- Se añadió indicador de carga, errores HTTP/de red en el frame principal, reintento, cookies de terceros para embeds, soporte de video HTML5 a pantalla completa y navegación Atrás dentro del historial del WebView.
+- Se corrigió el foco inicial del reproductor nativo con un `FocusRequester` explícito y se hizo más clara la leyenda del control remoto. Las flechas izquierda/derecha siguen saltando 10 segundos; arriba/abajo recorre los controles; OK ejecuta el control enfocado.
+- Si `streamimdb.ru` no contiene el título solicitado, devuelve un error, exige una verificación no compatible o bloquea WebView, la app no puede crear un stream por sí sola. El ID de IMDb sirve para construir la página, no demuestra que exista una fuente reproducible. Para diagnosticar un título concreto, mirar el mensaje HTTP/de carga que muestra la app.
+- No se pudo ejecutar `assembleRelease` en este entorno porque no hay Android SDK/Gradle instalados. Se verificó la estructura y sintaxis textual, pero el build final debe validarse en CI/Android Studio.
