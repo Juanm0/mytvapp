@@ -22,10 +22,11 @@ object SourceEditServer {
         }
     }
 
-    fun editorUrl(contentKey: String, title: String, isSeries: Boolean, season: Int? = null, episode: Int? = null): String? {
+    fun editorUrl(contentKey: String, title: String, isSeries: Boolean, season: Int? = null, episode: Int? = null, imdbId: String? = null): String? {
         val ip = localIpv4() ?: return null
         return "http://$ip:$PORT/edit?key=" + URLEncoder.encode(contentKey, "UTF-8") +
             "&title=" + URLEncoder.encode(title, "UTF-8") + "&series=$isSeries" +
+            (imdbId?.takeIf { it.matches(Regex("tt\\d{5,12}")) }?.let { "&imdbId=" + URLEncoder.encode(it, "UTF-8") } ?: "") +
             (season?.let { "&season=$it" } ?: "") + (episode?.let { "&episode=$it" } ?: "")
     }
 
@@ -43,6 +44,7 @@ object SourceEditServer {
             val key = session.parameters["key"]?.firstOrNull().orEmpty()
             val displayTitle = session.parameters["title"]?.firstOrNull().orEmpty()
             val isSeries = session.parameters["series"]?.firstOrNull().toBoolean()
+            val imdbId = session.parameters["imdbId"]?.firstOrNull()
             val season = session.parameters["season"]?.firstOrNull()?.toIntOrNull()
             val episode = session.parameters["episode"]?.firstOrNull()?.toIntOrNull()
             if (key.isBlank() || key.length > 240 || key.any { it.isISOControl() }) {
@@ -58,29 +60,30 @@ object SourceEditServer {
                     }.toMap()
                     val oldUrl = form["oldUrl"].orEmpty()
                     val newUrl = form["newUrl"].orEmpty().trim()
-                    val normalized = newUrl.takeIf { it.startsWith("https://") || it.startsWith("http://") }
+                    val normalized = newUrl.takeIf { it.startsWith("https://", ignoreCase = true) || it.startsWith("http://", ignoreCase = true) }
                     if (oldUrl.isBlank() || normalized == null || WebSourceRegistry.normalizeForEditor(normalized) == null) {
-                        html("URL inválida. Usá una dirección completa que empiece con https:// o http://", key, displayTitle, isSeries, season, episode)
+                        html("URL inválida. Usá una dirección completa que empiece con https:// o http://", key, displayTitle, isSeries, season, episode, imdbId)
                     } else {
                         WebSourceRegistry.removeSource(appContext, key, oldUrl)
                         val saved = WebSourceRegistry.addSource(appContext, key, normalized)
-                        html(if (saved) "¡Listo! La fuente quedó guardada en Xuper. Volvé al televisor y actualizá la ficha." else "La URL ya existe o no se pudo guardar. Revisá el enlace.", key, displayTitle, isSeries, season, episode)
+                        html(if (saved) "¡Listo! La fuente quedó guardada en Xuper. Volvé al televisor y actualizá la ficha." else "La URL ya existe o no se pudo guardar. Revisá el enlace.", key, displayTitle, isSeries, season, episode, imdbId)
                     }
-                } catch (_: Exception) { html("No se pudo guardar el enlace. Volvé e intentá otra vez.", key, displayTitle, isSeries, season, episode) }
+                } catch (_: Exception) { html("No se pudo guardar el enlace. Volvé e intentá otra vez.", key, displayTitle, isSeries, season, episode, imdbId) }
             }
-            return html(null, key, displayTitle, isSeries, season, episode)
+            return html(null, key, displayTitle, isSeries, season, episode, imdbId)
         }
 
-        private fun html(message: String?, key: String, title: String, isSeries: Boolean, season: Int?, episode: Int?): Response {
-            val sources = WebSourceRegistry.getSources(appContext, key, displayTitle = title, isSeries = isSeries, season = season, episodeNumber = episode)
+        private fun html(message: String?, key: String, title: String, isSeries: Boolean, season: Int?, episode: Int?, imdbId: String?): Response {
+            val sources = WebSourceRegistry.getSources(appContext, key, imdbId = imdbId, displayTitle = title, isSeries = isSeries, season = season, episodeNumber = episode)
             val options = sources.joinToString("") { url ->
                 val safe = esc(url)
                 "<option value=\"$safe\">$safe</option>"
             }
             val encodedKey = URLEncoder.encode(key, "UTF-8")
-            val extra = "&title=${URLEncoder.encode(title, "UTF-8")}&series=$isSeries" + (season?.let { "&season=$it" } ?: "") + (episode?.let { "&episode=$it" } ?: "")
+            val extra = "&title=${URLEncoder.encode(title, "UTF-8")}&series=$isSeries" +
+                (imdbId?.takeIf { it.matches(Regex("tt\\d{5,12}")) }?.let { "&imdbId=${URLEncoder.encode(it, "UTF-8")}" } ?: "") + (season?.let { "&season=$it" } ?: "") + (episode?.let { "&episode=$it" } ?: "")
             val msg = message?.let { "<p class='msg'>${esc(it)}</p>" }.orEmpty()
-            val body = """<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Editar fuente Xuper</title><style>body{font:16px system-ui;max-width:680px;margin:24px auto;padding:0 16px;background:#10131b;color:#f5f6fa}input,select,button{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:8px;border:1px solid #555;background:#202634;color:#fff}button{background:#7b61ff;font-weight:700}.msg{padding:12px;background:#1c4937;border-radius:8px;line-height:1.5}small{color:#bbc2d0}</style><h1>Editar fuente de Xuper</h1><p>Elegí el enlace que querés reemplazar y pegá la URL correcta. Se guarda en el televisor por Wi-Fi.</p>$msg<form method="POST" action="/save?key=$encodedKey$extra"><label>Fuente actual</label><select name="oldUrl" required>$options</select><label>URL corregida</label><input name="newUrl" type="url" placeholder="https://..." required><button type="submit">Guardar en Xuper</button></form><small>El celular y el televisor deben estar conectados a la misma red Wi-Fi. Si no se actualiza enseguida, salí y volvé a entrar a la ficha.</small></html>"""
+            val body = """<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Editar fuente Xuper</title><style>body{font:16px system-ui;max-width:680px;margin:24px auto;padding:0 16px;background:#10131b;color:#f5f6fa}input,select,button{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:8px;border:1px solid #555;background:#202634;color:#fff}button{background:#7b61ff;font-weight:700}.msg{padding:12px;background:#1c4937;border-radius:8px;line-height:1.5}small{color:#bbc2d0}</style><h1>Editar fuente de Xuper</h1><p>Elegí el enlace que querés reemplazar y pegá la URL correcta. Se guarda en el televisor por Wi-Fi.</p>$msg<form method="POST" action="/save?key=$encodedKey$extra"><label>Fuente actual</label><select name="oldUrl" required>$options</select><label>URL corregida</label><input name="newUrl" type="text" inputmode="url" autocapitalize="off" autocomplete="url" spellcheck="false" placeholder="https://..." required><button type="submit">Guardar en Xuper</button></form><small>El celular y el televisor deben estar conectados a la misma red Wi-Fi. Si no se actualiza enseguida, salí y volvé a entrar a la ficha.</small></html>"""
             return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", body)
         }
         private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")

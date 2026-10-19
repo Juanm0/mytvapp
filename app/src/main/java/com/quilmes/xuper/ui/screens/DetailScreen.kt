@@ -3,6 +3,7 @@ package com.quilmes.xuper.ui.screens
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
@@ -164,6 +166,7 @@ fun DetailScreen(
                             season = selectedSeason,
                             episode = selectedEpisode,
                             compact = true,
+                            imdbId = imdbId,
                         )
                         if (isTmdb) Text(
                             "Metadatos e imágenes: TMDB. La ficha no garantiza que exista una fuente de vídeo.",
@@ -315,9 +318,11 @@ private fun SourceQrEditor(
     season: Int?,
     episode: Int?,
     compact: Boolean,
+    imdbId: String? = null,
 ) {
-    val url = remember(contentKey, title, isSeries, season, episode) {
-        SourceEditServer.editorUrl(contentKey, title, isSeries, season, episode)
+    var enlarged by remember(contentKey) { mutableStateOf(false) }
+    val url = remember(contentKey, title, isSeries, season, episode, imdbId) {
+        SourceEditServer.editorUrl(contentKey, title, isSeries, season, episode, imdbId)
     }
     val bitmap = remember(url) {
         url?.let {
@@ -335,8 +340,25 @@ private fun SourceQrEditor(
         verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         if (bitmap != null) {
-            Image(bitmap = bitmap.asImageBitmap(), contentDescription = "QR para editar los enlaces desde el celular", modifier = Modifier.size(if (compact) 76.dp else 120.dp))
-            Text("Escaneá para editar", color = XuperAccentBright, fontSize = 9.sp)
+            Image(
+                bitmap = bitmap.asImageBitmap(),
+                contentDescription = "Tocar para agrandar el QR y editar enlaces desde el celular",
+                modifier = Modifier.size(if (compact) 76.dp else 120.dp).clickable { enlarged = true },
+            )
+            Text("Tocá el QR para agrandarlo", color = XuperAccentBright, fontSize = 9.sp)
+            if (enlarged) {
+                Dialog(onDismissRequest = { enlarged = false }) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.White, RoundedCornerShape(18.dp)).padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Text("Escaneá para editar en el celular", color = androidx.compose.ui.graphics.Color.Black, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Código QR ampliado", modifier = Modifier.fillMaxWidth().aspectRatio(1f))
+                        Text("Volvé atrás para cerrar", color = androidx.compose.ui.graphics.Color.DarkGray, fontSize = 13.sp)
+                    }
+                }
+            }
         } else {
             Text("QR no disponible", color = XuperTextSecondary, fontSize = 10.sp)
         }

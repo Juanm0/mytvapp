@@ -55,3 +55,9 @@ Se deshabilitó la integración nativa `adblock-rust`/Brave (JNI), porque un fal
 ## Edición de fuentes desde el celular por QR
 
 En la ficha de una película/serie y junto a cada episodio se muestra un QR que abre un editor web servido temporalmente por la app en la red local (puerto 8765). Escanealo con el teléfono conectado a la misma Wi-Fi que el Android TV, elegí la fuente a reemplazar, pegá la URL corregida y guardá: el enlace se almacena en las preferencias locales de Xuper para esa película o episodio. Si el QR no aparece, revisá que el televisor tenga una dirección IPv4 local y que ambos dispositivos estén en la misma red. No es un servicio en Internet y no funciona desde fuera de la red doméstica.
+
+### Correcciones del editor QR (octubre de 2026)
+- El editor móvil recibe el IMDb ID de la ficha cuando está disponible y muestra StreamIMDb como fuente candidata de películas sin inventar IDs.
+- El campo de URL móvil usa texto con teclado de URL para evitar rechazos del control HTML `type=url` en algunos navegadores móviles. El guardado sigue validando protocolo HTTP/HTTPS y host.
+- El QR de la ficha se puede tocar para abrir una vista ampliada; al cerrarla/volver atrás se regresa al tamaño compacto.
+- Si una fuente no aparece, depende de que la ficha haya recuperado el IMDb ID y de que la fuente sea aplicable al tipo de contenido.
