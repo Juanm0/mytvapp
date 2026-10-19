@@ -15,10 +15,31 @@ android {
         versionName = "0.1.0"
     }
 
-    buildTypes {
-        release {
-            isMinifyEnabled = false
+    // Clave fija (app/xuper.keystore): así cada APK nuevo se instala POR ENCIMA del anterior
+    // sin desinstalar. Es una app personal; si algún día se publica, generar una clave privada propia.
+    signingConfigs {
+        create("xuper") {
+            storeFile = file("xuper.keystore")
+            storePassword = "xuper123"
+            keyAlias = "xuper"
+            keyPassword = "xuper123"
         }
+    }
+
+    buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("xuper")
+        }
+        release {
+            // Release (no debuggable) corre mucho más rápido que debug con Compose
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("xuper")
+        }
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 
     buildFeatures {

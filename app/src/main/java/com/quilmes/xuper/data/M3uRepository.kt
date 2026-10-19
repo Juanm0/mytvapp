@@ -2,72 +2,155 @@ package com.quilmes.xuper.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.Normalizer
 
 /**
  * Una lista M3U a mostrar en la app.
  *
- * @param name nombre que se muestra como prefijo de cada fila.
- * @param maxGroups cuántas filas (group-title) mostrar de esta lista.
+ * @param name nombre en la barra lateral.
+ * @param icon emoji de la barra lateral.
+ * @param homeRows cuántas filas de esta lista aparecen en Inicio.
  * @param priorityGroups grupos que van primero si existen (ej. "Argentina").
- * @param maxPerRow máximo de canales por fila.
+ * @param maxPerRow máximo de canales por fila (si un grupo tiene más, se parte en varias filas).
+ * @param maxRows máximo de filas de esta lista.
  */
 data class M3uSource(
     val name: String,
     val url: String,
-    val maxGroups: Int = 4,
+    val icon: String = "📺",
+    val homeRows: Int = 3,
     val priorityGroups: List<String> = emptyList(),
-    val maxPerRow: Int = 40,
+    val maxPerRow: Int = 60,
+    val maxRows: Int = 40,
 )
 
+private data class Entry(val group: String, val title: Title)
+
 /**
- * ContentRepository que lee listas IPTV en formato M3U.
- * Descarga todas las listas en paralelo la primera vez y cachea el resultado;
- * si una lista falla, las demás igual se muestran.
+ * ContentRepository que lee listas IPTV (M3U).
+ *
+ * Arranque rápido: al iniciar lee el caché del disco (si existe) y muestra
+ * todo al instante; en paralelo baja las listas de internet y va publicando
+ * cada una apenas termina (no espera a la más lenta). Lo bajado se guarda
+ * en el caché para el próximo arranque.
  */
-class M3uRepository(private val sources: List<M3uSource>) : ContentRepository {
+class M3uRepository(
+    private val sources: List<M3uSource>,
+    private val cacheDir: File,
+) : ContentRepository {
 
-    private val mutex = Mutex()
-    private var cache: List<Category>? = null
+    private val _sections = MutableStateFlow<List<Section>>(emptyList())
+    override val sections: StateFlow<List<Section>> = _sections.asStateFlow()
 
-    private suspend fun load(): List<Category> = mutex.withLock {
-        cache ?: withContext(Dispatchers.IO) {
-            coroutineScope {
-                sources.mapIndexed { index, source ->
-                    async { runCatching { buildCategories(index, source) }.getOrDefault(emptyList()) }
-                }.map { it.await() }.flatten()
+    private val _loading = MutableStateFlow(true)
+    override val loading: StateFlow<Boolean> = _loading.asStateFlow()
+
+    private val lock = Any()
+    private val entriesBySource = HashMap<Int, List<Entry>>()
+    @Volatile private var byId: Map<String, Title> = emptyMap()
+    @Volatile private var searchIndex: List<Pair<String, Title>> = emptyList()
+
+    override suspend fun refresh() {
+        withContext(Dispatchers.IO) {
+            _loading.value = true
+            try {
+                if (_sections.value.isEmpty()) {
+                    for (i in sources.indices) {
+                        readCache(i)?.let { publish(i, it) }
+                    }
+                }
+                coroutineScope {
+                    sources.mapIndexed { i, source ->
+                        async {
+                            runCatching {
+                                val entries = parse(download(source.url), "s$i")
+                                if (entries.isNotEmpty()) {
+                                    writeCache(i, entries)
+                                    publish(i, entries)
+                                }
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } finally {
+                _loading.value = false
             }
-        }.also { cache = it }
-    }
-
-    override suspend fun getFeatured(): Title? =
-        load().flatMap { it.items }.firstOrNull { it.posterUrl.isNotBlank() }
-
-    override suspend fun getCategories(): List<Category> = load()
-
-    private fun buildCategories(sourceIndex: Int, source: M3uSource): List<Category> {
-        val entries = parse(download(source.url), "s$sourceIndex")
-        val groups = entries.groupBy { it.first }
-        val ordered = groups.keys.sortedWith(
-            compareBy<String> { g ->
-                val p = source.priorityGroups.indexOfFirst { it.equals(g, ignoreCase = true) }
-                if (p >= 0) p else Int.MAX_VALUE
-            }.thenByDescending { groups[it]?.size ?: 0 }
-        ).take(source.maxGroups)
-
-        return ordered.map { group ->
-            Category(
-                id = "s$sourceIndex-$group",
-                title = "${source.name} · $group",
-                items = groups.getValue(group).take(source.maxPerRow).map { it.second },
-            )
         }
     }
+
+    override fun find(id: String): Title? = byId[id]
+
+    override fun search(query: String, limit: Int): List<Title> {
+        val tokens = normalize(query).split(' ').filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return emptyList()
+        val out = ArrayList<Title>()
+        val seen = HashSet<String>()
+        for ((name, title) in searchIndex) {
+            if (tokens.all { name.contains(it) } && seen.add(title.streamUrl)) {
+                out.add(title)
+                if (out.size >= limit) break
+            }
+        }
+        return out
+    }
+
+    // ---------------------------------------------------------------- publicar
+
+    private fun publish(i: Int, entries: List<Entry>) {
+        synchronized(lock) {
+            if (entriesBySource[i] == entries) return
+            entriesBySource[i] = entries
+
+            val secs = sources.indices.mapNotNull { n ->
+                entriesBySource[n]?.let { buildSection(n, sources[n], it) }
+            }
+            val ids = HashMap<String, Title>()
+            val index = ArrayList<Pair<String, Title>>()
+            for (list in entriesBySource.values) {
+                for (e in list) {
+                    ids[e.title.id] = e.title
+                    index.add(normalize(e.title.name) to e.title)
+                }
+            }
+            byId = ids
+            searchIndex = index
+            _sections.value = secs
+        }
+    }
+
+    private fun buildSection(i: Int, source: M3uSource, entries: List<Entry>): Section {
+        val groups = entries.groupBy { it.group }
+        val ordered = groups.keys.sortedWith(
+            compareBy<String>(
+                { it.lowercase() in LAST_GROUPS },
+                { g ->
+                    val p = source.priorityGroups.indexOfFirst { it.equals(g, ignoreCase = true) }
+                    if (p >= 0) p else Int.MAX_VALUE
+                },
+            ).thenByDescending { groups[it]?.size ?: 0 }
+        )
+        val categories = ordered.flatMap { g ->
+            groups.getValue(g).chunked(source.maxPerRow).mapIndexed { n, chunk ->
+                Category(
+                    id = "s$i-$g-$n",
+                    title = if (n == 0) g else "$g (${n + 1})",
+                    items = chunk.map { it.title },
+                )
+            }
+        }.take(source.maxRows)
+        return Section("s$i", source.name, source.icon, categories, source.homeRows)
+    }
+
+    // ------------------------------------------------------------------- red
 
     private fun download(url: String): String {
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -78,39 +161,46 @@ class M3uRepository(private val sources: List<M3uSource>) : ContentRepository {
         return conn.inputStream.bufferedReader().use { it.readText() }
     }
 
-    /** Devuelve pares (grupo, Title). Ignora URLs que ExoPlayer no puede reproducir (YouTube, Twitch). */
-    private fun parse(text: String, idPrefix: String): List<Pair<String, Title>> {
-        val result = mutableListOf<Pair<String, Title>>()
+    /** Ignora URLs que ExoPlayer no puede reproducir (YouTube, Twitch). */
+    private fun parse(text: String, idPrefix: String): List<Entry> {
+        val result = ArrayList<Entry>()
         var attrs: Map<String, String>? = null
         var name = ""
         var counter = 0
         for (raw in text.lineSequence()) {
             val line = raw.trim()
-            when {
-                line.startsWith("#EXTINF") -> {
-                    val (a, n) = parseExtInf(line)
-                    attrs = a
-                    name = n
-                }
-                line.isEmpty() || line.startsWith("#") -> Unit
-                attrs != null -> {
-                    if (isPlayable(line) && name.isNotBlank()) {
-                        val group = attrs["group-title"]?.split(";")?.first()?.trim()
-                            .takeUnless { it.isNullOrBlank() } ?: "Otros"
-                        result += group to Title(
-                            id = "$idPrefix-${counter++}",
-                            name = name,
-                            posterUrl = attrs["tvg-logo"].orEmpty(),
-                            streamUrl = line,
-                            isLive = true,
+            if (line.startsWith("#EXTINF")) {
+                val (a, n) = parseExtInf(line)
+                attrs = a
+                name = n
+            } else if (line.isEmpty() || line.startsWith("#")) {
+                continue
+            } else {
+                val a = attrs
+                if (a != null && name.isNotBlank() && isPlayable(line)) {
+                    val group = a["group-title"]?.split(";")?.firstOrNull()?.trim()
+                        .takeUnless { it.isNullOrBlank() } ?: "Otros"
+                    result.add(
+                        Entry(
+                            group,
+                            makeTitle("$idPrefix-${counter++}", name, a["tvg-logo"].orEmpty(), line, group),
                         )
-                    }
-                    attrs = null
+                    )
                 }
+                attrs = null
             }
         }
         return result
     }
+
+    private fun makeTitle(id: String, name: String, logo: String, url: String, group: String) = Title(
+        id = id,
+        name = name,
+        description = "En vivo · $group",
+        posterUrl = logo,
+        streamUrl = url,
+        isLive = true,
+    )
 
     private fun isPlayable(url: String): Boolean {
         val u = url.lowercase()
@@ -118,7 +208,7 @@ class M3uRepository(private val sources: List<M3uSource>) : ContentRepository {
         return listOf("youtube.com", "youtu.be", "twitch.tv").none { u.contains(it) }
     }
 
-    /** #EXTINF:-1 key="value" ... ,Nombre  →  (atributos, nombre) */
+    /** #EXTINF:-1 key="value" ... ,Nombre  ->  (atributos, nombre) */
     private fun parseExtInf(line: String): Pair<Map<String, String>, String> {
         var inQuotes = false
         var commaIdx = -1
@@ -133,7 +223,43 @@ class M3uRepository(private val sources: List<M3uSource>) : ContentRepository {
         return attrs to name
     }
 
+    // ----------------------------------------------------------------- caché
+
+    private fun cacheFile(i: Int) = File(cacheDir, "catalog_$i.tsv")
+
+    private fun writeCache(i: Int, entries: List<Entry>) {
+        runCatching {
+            val tmp = File(cacheDir, "catalog_$i.tmp")
+            tmp.bufferedWriter().use { w ->
+                for (e in entries) {
+                    val cols = listOf(e.group, e.title.id, e.title.name, e.title.posterUrl, e.title.streamUrl)
+                    w.write(cols.joinToString("\t") { it.replace('\t', ' ').replace('\n', ' ') })
+                    w.write("\n")
+                }
+            }
+            tmp.renameTo(cacheFile(i))
+        }
+    }
+
+    private fun readCache(i: Int): List<Entry>? = runCatching {
+        val f = cacheFile(i)
+        if (!f.exists()) return@runCatching null
+        f.bufferedReader().useLines { lines ->
+            lines.mapNotNull { l ->
+                val p = l.split('\t')
+                if (p.size < 5) null else Entry(p[0], makeTitle(p[1], p[2], p[3], p[4], p[0]))
+            }.toList()
+        }.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
+    // ---------------------------------------------------------------- varios
+
+    private fun normalize(s: String): String =
+        Normalizer.normalize(s, Normalizer.Form.NFD).replace(MARKS, "").lowercase().trim()
+
     private companion object {
         val ATTR = Regex("""([\w-]+)="([^"]*)"""")
+        val MARKS = Regex("""\p{Mn}+""")
+        val LAST_GROUPS = setOf("undefined", "otros")
     }
 }

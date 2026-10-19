@@ -17,9 +17,21 @@ data class Title(
     val rating: String? = null,
 )
 
-/** Una fila horizontal de la pantalla principal (ej: "Populares", "Noticias en vivo"). */
+/** Una fila horizontal (ej: "Noticias", "Deportes"). */
 data class Category(
     val id: String,
     val title: String,
     val items: List<Title>,
+)
+
+/**
+ * Una fuente de contenido (una lista M3U). Es un ítem de la barra lateral:
+ * al entrar se ven todas sus filas; en Inicio solo las primeras `homeRows`.
+ */
+data class Section(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val categories: List<Category>,
+    val homeRows: Int,
 )

@@ -8,12 +8,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.tv.material3.MaterialTheme
+import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Category
+import com.quilmes.xuper.ui.theme.XuperTextPrimary
 
-/** Una fila tipo Netflix: título de categoría arriba + scroll horizontal de pósters. */
+/** Una fila: título de categoría arriba + scroll horizontal de canales. */
 @Composable
 fun ContentRow(
     category: Category,
@@ -23,11 +25,13 @@ fun ContentRow(
     Column(modifier = modifier) {
         Text(
             text = category.title,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(start = 48.dp, bottom = 12.dp),
+            color = XuperTextPrimary,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 48.dp, bottom = 8.dp),
         )
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 48.dp),
+            contentPadding = PaddingValues(horizontal = 48.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(category.items, key = { it.id }) { title ->

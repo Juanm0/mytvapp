@@ -24,10 +24,10 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Compilar APK (debug, firmado automáticamente)
-        run: gradle assembleDebug --no-daemon
+      - name: Compilar APK (release rápido, firmado con la clave del proyecto)
+        run: gradle assembleRelease --no-daemon
 
       - uses: actions/upload-artifact@v4
         with:
-          name: XuperQuilmesTV-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: XuperQuilmesTV-apk
+          path: app/build/outputs/apk/release/*.apk
