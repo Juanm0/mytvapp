@@ -15,6 +15,8 @@ object WebSourceRegistry {
 
     const val FRAME_XTV_EXAMPLE = "https://framextv.xyz/watch/1396/3/11"
     const val FRAME_XTV_HOME = "https://framextv.xyz/"
+    // Servidor predeterminado para episodios: se genera con TMDB ID/temporada/episodio.
+    const val DEFAULT_SERIES_PROVIDER = "FrameXTV.xyz"
     const val STREAMIMDB_MOVIE_TEMPLATE = "https://streamimdb.ru/embed/movie/"
     const val REPELISHD_MOVIES = "https://repelishd.cv/peliculas/"
     const val REPELISHD_SERIES = "https://repelishd.cv/series/"

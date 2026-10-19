@@ -202,13 +202,12 @@ fun DetailScreen(
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
-                                selectedEpisode = episode.number
-                                val seasonNo = selectedSeason ?: 1
-                                val seriesTmdbId = title.id.removePrefix("tmdb-tv-")
-                                val frameXUrl = "https://framextv.xyz/watch/$seriesTmdbId/$seasonNo/${episode.number}"
-                                onPlayStream("${title.name} · T${seasonNo}E${episode.number} · FrameXTV", frameXUrl)
-                            }) { Text("▶  Reproducir episodio") }
+                            Button(onClick = { selectedEpisode = episode.number }) {
+                                Text(if (selectedEpisode == episode.number) "✓  Servidores elegidos" else "Elegir servidores")
+                            }
+                            if (selectedEpisode == episode.number) {
+                                Text("FrameXTV.xyz queda primero como servidor predeterminado abajo.", color = XuperAccentBright, fontSize = 11.sp)
+                            }
                             if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Fuente IPTV") }
                         }
                     }
@@ -225,7 +224,7 @@ fun DetailScreen(
                     Text("Fuentes web alternativas", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Text(
                         if (title.contentKind == ContentKind.SERIES)
-                            "Xuper prepara fuentes automáticamente para el episodio elegido: FrameXTV (ambos órdenes de temporada/capítulo), búsqueda en Movies2Watch y búsqueda en RePelisHD. Tocá Reproducir; no hace falta escribir enlaces."
+                            "Elegí un episodio y después seleccioná el servidor en esta lista. FrameXTV.xyz aparece primero como opción predeterminada; también se prueban otras fuentes candidatas."
                         else "Xuper genera StreamIMDB usando el IMDb ID real consultado a TMDB y agrega búsquedas en Movies2Watch y RePelisHD. Las páginas se abren dentro de Xuper con el filtro web activo.",
                         color = XuperTextSecondary, fontSize = 13.sp,
                     )
@@ -254,7 +253,11 @@ fun DetailScreen(
                                         }
                                         Text(providerLabel, color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
                                         Text(source, color = XuperTextSecondary, fontSize = 11.sp, maxLines = 2)
-                                        Text("Candidata · se comprueba al abrir", color = XuperTextSecondary, fontSize = 10.sp)
+                                        Text(
+                                            if (title.contentKind == ContentKind.SERIES && index == 0 && source.contains("framextv.xyz", true)) "Predeterminado · candidato, disponibilidad no garantizada" else "Candidata · se comprueba al abrir",
+                                            color = if (title.contentKind == ContentKind.SERIES && index == 0 && source.contains("framextv.xyz", true)) XuperAccentBright else XuperTextSecondary,
+                                            fontSize = 10.sp,
+                                        )
                                     }
                                     Button(onClick = { onPlayStream("${title.name} · ${when {
                                         source.contains("streamimdb.ru", true) -> "StreamIMDB"

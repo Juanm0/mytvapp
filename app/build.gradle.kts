@@ -87,9 +87,6 @@ dependencies {
     // Navegación
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    // Motor nativo adblock-rust de Brave: AAR oficial descargado y preparado por el workflow.
-    implementation(files("libs/adblock-0.1.3.aar"))
-
     // Parseo HTML de páginas públicas; no ejecuta JavaScript ni resuelve players ofuscados.
     implementation("org.jsoup:jsoup:1.18.3")
 

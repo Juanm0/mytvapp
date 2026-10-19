@@ -561,14 +561,21 @@ private fun WebEmbedPlayer(url: String) {
                     webViewClient = object : WebViewClient() {
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                             val requestUrl = request?.url?.toString() ?: return null
-                            return if (XuperBraveAdblock.shouldBlock(request, view?.url)) XuperBraveAdblock.blockedResponse() else null
+                            // Una excepción del motor de filtros nunca debe cerrar el reproductor.
+                            return runCatching {
+                                if (XuperBraveAdblock.shouldBlock(request, view?.url)) XuperBraveAdblock.blockedResponse() else null
+                            }.onFailure { android.util.Log.w("XuperWebView", "Falló el filtro de una solicitud; se permite continuar", it) }
+                                .getOrNull()
                         }
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val target = request?.url?.toString() ?: return true
                             val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
                             // Solo navegación web http(s); rechaza esquemas externos y destinos publicitarios conocidos.
                             if (scheme != "http" && scheme != "https") return true
-                            if (XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document")) {
+                            val blocked = runCatching { XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document") }
+                                .onFailure { android.util.Log.w("XuperWebView", "Falló el filtro de navegación; se permite continuar", it) }
+                                .getOrDefault(false)
+                            if (blocked) {
                                 pageError = "Se bloqueó una redirección publicitaria o de seguimiento. Volvé al reproductor e intentá reproducir otra vez."
                                 return true
                             }
@@ -579,7 +586,10 @@ private fun WebEmbedPlayer(url: String) {
                             progress = 100
                             pageFinished = true
                             refreshServerOptions()
-                            if (view != null && !pageUrl.isNullOrBlank()) XuperBraveAdblock.injectCosmetics(view, pageUrl)
+                            if (view != null && !pageUrl.isNullOrBlank()) {
+                                runCatching { XuperBraveAdblock.injectCosmetics(view, pageUrl) }
+                                    .onFailure { android.util.Log.w("XuperWebView", "No se pudieron aplicar reglas cosméticas", it) }
+                            }
                             // Refuerzo best-effort del filtro: reduce banners/capas publicitarias,
                             // bloquea window.open y enlaces de salida claramente publicitarios. No
                             // oculta video/iframe de forma global para no romper el reproductor.
@@ -614,6 +624,7 @@ private fun WebEmbedPlayer(url: String) {
                             pageError = "El reproductor web se cerró inesperadamente. Volvé atrás e intentá otra fuente."
                             if (view != null) {
                                 runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                                // Ya fuera del contenedor, liberar el WebView que perdió su renderer.
                                 runCatching { view.destroy() }
                             }
                             webViewRef = null
@@ -642,7 +653,13 @@ private fun WebEmbedPlayer(url: String) {
                 if (webView != null && webView.url != url && webView.tag != url) { webView.tag = url; webView.loadUrl(url) }
             },
             onRelease = { container ->
-                (container.getChildAt(0) as? WebView)?.let { it.stopLoading(); it.loadUrl("about:blank"); it.clearHistory(); it.removeAllViews(); it.destroy() }
+                (container.getChildAt(0) as? WebView)?.let { webView ->
+                    runCatching { webView.stopLoading() }
+                    runCatching { webView.loadUrl("about:blank") }
+                    runCatching { webView.clearHistory() }
+                    runCatching { webView.removeAllViews() }
+                    runCatching { webView.destroy() }
+                }
                 webViewRef = null
             },
         )
