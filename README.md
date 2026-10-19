@@ -51,3 +51,7 @@ Se deshabilitó la integración nativa `adblock-rust`/Brave (JNI), porque un fal
 - Si no hay un stream directo visible, el último reproductor disponible se mantiene dentro de la pantalla de Xuper; no se abre un navegador externo. Los sitios que construyen el stream con JavaScript, requieren sesión o usan DRM pueden no permitir extracción nativa.
 - FrameXTV.xyz se incluye primero para todos los episodios/temporadas. También se prueba una ruta por ID TMDB para películas, pero esa ruta es tentativa y no se garantiza que el proveedor la soporte.
 - El resolver usa solicitudes HTTP públicas con timeout y límite de profundidad para no hacer una cascada larga de solicitudes.
+
+## Edición de fuentes desde el celular por QR
+
+En la ficha de una película/serie y junto a cada episodio se muestra un QR que abre un editor web servido temporalmente por la app en la red local (puerto 8765). Escanealo con el teléfono conectado a la misma Wi-Fi que el Android TV, elegí la fuente a reemplazar, pegá la URL corregida y guardá: el enlace se almacena en las preferencias locales de Xuper para esa película o episodio. Si el QR no aparece, revisá que el televisor tenga una dirección IPv4 local y que ambos dispositivos estén en la misma red. No es un servicio en Internet y no funciona desde fuera de la red doméstica.

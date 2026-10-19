@@ -119,6 +119,8 @@ object WebSourceRegistry {
         (0 until json.length()).mapNotNull { index -> normalizeHttpUrl(json.optString(index)) }
     }.getOrDefault(emptyList())
 
+    fun normalizeForEditor(raw: String): String? = normalizeHttpUrl(raw)
+
     private fun normalizeHttpUrl(raw: String): String? = runCatching {
         val value = raw.trim()
         val uri = URI(value)

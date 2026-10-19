@@ -1,6 +1,8 @@
 package com.quilmes.xuper.ui.screens
 
 import android.content.Context
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -11,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -26,6 +29,9 @@ import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.TmdbEpisode
 import com.quilmes.xuper.data.TmdbSeason
 import com.quilmes.xuper.data.WebSourceRegistry
+import com.quilmes.xuper.data.SourceEditServer
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperBackground
 import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
@@ -54,6 +60,8 @@ fun DetailScreen(
     var loadingImdbId by remember(title.id) { mutableStateOf(false) }
     val isTmdb = title.id.startsWith("tmdb-")
     val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
+
+    LaunchedEffect(Unit) { SourceEditServer.start(context) }
 
     LaunchedEffect(title.id) {
         if (isTmdb && title.contentKind != ContentKind.LIVE) {
@@ -148,6 +156,15 @@ fun DetailScreen(
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
                         }
+                        val qrKey = sourceKey ?: WebSourceRegistry.titleKey(title.id)
+                        SourceQrEditor(
+                            contentKey = qrKey,
+                            title = title.name,
+                            isSeries = title.contentKind == ContentKind.SERIES,
+                            season = selectedSeason,
+                            episode = selectedEpisode,
+                            compact = true,
+                        )
                         if (isTmdb) Text(
                             "Metadatos e imágenes: TMDB. La ficha no garantiza que exista una fuente de vídeo.",
                             color = XuperTextSecondary, fontSize = 10.sp,
@@ -211,6 +228,14 @@ fun DetailScreen(
                             if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Fuente IPTV") }
                         }
                     }
+                    SourceQrEditor(
+                        contentKey = WebSourceRegistry.episodeKey(title.id, selectedSeason ?: 1, episode.number),
+                        title = title.name,
+                        isSeries = true,
+                        season = selectedSeason ?: 1,
+                        episode = episode.number,
+                        compact = true,
+                    )
                 }
             }
         }
@@ -277,6 +302,43 @@ fun DetailScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+
+@Composable
+private fun SourceQrEditor(
+    contentKey: String,
+    title: String,
+    isSeries: Boolean,
+    season: Int?,
+    episode: Int?,
+    compact: Boolean,
+) {
+    val url = remember(contentKey, title, isSeries, season, episode) {
+        SourceEditServer.editorUrl(contentKey, title, isSeries, season, episode)
+    }
+    val bitmap = remember(url) {
+        url?.let {
+            runCatching {
+                val matrix = QRCodeWriter().encode(it, BarcodeFormat.QR_CODE, 220, 220)
+                Bitmap.createBitmap(220, 220, Bitmap.Config.RGB_565).also { bmp ->
+                    for (x in 0 until 220) for (y in 0 until 220) bmp.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                }
+            }.getOrNull()
+        }
+    }
+    Column(
+        modifier = Modifier.padding(start = 8.dp).width(if (compact) 94.dp else 140.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        if (bitmap != null) {
+            Image(bitmap = bitmap.asImageBitmap(), contentDescription = "QR para editar los enlaces desde el celular", modifier = Modifier.size(if (compact) 76.dp else 120.dp))
+            Text("Escaneá para editar", color = XuperAccentBright, fontSize = 9.sp)
+        } else {
+            Text("QR no disponible", color = XuperTextSecondary, fontSize = 10.sp)
         }
     }
 }
