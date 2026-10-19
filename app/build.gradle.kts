@@ -15,7 +15,7 @@ val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.quilmes.xuper"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.quilmes.xuper"

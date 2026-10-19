@@ -50,7 +50,7 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 
 ## Compilar
 
-Requisitos: Android Studio, **JDK 21**, Android SDK 34 y Gradle **8.11.1 o superior**. El workflow de GitHub Actions configura explícitamente JDK 21 y Gradle 8.11.1 (AGP 8.10.1 rechaza Gradle 8.7). La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
+Requisitos: Android Studio, **JDK 21**, Android SDK Platform **37** y Gradle **8.11.1 o superior**. `compileSdk = 37` es necesario porque `io.github.mlm-games:adblock:0.1.3` declara ese nivel mínimo; `targetSdk = 34` y `minSdk = 26` se mantienen sin cambios. El workflow de GitHub Actions configura explícitamente JDK 21 y Gradle 8.11.1 (AGP 8.10.1 rechaza Gradle 8.7). La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
 
 El ZIP de trabajo contiene configuración local y una clave de firma personal. No publicar ni compartir públicamente esos archivos. Si se publica el proyecto, quitar `local.properties`, reemplazar la clave y sus contraseñas y no subir secretos al control de versiones.
 
