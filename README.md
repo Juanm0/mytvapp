@@ -243,3 +243,16 @@ Si el título no tiene IMDb ID en TMDB o el addon no devuelve una URL directa, s
 - No se preconfiguran proveedores de terceros ni se promete cobertura total: cada addon puede devolver cero fuentes, estar caído o usar torrent/DRM. Solo se pasan URLs directas reproducibles por Media3; `infoHash` y `externalUrl` se descartan.
 - No se añadieron dependencias: se conservan `HttpURLConnection`, `org.json` y las corutinas que ya usa la app.
 - Verificación: revisar/compilar en Android Studio o GitHub Actions; este entorno no dispone de Android SDK ni Gradle Wrapper para validar una compilación Android completa.
+
+## Corrección de compilación Release (Stremio)
+
+Se corrigió el conflicto que hacía fallar `:app:compileReleaseKotlin`:
+
+- `data/StremioAddonApi.kt` quedó como archivo de compatibilidad sin clases ni imports externos.
+- La implementación única de `StremioStream` y `StremioRepository` vive en `data/StremioRepository.kt`.
+- No se requieren Retrofit ni Gson: las respuestas Stremio se leen con `HttpURLConnection` y `org.json`.
+- Esto elimina los `Unresolved reference: gson/retrofit2`, las declaraciones duplicadas y los errores secundarios de tipos/propiedades (`qualityRank`, `addonUrl`, métodos de búsqueda).
+
+Si estás aplicando el ZIP sobre un checkout existente, reemplazá los archivos del proyecto y verificá que `StremioAddonApi.kt` tenga solamente el contenido de compatibilidad incluido aquí; no conserves la versión vieja con `@GET`, `@Path`, `@SerializedName`, `Retrofit` o `GsonConverterFactory`.
+
+**Verificación:** el ZIP se valida por integridad. Este entorno no tiene Android SDK/Gradle configurados, por lo que no puedo afirmar que se haya ejecutado `assembleRelease` localmente. La comprobación final de APK debe hacerse en el mismo runner Android/Gradle donde apareció el error.
