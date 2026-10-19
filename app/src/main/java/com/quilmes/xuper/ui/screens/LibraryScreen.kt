@@ -38,6 +38,21 @@ internal fun LibraryScreen(sections: List<Section>, mode: LibraryMode, onPlay: (
     val favoriteIds = remember(sections, mode) { prefs.getStringSet("favorites", emptySet())?.toSet().orEmpty() }
     val recentOrder = remember(sections, mode) { prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() }.asReversed() }
     val recentIds = recentOrder.toSet()
+    val savedRecentTitles = remember(sections, mode, prefs.getString("recent_items", "[]")) {
+        runCatching {
+            val json = org.json.JSONArray(prefs.getString("recent_items", "[]"))
+            (0 until json.length()).mapNotNull { i ->
+                val o = json.optJSONObject(i) ?: return@mapNotNull null
+                val id = o.optString("id").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val url = o.optString("streamUrl").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val kind = runCatching { com.quilmes.xuper.data.ContentKind.valueOf(o.optString("contentKind")) }.getOrDefault(com.quilmes.xuper.data.ContentKind.OTHER_VOD)
+                Title(id=id, name=o.optString("name", "Contenido"), description=o.optString("description", ""),
+                    posterUrl=o.optString("posterUrl", ""), backdropUrl=o.optString("backdropUrl", o.optString("posterUrl", "")),
+                    streamUrl=url, isLive=o.optBoolean("isLive", false), year=o.optString("year").takeIf { it.isNotBlank() },
+                    rating=o.optString("rating").takeIf { it.isNotBlank() }, contentKind=kind)
+            }
+        }.getOrDefault(emptyList())
+    }
     // Igual que en HomeScreen: este cálculo recorre todas las listas cargadas
     // (puede haber miles de entradas entre Argentina + VOD) y antes corría
     // sincrónicamente en el hilo principal cada vez que se abría esta pestaña,
@@ -99,8 +114,8 @@ private fun buildLibraryRows(
                 ?.let { Category("favorites", "Mi lista", it) }
         )
         LibraryMode.CONTINUE -> listOfNotNull(
-            allTitles.filter { it.id in recentIds && !it.isLive }
-                .sortedBy { recentOrder.indexOf(it.id).let { index -> if (index < 0) Int.MAX_VALUE else index } }
+            (recentOrder.mapNotNull { id -> allTitles.firstOrNull { it.id == id && !it.isLive } ?: savedRecentTitles.firstOrNull { it.id == id && !it.isLive } }
+                .distinctBy { it.id })
                 .takeIf { it.isNotEmpty() }?.let { Category("continue", "Continuar viendo", it) }
         )
         LibraryMode.ARGENTINA -> {

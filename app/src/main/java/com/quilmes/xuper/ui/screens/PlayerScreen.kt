@@ -756,6 +756,40 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 webViewRef = null
             },
         )
+        // Controles nativos visibles y enfocables con el D-pad: no dependemos de que el sitio
+        // web exponga sus botones al foco del WebView. El click intenta reproducir el video
+        // o activar un botón de play reconocible en el documento/iframe accesible.
+        Row(
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(22.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = {
+                webViewRef?.evaluateJavascript("""(function(){
+                  try {
+                    var videos=Array.from(document.querySelectorAll('video'));
+                    videos.forEach(function(v){v.muted=false;var p=v.play();if(p&&p.catch)p.catch(function(){});});
+                    var labels=/play|reproducir|watch now|ver ahora|start/i;
+                    var els=Array.from(document.querySelectorAll('button,[role=button],a,[aria-label],.play,.vjs-big-play-button'));
+                    var b=els.find(function(e){var x=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')+' '+e.className).toLowerCase();var r=e.getBoundingClientRect();return labels.test(x)&&r.width>0&&r.height>0});
+                    if(b)b.click();
+                    return 'attempted';
+                  }catch(e){return 'error'}
+                })();""", null)
+            }) { Text("▶  Reproducir") }
+            Button(onClick = {
+                webViewRef?.evaluateJavascript("""(function(){try{
+                  var videos=Array.from(document.querySelectorAll('video'));
+                  var tracks=[];videos.forEach(function(v){try{Array.from(v.textTracks||[]).forEach(function(t){tracks.push(t)})}catch(e){}});
+                  var t=tracks.find(function(t){return /es|spa|spanish|español|castellano/i.test((t.language||'')+' '+(t.label||''))});
+                  if(t){t.mode='showing';return 'enabled'}
+                  var buttons=Array.from(document.querySelectorAll('button,[role=button],[aria-label],a'));
+                  var b=buttons.find(function(e){var x=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).toLowerCase();return /subtitle|captions|subtitulos|subtítulos|cc/.test(x)});
+                  if(b)b.click();return 'attempted';
+                }catch(e){return 'error'}})();""", null)
+            }) { Text("CC  Subtítulos") }
+            Button(onClick = { webViewRef?.reload() }) { Text("↻  Reiniciar") }
+        }
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }

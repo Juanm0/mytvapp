@@ -359,7 +359,23 @@ class MainActivity : ComponentActivity() {
                                     val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
                                     val recent = prefs.getString("recent", "").orEmpty().split("|").filter { it.isNotBlank() && it != id }.toMutableList()
                                     recent.add(id)
-                                    prefs.edit().putString("recent", recent.takeLast(30).joinToString("|")).apply()
+                                    val recentJson = org.json.JSONObject().apply {
+                                        put("id", title.id); put("name", title.name); put("description", title.description)
+                                        put("posterUrl", title.posterUrl); put("backdropUrl", title.backdropUrl)
+                                        put("streamUrl", title.streamUrl); put("isLive", title.isLive)
+                                        put("year", title.year ?: ""); put("rating", title.rating ?: "")
+                                        put("contentKind", title.contentKind.name)
+                                    }
+                                    val items = runCatching { org.json.JSONArray(prefs.getString("recent_items", "[]")) }.getOrDefault(org.json.JSONArray())
+                                    val rebuilt = org.json.JSONArray().apply {
+                                        put(recentJson)
+                                        for (i in 0 until items.length()) {
+                                            val obj = items.optJSONObject(i) ?: continue
+                                            if (obj.optString("id") != title.id && length() < 29) put(obj)
+                                        }
+                                    }
+                                    prefs.edit().putString("recent", recent.takeLast(30).joinToString("|"))
+                                        .putString("recent_items", rebuilt.toString()).apply()
                                 }
                             }
                             val m3u = repository as? M3uRepository
