@@ -87,18 +87,22 @@ object SourceEditServer {
 
         private fun html(message: String?, key: String, title: String, isSeries: Boolean, season: Int?, episode: Int?, imdbId: String?): Response {
             val sources = WebSourceRegistry.getSources(appContext, key, imdbId = imdbId, displayTitle = title, isSeries = isSeries, season = season, episodeNumber = episode)
+            // Select an existing source by default. Previously the empty "add new" option
+            // was first, so a normal Save could append a duplicate instead of replacing the
+            // selected provider URL, making users think the edit had not taken effect.
             val options = buildString {
-                append("<option value=\"\">Agregar como fuente nueva</option>")
-                sources.forEach { url ->
+                sources.forEachIndexed { index, url ->
                     val safe = esc(url)
-                    append("<option value=\"$safe\">$safe</option>")
+                    val selected = if (index == 0) " selected" else ""
+                    append("<option value=\"$safe\"$selected>$safe</option>")
                 }
+                append("<option value=\"\">Agregar como fuente nueva</option>")
             }
             val encodedKey = URLEncoder.encode(key, "UTF-8")
             val extra = "&title=${URLEncoder.encode(title, "UTF-8")}&series=$isSeries" +
                 (imdbId?.takeIf { it.matches(Regex("tt\\d{5,12}")) }?.let { "&imdbId=${URLEncoder.encode(it, "UTF-8")}" } ?: "") + (season?.let { "&season=$it" } ?: "") + (episode?.let { "&episode=$it" } ?: "")
             val msg = message?.let { "<p class='msg'>${esc(it)}</p>" }.orEmpty()
-            val body = """<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Editar fuente Xuper</title><style>*{box-sizing:border-box}body{font:16px system-ui;max-width:680px;margin:24px auto;padding:0 16px;background:#10131b;color:#f5f6fa}input,select,button{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:8px;border:1px solid #555;background:#202634;color:#fff}input:focus,select:focus{outline:2px solid #8d78ff;border-color:#8d78ff}button{background:linear-gradient(135deg,#8065ff,#6446ed);font-weight:800;border:0;cursor:pointer;transition:transform .16s,filter .16s,box-shadow .16s}button:hover,button:focus{filter:brightness(1.15);transform:translateY(-2px);box-shadow:0 8px 22px #7355ff55}.msg{padding:12px;background:#1c4937;border-radius:8px;line-height:1.5}small{color:#bbc2d0}</style><h1>Editar fuente de Xuper</h1><p>Elegí el enlace que querés reemplazar y pegá la URL correcta. Se guarda en el televisor por Wi-Fi.</p>$msg<form method="POST" action="/save?key=$encodedKey$extra"><label>Fuente a reemplazar (o agregá una nueva)</label><select name="oldUrl">$options</select><label>URL corregida</label><input name="newUrl" type="text" inputmode="url" autocapitalize="off" autocomplete="url" spellcheck="false" placeholder="Pegá el link tal como te lo pasaron" required><button type="submit">Guardar en Xuper</button></form><small>El celular y el televisor deben estar conectados a la misma red Wi-Fi. El enlace se guarda en el televisor. Volvé a abrir la ficha para ver el cambio.</small></html>"""
+            val body = """<!doctype html><html lang="es"><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Editar fuente Xuper</title><style>*{box-sizing:border-box}body{font:16px system-ui;max-width:680px;margin:24px auto;padding:0 16px;background:#10131b;color:#f5f6fa}input,select,button{box-sizing:border-box;width:100%;padding:13px;margin:8px 0;border-radius:8px;border:1px solid #555;background:#202634;color:#fff}input:focus,select:focus{outline:2px solid #8d78ff;border-color:#8d78ff}button{background:linear-gradient(135deg,#8065ff,#6446ed);font-weight:800;border:0;cursor:pointer;transition:transform .16s,filter .16s,box-shadow .16s}button:hover,button:focus{filter:brightness(1.15);transform:translateY(-2px);box-shadow:0 8px 22px #7355ff55}.msg{padding:12px;background:#1c4937;border-radius:8px;line-height:1.5}small{color:#bbc2d0}</style><h1>Editar fuente de Xuper</h1><p>Elegí una fuente existente para reemplazarla (ya aparece seleccionada) o elegí “Agregar como fuente nueva”. Pegá el enlace y guardá. Se guarda directamente en el televisor.</p>$msg<form method="POST" action="/save?key=$encodedKey$extra"><label>Fuente a reemplazar</label><select name="oldUrl">$options</select><label>URL o texto del enlace</label><input name="newUrl" type="text" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Pegá el link tal como te lo pasaron" required><button type="submit">Guardar en Xuper</button></form><small>Importante: celular y televisor en la misma Wi-Fi. Después de guardar, volvé a abrir la ficha en Xuper para recargar la lista de fuentes.</small></html>"""
             return newFixedLengthResponse(Response.Status.OK, "text/html; charset=utf-8", body)
         }
         private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
