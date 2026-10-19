@@ -12,6 +12,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import com.quilmes.xuper.data.ContentKind
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -32,6 +33,8 @@ data class M3uSource(
     val priorityGroups: List<String> = emptyList(),
     val maxPerRow: Int = 60,
     val maxRows: Int = 40,
+    /** Hint explícito para listas dedicadas a VOD; null para listas mixtas o de canales. */
+    val contentHint: ContentKind? = null,
 )
 
 private data class Entry(val group: String, val title: Title)
@@ -76,7 +79,7 @@ class M3uRepository(
                     sources.mapIndexed { i, source ->
                         async {
                             runCatching {
-                                val entries = parse(download(source.url), "s$i")
+                                val entries = parse(download(source.url), "s$i", source.contentHint)
                                 if (entries.isNotEmpty()) {
                                     writeCache(i, entries)
                                     publish(i, entries)
@@ -199,7 +202,7 @@ class M3uRepository(
     }
 
     /** Ignora URLs que ExoPlayer no puede reproducir (YouTube, Twitch). */
-    private fun parse(text: String, idPrefix: String): List<Entry> {
+    private fun parse(text: String, idPrefix: String, contentHint: ContentKind? = null): List<Entry> {
         val result = ArrayList<Entry>()
         var attrs: Map<String, String>? = null
         var name = ""
@@ -223,7 +226,7 @@ class M3uRepository(
                     result.add(
                         Entry(
                             group,
-                            makeTitle("$idPrefix-${counter++}", name, a["tvg-logo"].orEmpty(), line, group),
+                            makeTitle("$idPrefix-${counter++}", name, a["tvg-logo"].orEmpty(), line, group, contentHint),
                         )
                     )
                 }
@@ -233,29 +236,55 @@ class M3uRepository(
         return result
     }
 
-    private fun makeTitle(id: String, name: String, logo: String, url: String, group: String): Title {
-        val isVod = isVideoOnDemand(name, group, url)
+    private fun makeTitle(id: String, name: String, logo: String, url: String, group: String, contentHint: ContentKind? = null): Title {
+        val kind = contentHint ?: classifyContent(name, group, url)
+        val live = kind == ContentKind.LIVE
+        val kindLabel = when (kind) {
+            ContentKind.LIVE -> "TV en vivo"
+            ContentKind.MOVIE -> "Película"
+            ContentKind.SERIES -> "Serie / episodio"
+            ContentKind.OTHER_VOD -> "Contenido bajo demanda"
+        }
         return Title(
             id = id,
             name = name,
-            description = if (isVod) "Película o serie · $group" else "En vivo · $group",
+            description = "$kindLabel · $group",
             posterUrl = logo,
             streamUrl = url,
-            isLive = !isVod,
+            isLive = live,
+            contentKind = kind,
         )
     }
 
-    private fun isVideoOnDemand(name: String, group: String, url: String): Boolean {
-        val metadata = normalize("$name $group $url")
-        val vodTerms = listOf(
-            "movie", "movies", "pelicula", "peliculas", "film", "films",
-            "series", "serie", "season", "episode", "episodio", "vod",
-            "conferencia"
-        )
-        if (vodTerms.any { metadata.contains(it) }) return true
-        if (Regex("\\b(ep|episodio)\\s*\\d+\\b").containsMatchIn(metadata)) return true
-        val path = runCatching { URL(url).path.lowercase() }.getOrDefault("")
-        return listOf(".mp4", ".mkv", ".avi", ".mov", ".webm").any { path.endsWith(it) }
+    /**
+     * Clasificación conservadora: nunca considerar VOD solo porque el grupo se llame
+     * "Películas" o porque el nombre contenga "cine". Muchas listas agrupan canales
+     * lineales de cine en esas categorías. Se buscan señales fuertes en ruta, formato,
+     * temporada/episodio o etiquetas inequívocas de VOD.
+     */
+    private fun classifyContent(name: String, group: String, url: String): ContentKind {
+        val n = normalize(name)
+        val g = normalize(group)
+        val path = normalize(runCatching { URL(url).path }.getOrDefault(url))
+        val metadata = "$n $g $path"
+
+        val seriesPath = Regex("(^|/)(series|serie|shows|tvshows)(/|$)").containsMatchIn(path)
+        val episodePattern = Regex("\\b(s\\d{1,2}\\s*e\\d{1,3}|\\d{1,2}x\\d{1,3}|season\\s*\\d+|temporada\\s*\\d+|episode\\s*\\d+|episodio\\s*\\d+)\\b")
+        val seriesWords = listOf("series vod", "tv series", "series on demand", "series a la carta", "episodios", "episodes")
+        val seriesGroup = g in setOf("series", "series tv", "episodios", "episodes", "series completas")
+        if (seriesPath || episodePattern.containsMatchIn(n) || seriesGroup || seriesWords.any { it in metadata }) {
+            return ContentKind.SERIES
+        }
+
+        val moviePath = Regex("(^|/)(movie|movies|peliculas|films)(/|$)").containsMatchIn(path)
+        val videoExtension = listOf(".mp4", ".mkv", ".avi", ".mov", ".webm").any { path.substringBefore('?').endsWith(it) }
+        val explicitVodGroup = listOf("vod", "on demand", "a la carta", "peliculas completas", "full movies", "movies vod").any { it in g }
+        val movieTitle = listOf("pelicula completa", "full movie", "movie:", "pelicula:").any { n.startsWith(it) }
+        if (moviePath || videoExtension || explicitVodGroup || movieTitle) return ContentKind.MOVIE
+
+        val explicitVod = listOf("conferencia grabada", "contenido bajo demanda", "vod").any { it in metadata }
+        if (explicitVod) return ContentKind.OTHER_VOD
+        return ContentKind.LIVE
     }
 
     private fun isPlayable(url: String): Boolean {
@@ -303,7 +332,7 @@ class M3uRepository(
         f.bufferedReader().useLines { lines ->
             lines.mapNotNull { l ->
                 val p = l.split('\t')
-                if (p.size < 5) null else Entry(p[0], makeTitle(p[1], p[2], p[3], p[4], p[0]))
+                if (p.size < 5) null else Entry(p[0], makeTitle(p[1], p[2], p[3], p[4], p[0], sources.getOrNull(i)?.contentHint))
             }.filterNot { it.title.streamUrl in unavailableUrls }.toList()
         }.takeIf { it.isNotEmpty() }
     }.getOrNull()

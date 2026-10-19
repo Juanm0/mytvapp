@@ -11,6 +11,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.ui.screens.MainScreen
@@ -66,6 +67,24 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             priorityGroups = listOf("Argentina", "NEWS WORLD", "SPORTS", "Reality Show'S Live", "Cameras Ao Vivo"),
             maxPerRow = 60,
             maxRows = 80,
+        ),
+        M3uSource(
+            name = "Películas de dominio público",
+            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/movies.m3u",
+            icon = "🎬",
+            homeRows = 3,
+            maxPerRow = 30,
+            maxRows = 80,
+            contentHint = ContentKind.MOVIE,
+        ),
+        M3uSource(
+            name = "Series de dominio público",
+            url = "https://raw.githubusercontent.com/onlinem3u/publicdomainm3u/main/series.m3u",
+            icon = "📺",
+            homeRows = 3,
+            maxPerRow = 30,
+            maxRows = 80,
+            contentHint = ContentKind.SERIES,
         ),
     ),
 )

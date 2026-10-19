@@ -30,6 +30,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.ui.components.ContentRow
 import com.quilmes.xuper.ui.components.SkeletonRows
@@ -48,16 +49,24 @@ fun HomeScreen(
     val sections by repository.sections.collectAsState()
     val loading by repository.loading.collectAsState()
 
-    // Inicio = las primeras filas de cada lista, con el nombre de la lista como prefijo
+    // Inicio prioriza contenido VOD, como una app de streaming, y deja TV en vivo al final.
     val rows = remember(sections) {
-        sections.flatMap { s ->
-            s.categories.take(s.homeRows).map { it.copy(title = "${s.name} · ${it.title}") }
+        val all = sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.streamUrl }
+        val movies = all.filter { it.contentKind == ContentKind.MOVIE || it.contentKind == ContentKind.OTHER_VOD }
+        val series = all.filter { it.contentKind == ContentKind.SERIES }
+        val live = all.filter { it.isLive }
+        buildList {
+            if (movies.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-movies", "Películas", movies))
+            if (series.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-series", "Series y episodios", series))
+            if (live.isNotEmpty()) add(com.quilmes.xuper.data.Category("home-live", "TV en vivo", live))
         }
     }
     val featured = remember(sections) {
-        sections.firstNotNullOfOrNull { s ->
-            s.categories.firstNotNullOfOrNull { c -> c.items.firstOrNull { it.posterUrl.isNotBlank() } }
-        }
+        sections.asSequence().flatMap { it.categories.asSequence() }
+            .flatMap { it.items.asSequence() }
+            .firstOrNull { !it.isLive && it.posterUrl.isNotBlank() }
+            ?: sections.asSequence().flatMap { it.categories.asSequence() }
+                .flatMap { it.items.asSequence() }.firstOrNull { !it.isLive }
     }
 
     if (rows.isEmpty()) {
@@ -66,7 +75,7 @@ fun HomeScreen(
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "No se pudo cargar ninguna lista. Revisá la conexión a internet.",
+                    text = "Todavía no hay contenido en el catálogo. Revisá la conexión o las fuentes configuradas.",
                     color = XuperTextPrimary,
                     fontSize = 20.sp,
                 )

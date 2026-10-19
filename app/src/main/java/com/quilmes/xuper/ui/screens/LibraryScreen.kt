@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.sp
 import java.text.Normalizer
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Category
+import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.Section
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.ui.components.CardWidth
@@ -29,7 +30,7 @@ import com.quilmes.xuper.ui.components.SkeletonRows
 import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 
-internal enum class LibraryMode { LIVE, MOVIES, ANIMATION }
+internal enum class LibraryMode { LIVE, MOVIES, SERIES, ANIMATION }
 
 @Composable
 internal fun LibraryScreen(
@@ -43,7 +44,8 @@ internal fun LibraryScreen(
                 val filtered = category.items.filter { title ->
                     when (mode) {
                         LibraryMode.LIVE -> title.isLive && !isAnimation(title)
-                        LibraryMode.MOVIES -> !title.isLive && !isAnimation(title)
+                        LibraryMode.MOVIES -> title.contentKind == ContentKind.MOVIE || title.contentKind == ContentKind.OTHER_VOD
+                        LibraryMode.SERIES -> title.contentKind == ContentKind.SERIES
                         LibraryMode.ANIMATION -> isAnimation(title)
                     }
                 }
@@ -59,6 +61,7 @@ internal fun LibraryScreen(
     val heading = when (mode) {
         LibraryMode.LIVE -> "TV EN VIVO"
         LibraryMode.MOVIES -> "PELÍCULAS"
+        LibraryMode.SERIES -> "SERIES"
         LibraryMode.ANIMATION -> "ANIMACIÓN"
     }
 
@@ -70,12 +73,14 @@ internal fun LibraryScreen(
                 title = when (mode) {
                     LibraryMode.LIVE -> "No hay canales disponibles"
                     LibraryMode.MOVIES -> "Todavía no hay películas"
+                    LibraryMode.SERIES -> "Todavía no hay series"
                     LibraryMode.ANIMATION -> "No encontramos canales de animación"
                 },
                 message = when (mode) {
                     LibraryMode.LIVE -> "Las listas IPTV no devolvieron canales reproducibles."
-                    LibraryMode.MOVIES -> "Las listas cargadas parecen contener TV en vivo, no películas almacenadas. Podés sumar una fuente VOD más adelante."
-                    LibraryMode.ANIMATION -> "Cuando una lista incluya canales de anime, dibujos o animación, van a aparecer acá."
+                    LibraryMode.MOVIES -> "Todavía no encontramos películas bajo demanda. Una lista de canales de cine en vivo no alcanza: la fuente tiene que incluir enlaces directos a películas."
+                    LibraryMode.SERIES -> "Todavía no encontramos series o episodios bajo demanda. Agregá una fuente VOD autorizada con episodios y metadatos."
+                    LibraryMode.ANIMATION -> "Cuando una lista incluya canales o títulos de anime, dibujos o animación, van a aparecer acá."
                 },
             )
         }

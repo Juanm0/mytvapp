@@ -5,6 +5,8 @@ package com.quilmes.xuper.data
  * `streamUrl` es lo único que depende de la fuente real (tu backend, un M3U
  * de IPTV, Xtream Codes, etc.) — todo lo demás es metadata de presentación.
  */
+enum class ContentKind { LIVE, MOVIE, SERIES, OTHER_VOD }
+
 data class Title(
     val id: String,
     val name: String,
@@ -15,6 +17,7 @@ data class Title(
     val isLive: Boolean = false,
     val year: String? = null,
     val rating: String? = null,
+    val contentKind: ContentKind = if (isLive) ContentKind.LIVE else ContentKind.OTHER_VOD,
 )
 
 /** Una fila horizontal (ej: "Noticias", "Deportes"). */
