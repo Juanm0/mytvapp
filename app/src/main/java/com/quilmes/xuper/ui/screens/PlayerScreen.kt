@@ -191,7 +191,7 @@ private fun NativePlayerScreen(
                 // Preferir subtítulos en español automáticamente cuando el stream los ofrece.
                 // Media3 conserva esta preferencia al cambiar de contenido dentro del reproductor.
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
-                    .setPreferredTextLanguage("es")
+                    .setPreferredTextLanguages(arrayOf("es", "es-419", "es-ES", "spa", "es-MX"))
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
             }
@@ -631,6 +631,36 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
                             pageFinished = true
+                            // Preferencia best-effort para embeds web: algunos reproductores exponen
+                            // pistas de subtítulos y el elemento <video> en el documento principal.
+                            // Si el proveedor lo encierra en un iframe cross-origin, el navegador
+                            // impide controlarlo desde aquí y respetamos esa limitación.
+                            view?.evaluateJavascript("""(function(){
+                              try {
+                                if (!window.__xuperSubtitleResume) {
+                                  window.__xuperSubtitleResume = true;
+                                  var key='xuper-pos:'+location.hostname+location.pathname;
+                                  var tick=function(){
+                                    document.querySelectorAll('video').forEach(function(v){
+                                      try {
+                                        var tracks=v.textTracks;
+                                        if(tracks){
+                                          var spanish=Array.from(tracks).find(function(t){var x=((t.language||'')+' '+(t.label||'')).toLowerCase();return /(^|[^a-z])(es|spa|spanish|espanol|español|castellano)([^a-z]|$)/i.test(x)});
+                                          if(spanish && spanish.mode==='disabled') spanish.mode='showing';
+                                        }
+                                        var saved=parseFloat(localStorage.getItem(key)||'0');
+                                        if(saved>5 && v.duration && isFinite(v.duration) && Math.abs(v.currentTime-saved)>8 && !v.dataset.xuperRestored){
+                                          v.dataset.xuperRestored='1'; v.currentTime=Math.min(saved,Math.max(0,v.duration-2));
+                                        }
+                                        if(v.duration && isFinite(v.duration) && v.currentTime>0) localStorage.setItem(key,String(v.currentTime));
+                                      }catch(e){}
+                                    });
+                                  };
+                                  tick(); setInterval(tick,2000);
+                                  window.addEventListener('beforeunload',tick);
+                                }
+                              } catch(e) {}
+                            })();""", null)
                             // Convierte el D-pad del control remoto en navegación por foco/click
                             // dentro del reproductor web, con un foco visual consistente.
                             view?.evaluateJavascript("""(function(){
