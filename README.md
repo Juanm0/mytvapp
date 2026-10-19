@@ -65,7 +65,11 @@ app/src/main/java/com/quilmes/xuper/
 
 ## Fuentes IPTV
 
-Las fuentes se configuran en `buildRepository()` dentro de `MainActivity.kt`. La detección de VOD se basa en los metadatos de M3U, nombres de grupo y extensiones de URL comunes. No todas las listas M3U contienen películas o series; las listas de canales abiertos suelen ser solo televisión en vivo.
+Las fuentes se configuran en `buildRepository()` dentro de `MainActivity.kt`. Se agregó **Canales internacionales**, una lista local incluida en `app/src/main/assets/iptv-extra.m3u`, preparada a partir del listado compartido. Incluye canales en vivo, noticias, deportes, cámaras, radios y algunos enlaces de contenido grabado. La app no necesita descargar esta lista desde un servidor externo; las demás fuentes siguen actualizándose por internet.
+
+La lista original estaba pegada como Markdown, así que se normalizaron sus enlaces y metadatos. Se excluyeron entradas Kodi `plugin://`, YouTube/Twitch que ExoPlayer no reproduce directamente y las entradas de Mediaset explícitamente marcadas como dependientes de VPN. Los demás enlaces no se consideran verificados: la disponibilidad depende de cada proveedor, región y formato. Si ExoPlayer confirma un error al reproducir, la app aplica el mecanismo existente para ocultar ese stream.
+
+La detección de VOD se basa en metadatos M3U, nombres de grupo, términos como película/serie/episodio/conferencia y extensiones de URL comunes. No todas las listas M3U contienen películas o series; las listas de canales abiertos suelen ser solo televisión en vivo.
 
 ## Próximas mejoras posibles
 

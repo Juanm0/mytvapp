@@ -188,12 +188,14 @@ class M3uRepository(
     // ------------------------------------------------------------------- red
 
     private fun download(url: String): String {
-        val conn = URL(url).openConnection() as HttpURLConnection
+        val conn = URL(url).openConnection()
         conn.connectTimeout = 15_000
         conn.readTimeout = 30_000
-        conn.instanceFollowRedirects = true
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
-        return conn.inputStream.bufferedReader().use { it.readText() }
+        if (conn is HttpURLConnection) {
+            conn.instanceFollowRedirects = true
+            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
+        }
+        return conn.getInputStream().bufferedReader().use { it.readText() }
     }
 
     /** Ignora URLs que ExoPlayer no puede reproducir (YouTube, Twitch). */
@@ -213,8 +215,11 @@ class M3uRepository(
             } else {
                 val a = attrs
                 if (a != null && name.isNotBlank() && isPlayable(line) && line !in unavailableUrls) {
-                    val group = a["group-title"]?.split(";")?.firstOrNull()?.trim()
-                        .takeUnless { it.isNullOrBlank() } ?: "Otros"
+                    val rawGroup = a["group-title"]?.split(";")?.firstOrNull()?.trim()
+                    val group = rawGroup.takeUnless {
+                        it.isNullOrBlank() || it.equals("N/A", ignoreCase = true) ||
+                            it.equals("NA", ignoreCase = true) || it.equals("undefined", ignoreCase = true)
+                    } ?: "Otros"
                     result.add(
                         Entry(
                             group,
@@ -244,9 +249,11 @@ class M3uRepository(
         val metadata = normalize("$name $group $url")
         val vodTerms = listOf(
             "movie", "movies", "pelicula", "peliculas", "film", "films",
-            "series", "serie", "season", "episode", "episodio", "vod"
+            "series", "serie", "season", "episode", "episodio", "vod",
+            "conferencia"
         )
         if (vodTerms.any { metadata.contains(it) }) return true
+        if (Regex("\\b(ep|episodio)\\s*\\d+\\b").containsMatchIn(metadata)) return true
         val path = runCatching { URL(url).path.lowercase() }.getOrDefault("")
         return listOf(".mp4", ".mkv", ".avi", ".mov", ".webm").any { path.endsWith(it) }
     }

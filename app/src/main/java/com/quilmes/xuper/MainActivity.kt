@@ -58,6 +58,15 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
             icon = "🌍",
             homeRows = 2,
         ),
+        M3uSource(
+            name = "Canales internacionales",
+            url = File(cacheDir, "iptv-extra.m3u").toURI().toString(),
+            icon = "🌐",
+            homeRows = 3,
+            priorityGroups = listOf("Argentina", "NEWS WORLD", "SPORTS", "Reality Show'S Live", "Cameras Ao Vivo"),
+            maxPerRow = 60,
+            maxRows = 80,
+        ),
     ),
 )
 
@@ -67,6 +76,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Copia la lista adicional empaquetada en el APK al almacenamiento privado.
+        // La fuente se lee como archivo local, sin depender de un servidor para esta lista.
+        runCatching {
+            assets.open("iptv-extra.m3u").use { input ->
+                File(filesDir, "iptv-extra.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista IPTV adicional", error)
+        }
 
         // Arranca ya mismo: lee el caché del disco y baja las listas en segundo plano
         lifecycleScope.launch { repository.refresh() }
