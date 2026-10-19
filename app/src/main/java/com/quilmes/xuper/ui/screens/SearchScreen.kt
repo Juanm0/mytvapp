@@ -90,7 +90,7 @@ fun SearchScreen(
                 ) {
                     if (query.isEmpty()) {
                         Text(
-                            text = "🔍  Buscar películas, series y canales…",
+                            text = "🔍  Buscar título, serie, canal o ID de TMDB…",
                             color = XuperTextSecondary,
                             fontSize = 24.sp,
                         )

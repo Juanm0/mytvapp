@@ -109,6 +109,8 @@ class TmdbCatalogService(private val cacheDir: File) {
             if (q.matches(Regex("\\d{1,12}"))) {
                 val numericId = q.toLongOrNull()
                 if (numericId != null && numericId > 0L) {
+                    // Los IDs de películas y series viven en namespaces distintos:
+                    // consultamos ambos endpoints y devolvemos solo coincidencias exactas.
                     listOf("movie" to ContentKind.MOVIE, "tv" to ContentKind.SERIES).forEach { (type, kind) ->
                         runCatching {
                             val item = request("$type/$numericId")
@@ -116,6 +118,7 @@ class TmdbCatalogService(private val cacheDir: File) {
                             found[title.id] = title
                         }
                     }
+                    return@runCatching found.values.toList()
                 }
             }
 
