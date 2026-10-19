@@ -50,6 +50,7 @@ object WebSourceRegistry {
         val hiddenDefaults = decode(prefs.getString("hidden:$contentKey", null)).toSet()
         val episodeMatch = Regex("^(?:tmdb-tv-)?(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
         val seriesId = episodeMatch?.groupValues?.get(1)
+        val movieId = Regex("^tmdb-movie-(\\d+)$").matchEntire(contentKey)?.groupValues?.get(1)
         val seasonNo = season ?: episodeMatch?.groupValues?.get(2)?.toIntOrNull()
         val episodeNo = episodeNumber ?: episodeMatch?.groupValues?.get(3)?.toIntOrNull()
         val queryTitle = buildString {
@@ -77,6 +78,9 @@ object WebSourceRegistry {
                 if (encodedTitle.isNotBlank() && encodedTitle != encodedQuery) add("https://repelishd.cv/?s=$encodedTitle")
                 add(REPELISHD_SERIES)
             } else if (!isSeries) {
+                // FrameXTV se prueba también para películas en todo el catálogo. La ruta por ID
+                // de película es una candidata, no una garantía de que el proveedor la implemente.
+                if (movieId != null) add("https://framextv.xyz/watch/$movieId")
                 // The provider's documented template requires an IMDb tt ID; don't fabricate one.
                 if (!imdbId.isNullOrBlank() && imdbId.matches(Regex("tt\\d{5,12}"))) {
                     add("$STREAMIMDB_MOVIE_TEMPLATE$imdbId/")

@@ -99,10 +99,9 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
 ) {
     if (isWebPageUrl(streamUrl)) {
-        // Una página de película/episodio debe ejecutarse en WebView: ExoPlayer solo puede
-        // reproducir medios directos, no HTML. Esto también permite que las URL alternativas
-        // guardadas desde la ficha usen el reproductor del proveedor.
-        WebEmbedPlayer(url = streamUrl)
+        // Primero intenta resolver HTML público a un medio directo para usar ExoPlayer nativo.
+        // Solo cae al WebView embebido si el proveedor no expone una URL de vídeo directa.
+        WebPageResolverPlayer(name = name, pageUrl = streamUrl)
         return
     }
     val context = LocalContext.current

@@ -42,3 +42,12 @@ La librería wrapper está documentada en https://github.com/mlm-games/adblock-r
 ## Estabilidad del reproductor y filtro publicitario
 
 Se deshabilitó la integración nativa `adblock-rust`/Brave (JNI), porque un fallo dentro de una biblioteca nativa puede cerrar el proceso de Android sin que la app pueda recuperarse. El proyecto ya no descarga ni enlaza el AAR nativo. El WebView conserva el filtro local `XuperWebRequestFilter` para bloquear dominios y rutas publicitarias comunes. La cobertura es menor que la de las listas completas de Brave, pero evita cargar el motor nativo en el flujo de reproducción. Esta modificación elimina ese componente como posible causa; el cierre solo puede darse por confirmado como resuelto después de probar el APK en el dispositivo.
+
+
+## Reproducción web integrada (actualización)
+
+- Las URLs web de las fuentes ya no pasan directamente al WebView al tocar Reproducir: primero se consultan con `WebPageMediaResolver`.
+- El resolver busca fuentes de vídeo declaradas en HTML (`video`, `source`, metadatos de vídeo) y sigue hasta dos niveles de iframes públicos para intentar encontrar MP4/HLS/DASH que pueda reproducir ExoPlayer.
+- Si no hay un stream directo visible, el último reproductor disponible se mantiene dentro de la pantalla de Xuper; no se abre un navegador externo. Los sitios que construyen el stream con JavaScript, requieren sesión o usan DRM pueden no permitir extracción nativa.
+- FrameXTV.xyz se incluye primero para todos los episodios/temporadas. También se prueba una ruta por ID TMDB para películas, pero esa ruta es tentativa y no se garantiza que el proveedor la soporte.
+- El resolver usa solicitudes HTTP públicas con timeout y límite de profundidad para no hacer una cascada larga de solicitudes.

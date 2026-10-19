@@ -224,8 +224,8 @@ fun DetailScreen(
                     Text("Fuentes web alternativas", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Text(
                         if (title.contentKind == ContentKind.SERIES)
-                            "Elegí un episodio y después seleccioná el servidor en esta lista. FrameXTV.xyz aparece primero como opción predeterminada; también se prueban otras fuentes candidatas."
-                        else "Xuper genera StreamIMDB usando el IMDb ID real consultado a TMDB y agrega búsquedas en Movies2Watch y RePelisHD. Las páginas se abren dentro de Xuper con el filtro web activo.",
+                            "Elegí un episodio y seleccioná el servidor. FrameXTV.xyz queda primero para todos los episodios y temporadas; Xuper intenta extraer un stream para el reproductor nativo y, si no se puede, mantiene el embed dentro de la app."
+                        else "FrameXTV.xyz también se prueba primero para películas; esa ruta es una candidata y puede no existir. Xuper intenta extraer un stream para ExoPlayer y, si el proveedor no lo expone, reproduce el embed dentro de Xuper. También hay fuentes alternativas.",
                         color = XuperTextSecondary, fontSize = 13.sp,
                     )
                     if (title.contentKind != ContentKind.SERIES && loadingImdbId) {
@@ -246,7 +246,7 @@ fun DetailScreen(
                                         val providerLabel = when {
                                             source.contains("streamimdb.ru", true) -> "StreamIMDB · embed por IMDb"
                                             source.contains("movies2watch.vc", true) -> "Movies2Watch · búsqueda del título"
-                                            source.contains("framextv.xyz", true) -> "FrameXTV · episodio"
+                                            source.contains("framextv.xyz", true) -> if (title.contentKind == ContentKind.SERIES) "FrameXTV · episodio" else "FrameXTV · película (candidato)"
                                             source.contains("repelishd", true) && source.contains("?s=", true) -> "RePelisHD · búsqueda del título"
                                             source.contains("repelishd", true) -> "RePelisHD · catálogo"
                                             else -> "Fuente alternativa ${index + 1}"
@@ -254,8 +254,8 @@ fun DetailScreen(
                                         Text(providerLabel, color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
                                         Text(source, color = XuperTextSecondary, fontSize = 11.sp, maxLines = 2)
                                         Text(
-                                            if (title.contentKind == ContentKind.SERIES && index == 0 && source.contains("framextv.xyz", true)) "Predeterminado · candidato, disponibilidad no garantizada" else "Candidata · se comprueba al abrir",
-                                            color = if (title.contentKind == ContentKind.SERIES && index == 0 && source.contains("framextv.xyz", true)) XuperAccentBright else XuperTextSecondary,
+                                            if (index == 0 && source.contains("framextv.xyz", true)) "Predeterminado · candidato, disponibilidad no garantizada" else "Candidata · se comprueba al abrir",
+                                            color = if (index == 0 && source.contains("framextv.xyz", true)) XuperAccentBright else XuperTextSecondary,
                                             fontSize = 10.sp,
                                         )
                                     }
