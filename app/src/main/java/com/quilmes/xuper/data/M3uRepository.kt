@@ -165,6 +165,7 @@ class M3uRepository(
     private val entriesBySource = HashMap<Int, List<Entry>>() // protegido por `lock`
     @Volatile private var allEntries: List<Entry> = emptyList()
     @Volatile private var catalogCategories: List<Category> = emptyList()
+    @Volatile private var iptvRefreshInProgress: Boolean = false
     @Volatile private var searchCatalogTitles: List<Title> = emptyList()
     private val resolvedCatalog = ConcurrentHashMap<String, Title>()
     private val tmdbMetadata = TmdbMetadataService(cacheDir)
@@ -173,10 +174,11 @@ class M3uRepository(
 
     override suspend fun refresh() {
         withContext(Dispatchers.IO) {
+            iptvRefreshInProgress = true
             _loading.value = true
             try {
-                if (_sections.value.isEmpty()) {
-                    // Primero el caché del disco, TODO junto y con una sola publicación.
+                if (synchronized(lock) { entriesBySource.isEmpty() }) {
+                    // Primero el caché del disco, incluso si el catálogo TMDB ya está visible.
                     val cached = sources.indices.mapNotNull { i -> readCache(i)?.let { i to it } }
                     if (cached.isNotEmpty()) {
                         synchronized(lock) {
@@ -213,6 +215,7 @@ class M3uRepository(
                     }.awaitAll()
                 }
             } finally {
+                iptvRefreshInProgress = false
                 _loading.value = false
             }
         }
@@ -229,7 +232,13 @@ class M3uRepository(
         synchronized(lock) {
             catalogCategories = categories.filter { it.items.isNotEmpty() }
             rebuildPublishedState()
+            if (!iptvRefreshInProgress) _loading.value = false
         }
+    }
+
+    /** Evita dejar la pantalla inicial en skeleton si falla la carga del catálogo visual. */
+    fun finishInitialCatalogLoad() {
+        if (!iptvRefreshInProgress) _loading.value = false
     }
 
     /** Registra resultados de búsqueda de TMDB para que el buscador los encuentre. Llamar desde un hilo de fondo. */

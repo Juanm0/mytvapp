@@ -28,7 +28,12 @@ import com.quilmes.xuper.ui.theme.XuperBackground
 
 /** Navegación estilo streaming: solo quedan Inicio, Buscar, Argentina y utilidades personales. */
 @Composable
-fun MainScreen(repository: ContentRepository, catalogService: TmdbCatalogService, onPlay: (String) -> Unit) {
+fun MainScreen(
+    repository: ContentRepository,
+    catalogService: TmdbCatalogService,
+    onPlay: (String) -> Unit,
+    onRequestIptv: () -> Unit = {},
+) {
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
 
@@ -54,7 +59,10 @@ fun MainScreen(repository: ContentRepository, catalogService: TmdbCatalogService
                 "profile" -> ProfileScreen()
             }
         }
-        SideBar(items = items, selectedId = dest, onSelect = { dest = it }, modifier = Modifier.align(Alignment.CenterStart))
+        SideBar(items = items, selectedId = dest, onSelect = { selected ->
+            if (selected == "live") onRequestIptv()
+            dest = selected
+        }, modifier = Modifier.align(Alignment.CenterStart))
     }
 }
 

@@ -6,6 +6,8 @@ import android.util.Base64
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
@@ -25,6 +27,7 @@ import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.screens.XuperBraveAdblock
 import com.quilmes.xuper.ui.theme.XuperTheme
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -167,6 +170,19 @@ private fun loadCustomM3uSources(cacheDir: File): List<M3uSource> {
 
 class MainActivity : ComponentActivity() {
 
+    @Volatile private var iptvRefreshStarted = false
+    private val localFilesReady = CompletableDeferred<Unit>()
+
+    private fun requestIptvRefresh() {
+        if (iptvRefreshStarted) return
+        iptvRefreshStarted = true
+        lifecycleScope.launch {
+            localFilesReady.await()
+            runCatching { repository.refresh() }
+                .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudieron cargar las fuentes IPTV", it) }
+        }
+    }
+
     private val pendingDetailTitle = mutableStateOf<Title?>(null)
     private val repository: ContentRepository by lazy { buildRepository(filesDir, assets) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
@@ -203,24 +219,30 @@ class MainActivity : ComponentActivity() {
         // principal (lifecycleScope usa Dispatchers.Main): era lo que congelaba la app al abrir.
         lifecycleScope.launch {
             withContext(Dispatchers.IO) { prepareLocalFiles() }
+            localFilesReady.complete(Unit)
             // El catálogo de TMDB sale del caché del disco casi al instante, así que no espera
             // a que terminen de bajar las listas M3U: Inicio muestra contenido enseguida.
             launch(Dispatchers.Default) {
                 runCatching { tmdbCatalogService.loadCatalog() }
                     .onSuccess { categories -> (repository as? M3uRepository)?.setCatalogCategories(categories) }
-                    .onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo cargar el catálogo TMDB", it) }
+                    .onFailure { error ->
+                        android.util.Log.e("XuperQuilmesTV", "No se pudo cargar el catálogo TMDB", error)
+                        (repository as? M3uRepository)?.finishInitialCatalogLoad()
+                    }
             }
-            repository.refresh()
+            // IPTV se carga bajo demanda: el catálogo visual de TMDB no espera a las listas.
         }
 
         setContent {
             XuperTheme {
                 val navController = rememberNavController()
+                val observedSections by repository.sections.collectAsState()
                 NavHost(navController = navController, startDestination = "main") {
                     composable("main") {
                         MainScreen(
                             repository = repository,
                             catalogService = tmdbCatalogService,
+                            onRequestIptv = { requestIptvRefresh() },
                             onPlay = { id ->
                                 val selected = repository.find(id)
                                 if (selected?.isLive == true) navController.navigate("player/$id")
@@ -233,7 +255,11 @@ class MainActivity : ComponentActivity() {
                         arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
-                        val title = remember(id, pendingDetailTitle.value?.id) {
+                        // Al abrir una ficha empezamos a consultar las listas. Cada fuente
+                        // publica sus resultados al terminar, así que una coincidencia puede
+                        // habilitar Reproducir antes de que finalice la descarga de todas.
+                        LaunchedEffect(id) { requestIptvRefresh() }
+                        val title = remember(id, pendingDetailTitle.value?.id, observedSections) {
                             repository.find(id) ?: pendingDetailTitle.value?.takeIf { it.id == id }
                         }
                         if (title != null) DetailScreen(
@@ -277,6 +303,8 @@ class MainActivity : ComponentActivity() {
                         arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
+                        // Congelamos la fuente elegida al entrar al reproductor: cuando llegan
+                        // alternativas nuevas, no queremos cambiar/reiniciar el video actual.
                         val title = remember(id) { repository.find(id) }
                         if (title != null && title.streamUrl.isNotBlank()) {
                             LaunchedEffect(id) {
@@ -288,10 +316,14 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                             val m3u = repository as? M3uRepository
-                            val alternatePlayers = remember(id) { m3u?.getPlayableAlternatives(title).orEmpty() }
+                            // La lista cambia mientras se descargan fuentes en segundo plano;
+                            // el reproductor recibe las alternativas nuevas sin reiniciar el video.
+                            val alternatePlayers = remember(id, observedSections) { m3u?.getPlayableAlternatives(title).orEmpty() }
                             // Cada reproducción empieza por la primera cuenta configurada que tenga
                             // una coincidencia; el reproductor solo prueba las demás si esta falla.
-                            val preferredPlayback = alternatePlayers.firstOrNull() ?: title
+                            val preferredPlayback = remember(id, title.streamUrl) {
+                                alternatePlayers.firstOrNull { it.streamUrl == title.streamUrl } ?: title
+                            }
                             val playbackId = preferredPlayback.id
                             val channelQueue = remember(playbackId) { m3u?.getChannelQueue(playbackId).orEmpty() }
                             val nextEpisode = remember(playbackId) { m3u?.getNextEpisode(playbackId) }

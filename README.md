@@ -213,3 +213,11 @@ Antes de cambiar, revisá el código real. Después de cada iteración actualiz�
 - Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
 - El panel se oculta tras 5 segundos sin interacción.
 
+
+## Carga del catálogo y reproducción
+
+- Al iniciar, la app prepara archivos locales y carga el catálogo visual de TMDB; no descarga todas las listas M3U.
+- Las listas IPTV se consultan al abrir una ficha de contenido o al entrar en Argentina.
+- Cada fuente publica sus resultados cuando termina; si aparece una coincidencia, se puede reproducir sin esperar al resto.
+- Las fuentes restantes continúan cargando en segundo plano y sus coincidencias se agregan como alternativas de reproducción.
+- El catálogo visual usa caché de TMDB cuando está disponible. La disponibilidad real de una película depende de que alguna fuente IPTV tenga una coincidencia reproducible.

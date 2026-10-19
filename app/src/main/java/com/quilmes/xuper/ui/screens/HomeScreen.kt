@@ -45,13 +45,8 @@ import com.quilmes.xuper.ui.theme.XuperTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-// Inicio YA NO muestra filas de TMDB (Tendencias/Populares, etc.): esas fichas no tienen
-// video real detrás casi nunca (TMDB trae metadata de estrenos actuales; nuestras listas M3U
-// son películas de dominio público viejas, así que el nombre casi nunca coincide). Mostrarlas
-// en Inicio como si fueran "contenido disponible" es lo que generaba "no puedo ver nada": el
-// usuario tocaba el póster más vistoso de la pantalla y resultaba ser un estreno sin fuente.
-// El catálogo de TMDB sigue existiendo para el buscador (ahí sí tiene sentido: el usuario ya
-// sabe que puede no tener video y lo usa para descubrir, no como oferta principal).
+// El inicio prioriza el catálogo visual de TMDB, como una app de streaming. Las fichas
+// no prometen disponibilidad: al abrir una, la app empieza a buscar fuentes IPTV bajo demanda.
 private const val HOME_VOD_ITEMS = 40
 
 @Composable
@@ -77,8 +72,11 @@ fun HomeScreen(
     // vacío). Antes podía caer una ficha de TMDB sin video — era literalmente lo primero que
     // el usuario veía y tocaba, y no andaba.
     val featured = remember(rows) {
-        rows.firstOrNull { it.id.startsWith("home-vod-") }
+        rows.firstOrNull { it.id.startsWith("home-tmdb-") }
             ?.items?.firstOrNull { it.backdropUrl.isNotBlank() }
+            ?: rows.firstOrNull { it.id.startsWith("home-vod-") }
+                ?.items?.firstOrNull { it.backdropUrl.isNotBlank() }
+            ?: rows.firstOrNull { it.id.startsWith("home-tmdb-") }?.items?.firstOrNull()
             ?: rows.firstOrNull { it.id.startsWith("home-vod-") }?.items?.firstOrNull()
             ?: rows.firstOrNull { it.id == "home-argentina" }?.items?.firstOrNull()
     }
@@ -202,7 +200,12 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
             }
         }
 
+    val tmdbRows = sections.firstOrNull { it.id == "tmdb-catalog" }?.categories.orEmpty()
+        .filter { it.items.isNotEmpty() }
+        .map { category -> Category("home-tmdb-${category.id}", category.title, category.items) }
+
     return buildList {
+        addAll(tmdbRows)
         if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
         if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
         if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
