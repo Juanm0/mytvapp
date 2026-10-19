@@ -256,3 +256,14 @@ Se corrigió el conflicto que hacía fallar `:app:compileReleaseKotlin`:
 Si estás aplicando el ZIP sobre un checkout existente, reemplazá los archivos del proyecto y verificá que `StremioAddonApi.kt` tenga solamente el contenido de compatibilidad incluido aquí; no conserves la versión vieja con `@GET`, `@Path`, `@SerializedName`, `Retrofit` o `GsonConverterFactory`.
 
 **Verificación:** el ZIP se valida por integridad. Este entorno no tiene Android SDK/Gradle configurados, por lo que no puedo afirmar que se haya ejecutado `assembleRelease` localmente. La comprobación final de APK debe hacerse en el mismo runner Android/Gradle donde apareció el error.
+
+## Reproductor web por IMDb (actualización)
+
+- `data/ImdbEmbedSource.kt` valida el formato `tt########` y construye la URL HTTPS del embed desde el IMDb ID obtenido por `TmdbCatalogService.getImdbId()`.
+- `DetailScreen.kt` muestra el IMDb ID y ofrece **Abrir reproductor web** para títulos TMDB con ID válido.
+- `PlayerScreen.kt` detecta exclusivamente las URLs HTTPS de la ruta de embed configurada y las abre en un `WebView` con JavaScript, DOM storage y autoplay de medios habilitados; las URLs directas siguen usando Media3/ExoPlayer.
+- El WebView bloquea mixed content, no permite ventanas emergentes y se destruye al salir.
+- El patrón configurado es el de película `/embed/movie/{imdb_id}/`. El proveedor no define en este proyecto una plantilla separada de series; si su backend requiere otra ruta para episodios, debe incorporarse explícitamente antes de dar por soportada la reproducción de series.
+- Un WebView no garantiza que un sitio externo reproduzca: el proveedor puede bloquear Android WebView, requerir cookies, DRM o headers, o cambiar su HTML. No se extraen ni se inventan enlaces internos.
+
+**Build:** no afirmar `assembleRelease` verificado salvo que se ejecute en un entorno con Android SDK/Gradle y resuelva todas las dependencias.

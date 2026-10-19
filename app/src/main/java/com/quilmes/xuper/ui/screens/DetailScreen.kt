@@ -28,6 +28,7 @@ import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.TmdbEpisode
 import com.quilmes.xuper.data.TmdbSeason
+import com.quilmes.xuper.data.ImdbEmbedSource
 import com.quilmes.xuper.data.StremioRepository
 import com.quilmes.xuper.data.StremioStream
 import com.quilmes.xuper.ui.theme.XuperAccentBright
@@ -159,6 +160,18 @@ fun DetailScreen(
                                 prefs.edit().putStringSet("favorites", ids).apply()
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
+                            val embedUrl = ImdbEmbedSource.buildUrl(imdbId)
+                            if (title.id.startsWith("tmdb-") && title.contentKind != ContentKind.LIVE && embedUrl != null) {
+                                Button(onClick = { onPlayStream("${title.name} · Reproductor web", embedUrl) }) {
+                                    Text("▶  Abrir reproductor web")
+                                }
+                            }
+                        }
+                        if (title.id.startsWith("tmdb-") && title.contentKind != ContentKind.LIVE) {
+                            Text(
+                                "IMDb: ${imdbId ?: "buscando…"}",
+                                color = XuperTextSecondary, fontSize = 11.sp,
+                            )
                         }
                         if (title.year != null || title.rating != null || title.id.startsWith("tmdb-")) {
                             Text("Metadatos e imágenes: TMDB. Este producto no está respaldado ni certificado por TMDB.", color = XuperTextSecondary, fontSize = 10.sp)

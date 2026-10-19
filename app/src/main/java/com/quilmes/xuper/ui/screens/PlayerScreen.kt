@@ -2,6 +2,11 @@ package com.quilmes.xuper.ui.screens
 
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.ViewGroup
+import android.os.Build
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -51,6 +56,7 @@ import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.ImdbEmbedSource
 import kotlinx.coroutines.delay
 
 /**
@@ -75,6 +81,10 @@ fun PlayerScreen(
     onChangePlayer: (String) -> Unit = {},
     onPlayNextEpisode: (String) -> Unit = {},
 ) {
+    if (ImdbEmbedSource.isEmbedUrl(streamUrl)) {
+        ImdbEmbedPlayer(url = streamUrl)
+        return
+    }
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl) { mutableStateOf(true) }
@@ -383,4 +393,43 @@ private fun formatTime(ms: Long): String {
     val m = (total % 3600) / 60
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+}
+
+
+/** Web player for the IMDb embed source; ExoPlayer is reserved for direct media URLs. */
+@Composable
+private fun ImdbEmbedPlayer(url: String) {
+    AndroidView(
+        modifier = Modifier.fillMaxSize().background(Color.Black),
+        factory = { viewContext ->
+            WebView(viewContext).apply {
+                setBackgroundColor(android.graphics.Color.BLACK)
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                settings.javaScriptCanOpenWindowsAutomatically = false
+                settings.setSupportMultipleWindows(false)
+                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    settings.safeBrowsingEnabled = true
+                }
+                isFocusable = true
+                isFocusableInTouchMode = true
+                webChromeClient = WebChromeClient()
+                webViewClient = WebViewClient()
+                loadUrl(url)
+                requestFocus()
+            }
+        },
+        update = { webView ->
+            if (webView.url != url) webView.loadUrl(url)
+        },
+        onRelease = { webView ->
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.clearHistory()
+            webView.removeAllViews()
+            webView.destroy()
+        },
+    )
 }
