@@ -1,32 +1,22 @@
 package com.quilmes.xuper.ui.screens
 
 import android.content.Context
-import android.graphics.Bitmap
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.border
-import androidx.compose.foundation.focusable
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
@@ -35,12 +25,8 @@ import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.TmdbEpisode
 import com.quilmes.xuper.data.TmdbSeason
-import com.quilmes.xuper.data.WebSourceRegistry
-import com.quilmes.xuper.data.SourceEditServer
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
-import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperBackground
+import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
 import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
@@ -50,10 +36,7 @@ fun DetailScreen(
     title: Title,
     catalogService: TmdbCatalogService,
     onPlay: (String) -> Unit,
-    findPlayableEpisode: (String, Int, Int) -> Title? = { _, _, _ -> null },
-    onPlayStream: (String, String) -> Unit = { _, _ -> },
     onOpenTitle: (Title) -> Unit = {},
-    onSearchSource: (String, (Title?) -> Unit) -> Unit = { _, done -> done(null) },
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("xuper-library", Context.MODE_PRIVATE) }
@@ -65,22 +48,8 @@ fun DetailScreen(
     var loadingSeasons by remember(title.id) { mutableStateOf(false) }
     var loadingEpisodes by remember(title.id) { mutableStateOf(false) }
     var relatedTitles by remember(title.id) { mutableStateOf<List<Title>>(emptyList()) }
-    var imdbId by remember(title.id) { mutableStateOf<String?>(null) }
-    var loadingImdbId by remember(title.id) { mutableStateOf(false) }
-    var searchingSource by remember(title.id) { mutableStateOf(false) }
-    var sourceSearchMessage by remember(title.id) { mutableStateOf<String?>(null) }
     val isTmdb = title.id.startsWith("tmdb-")
     val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
-
-    LaunchedEffect(Unit) { SourceEditServer.start(context) }
-
-    LaunchedEffect(title.id) {
-        if (isTmdb && title.contentKind != ContentKind.LIVE) {
-            loadingImdbId = true
-            imdbId = catalogService.getImdbId(title.id)
-            loadingImdbId = false
-        } else imdbId = null
-    }
 
     LaunchedEffect(title.id) {
         relatedTitles = if (isTmdb && title.contentKind != ContentKind.LIVE) catalogService.loadRelatedTitles(title.id) else emptyList()
@@ -108,14 +77,6 @@ fun DetailScreen(
             selectedEpisode = episodes.firstOrNull()?.number
         } else episodes = emptyList()
     }
-
-    val sourceKey = when {
-        title.contentKind == ContentKind.SERIES && selectedSeason != null && selectedEpisode != null ->
-            WebSourceRegistry.episodeKey(title.id, selectedSeason!!, selectedEpisode!!)
-        title.contentKind != ContentKind.SERIES -> WebSourceRegistry.titleKey(title.id)
-        else -> null
-    }
-
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(XuperBackground),
@@ -149,27 +110,10 @@ fun DetailScreen(
                         )
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            // TMDB catalog items use FrameXTV as the default player, even if
-                            // no IPTV stream is associated with the catalog entry yet.
                             val frameXPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
-                                WebSourceRegistry.episodeKey(title.id, selectedSeason!!, selectedEpisode!!)
+                                "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
-                            if (WebSourceRegistry.frameXEmbedUrl(frameXPlaybackId) != null || title.streamUrl.isNotBlank()) {
-                                Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  Reproducir") }
-                            } else {
-                                Button(onClick = {
-                                    if (!searchingSource) {
-                                        searchingSource = true
-                                        sourceSearchMessage = "Buscando en las listas IPTV…"
-                                        onSearchSource(title.id) { result ->
-                                            searchingSource = false
-                                            sourceSearchMessage = if (result != null) "Fuente encontrada." else "No se encontró una fuente. Revisá las listas o intentá más tarde."
-                                        }
-                                    }
-                                }, enabled = !searchingSource) {
-                                    Text(if (searchingSource) "Buscando…" else "🔎 Buscar fuente")
-                                }
-                            }
+                            Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  Reproducir") }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
                                 if (favorites) ids.remove(title.id) else ids.add(title.id)
@@ -177,24 +121,6 @@ fun DetailScreen(
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
                         }
-                        sourceSearchMessage?.let { message ->
-                            Text(message, color = XuperTextSecondary, fontSize = 12.sp)
-                        }
-                        val qrKey = sourceKey ?: WebSourceRegistry.titleKey(title.id)
-                        SourceQrEditor(
-                            contentKey = qrKey,
-                            title = title.name,
-                            isSeries = title.contentKind == ContentKind.SERIES,
-                            season = selectedSeason,
-                            episode = selectedEpisode,
-                            compact = true,
-                            imdbId = imdbId,
-                            onPlayStream = onPlayStream,
-                        )
-                        if (isTmdb) Text(
-                            "Metadatos e imágenes: TMDB. La ficha no garantiza que exista una fuente de vídeo.",
-                            color = XuperTextSecondary, fontSize = 10.sp,
-                        )
                     }
                 }
             }
@@ -224,7 +150,6 @@ fun DetailScreen(
                 Text("Cargando episodios…", color = XuperTextSecondary, modifier = Modifier.padding(start = 48.dp, top = 8.dp))
             }
             items(episodes, key = { "${selectedSeason}-${it.number}" }) { episode ->
-                val playableEpisode = findPlayableEpisode(title.name, selectedSeason ?: 0, episode.number)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 6.dp)
                         .background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
@@ -245,25 +170,13 @@ fun DetailScreen(
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { selectedEpisode = episode.number }) {
-                                Text(if (selectedEpisode == episode.number) "✓  Servidores elegidos" else "Elegir servidores")
-                            }
-                            if (selectedEpisode == episode.number) {
-                                Text("FrameXTV.xyz queda primero como servidor predeterminado abajo.", color = XuperAccentBright, fontSize = 11.sp)
-                            }
-                            if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Fuente IPTV") }
+                            Button(onClick = {
+                                selectedEpisode = episode.number
+                                onPlay("${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                            }) { Text("▶  Reproducir episodio") }
                         }
                     }
-                    SourceQrEditor(
-                        contentKey = WebSourceRegistry.episodeKey(title.id, selectedSeason ?: 1, episode.number),
-                        title = title.name,
-                        isSeries = true,
-                        season = selectedSeason ?: 1,
-                        episode = episode.number,
-                        compact = true,
-                        imdbId = imdbId,
-                        onPlayStream = onPlayStream,
-                    )
+
                 }
             }
         }
@@ -278,19 +191,10 @@ fun DetailScreen(
                     Text("Recomendaciones y títulos similares", color = XuperTextSecondary, fontSize = 13.sp)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(vertical = 8.dp)) {
                         items(relatedTitles, key = { it.id }) { related ->
-                            Column(
-                                Modifier.width(142.dp).clickable { onOpenTitle(related) },
-                                verticalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                AsyncImage(
-                                    model = related.posterUrl.ifBlank { related.backdropUrl },
-                                    contentDescription = related.name,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxWidth().height(204.dp).background(XuperSurfaceVariant, RoundedCornerShape(8.dp)),
-                                )
-                                Text(related.name, color = XuperTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                Text(listOfNotNull(related.year, related.rating?.let { "★ $it" }).joinToString(" · "), color = XuperTextSecondary, fontSize = 11.sp)
-                            }
+                            com.quilmes.xuper.ui.components.PosterCard(
+                                title = related,
+                                onClick = { onOpenTitle(related) },
+                            )
                         }
                     }
                 }
@@ -300,96 +204,3 @@ fun DetailScreen(
     }
 }
 
-
-@Composable
-private fun SourceQrEditor(
-    contentKey: String,
-    title: String,
-    isSeries: Boolean,
-    season: Int?,
-    episode: Int?,
-    compact: Boolean,
-    imdbId: String? = null,
-    onPlayStream: (String, String) -> Unit = { _, _ -> },
-) {
-    val context = LocalContext.current
-    var enlarged by remember(contentKey) { mutableStateOf(false) }
-    var sourceVersion by remember(contentKey) { mutableIntStateOf(0) }
-    val sources = remember(contentKey, title, isSeries, season, episode, imdbId, sourceVersion) {
-        WebSourceRegistry.getSources(context, contentKey, imdbId, title, isSeries, season, episode)
-    }
-    val url = remember(contentKey, title, isSeries, season, episode, imdbId) {
-        SourceEditServer.editorUrl(contentKey, title, isSeries, season, episode, imdbId)
-    }
-    val bitmap = remember(url) {
-        url?.let {
-            runCatching {
-                val matrix = QRCodeWriter().encode(it, BarcodeFormat.QR_CODE, 220, 220)
-                Bitmap.createBitmap(220, 220, Bitmap.Config.RGB_565).also { bmp ->
-                    for (x in 0 until 220) for (y in 0 until 220) bmp.setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-                }
-            }.getOrNull()
-        }
-    }
-    Column(
-        modifier = Modifier.padding(start = 8.dp).width(if (compact) 94.dp else 140.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(3.dp),
-    ) {
-        if (bitmap != null) {
-            Image(
-                bitmap = bitmap.asImageBitmap(),
-                contentDescription = "Tocar para agrandar el QR y editar enlaces desde el celular",
-                modifier = Modifier
-                    .size(if (compact) 76.dp else 120.dp)
-                    .border(3.dp, XuperAccentBright, RoundedCornerShape(10.dp))
-                    .background(androidx.compose.ui.graphics.Color.White, RoundedCornerShape(10.dp))
-                    .clickable { enlarged = true }
-                    .focusable()
-                    .padding(3.dp),
-            )
-            Text("◉ TOCÁ PARA AGRANDAR", color = XuperAccentBright, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-            if (enlarged) {
-                Dialog(onDismissRequest = { enlarged = false }) {
-                    Column(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 760.dp)
-                            .verticalScroll(rememberScrollState())
-                            .background(androidx.compose.ui.graphics.Color.White, RoundedCornerShape(18.dp)).padding(20.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text("Escaneá para editar las fuentes desde el celular", color = androidx.compose.ui.graphics.Color.Black, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Código QR ampliado", modifier = Modifier.widthIn(max = 300.dp).fillMaxWidth().aspectRatio(1f))
-                        Text("Fuentes para este contenido", color = androidx.compose.ui.graphics.Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        sources.forEachIndexed { index, source ->
-                            val provider = when {
-                                source.contains("framextv.xyz", true) -> "FrameXTV"
-                                source.contains("streamimdb.ru", true) -> "StreamIMDB"
-                                source.contains("movies2watch", true) -> "Movies2Watch"
-                                source.contains("repelishd", true) -> "RePelisHD"
-                                else -> "Fuente ${index + 1}"
-                            }
-                            Column(
-                                Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color(0xFFF0F1F5), RoundedCornerShape(8.dp)).padding(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(5.dp),
-                            ) {
-                                Text("${index + 1}. $provider", color = androidx.compose.ui.graphics.Color.Black, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                                Text(source, color = androidx.compose.ui.graphics.Color.DarkGray, fontSize = 10.sp, maxLines = 3)
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { onPlayStream("$title · $provider", source) }) { Text("▶ Reproducir") }
-                                    Button(onClick = {
-                                        WebSourceRegistry.removeSource(context, contentKey, source)
-                                        sourceVersion++
-                                    }) { Text("Quitar") }
-                                }
-                            }
-                        }
-                        Text("Al cerrar el QR, las URLs vuelven a ocultarse. El editor del celular guarda los cambios en Xuper.", color = androidx.compose.ui.graphics.Color.DarkGray, fontSize = 11.sp)
-                    }
-                }
-            }
-        } else {
-            Text("QR no disponible", color = XuperTextSecondary, fontSize = 10.sp)
-        }
-    }
-}

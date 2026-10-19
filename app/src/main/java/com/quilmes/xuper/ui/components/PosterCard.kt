@@ -52,10 +52,10 @@ fun PosterCard(
         modifier = modifier
             .width(CardWidth)
             .height(if (title.isLive || title.contentKind == ContentKind.LIVE) CardHeight else VODCardHeight),
-        scale = CardDefaults.scale(focusedScale = 1.08f),
+        scale = CardDefaults.scale(focusedScale = 1.11f),
         border = CardDefaults.border(
             focusedBorder = Border(
-                border = BorderStroke(3.dp, XuperAccentBright),
+                border = BorderStroke(4.dp, XuperAccentBright),
                 shape = RoundedCornerShape(8.dp),
             )
         ),
@@ -85,11 +85,8 @@ fun PosterCard(
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                // Catálogo de TMDB sin fuente de video coincidente (normal en el buscador:
-                // trae metadata de estrenos que nuestras listas no tienen). Se avisa ANTES
-                // de tocar la ficha en vez de dejar que el usuario entre y se encuentre con
-                // el botón deshabilitado.
-                val noVideo = !title.isLive && title.contentKind != ContentKind.LIVE && title.streamUrl.isBlank()
+                // Solo marcamos como sin video los elementos no TMDB sin stream asociado.
+                val noVideo = !title.id.startsWith("tmdb-") && !title.isLive && title.contentKind != ContentKind.LIVE && title.streamUrl.isBlank()
                 if (noVideo) {
                     Box(
                         modifier = Modifier

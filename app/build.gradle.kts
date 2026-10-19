@@ -134,10 +134,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
-    // Fuentes web: editor QR en la red local y resolución prudente de páginas públicas
+    // Parser HTML para páginas web usadas por fuentes IPTV heredadas.
     implementation("org.jsoup:jsoup:1.18.3")
-    implementation("com.google.zxing:core:3.5.3")
-    implementation("org.nanohttpd:nanohttpd:2.3.1")
 
     // Carga de imágenes (pósters, backdrops) desde URL
     implementation("io.coil-kt:coil-compose:2.6.0")

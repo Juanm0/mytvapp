@@ -520,17 +520,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var serverOptions by remember(url) { mutableStateOf<List<String>>(emptyList()) }
-    var showServerPicker by remember(url) { mutableStateOf(false) }
-
-    fun refreshServerOptions() {
-        val script = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]));var out=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!out.some(function(x){return x===t}))out.push(t);});return JSON.stringify(out.slice(0,12));}catch(e){return "[]";}})()"""
-        webViewRef?.evaluateJavascript(script) { value ->
-            val decoded = runCatching { org.json.JSONArray(value?.trim()?.removeSurrounding("\"" )?.replace("\\\"", "\"") ?: "[]") }.getOrNull()
-            if (decoded != null) serverOptions = (0 until decoded.length()).mapNotNull { i -> decoded.optString(i).takeIf { it.isNotBlank() } }
-        }
-    }
-
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
         delay(30_000)
@@ -539,20 +528,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
         }
     }
 
-    // Algunos proveedores cargan la página correctamente pero fallan al iniciar el video.
-    // Sondeamos el error HTML5 y los servidores visibles porque WebView no notifica esos fallos
-    // como errores de navegación. Los iframes de otro origen no son inspeccionables por seguridad.
-    LaunchedEffect(url) {
-        while (true) {
-            delay(3_000)
-            webViewRef?.evaluateJavascript("(function(){var v=document.querySelector('video');return v&&v.error?'VIDEO_ERROR:'+v.error.code:''})()") { result ->
-                if (result?.contains("VIDEO_ERROR") == true && pageError == null) {
-                    pageError = "La página cargó, pero su reproductor informó un error de video. Si hay otro servidor disponible, podés cambiarlo abajo."
-                }
-            }
-            refreshServerOptions()
-        }
-    }
 
     BackHandler(enabled = true) {
         if (webViewRef?.canGoBack() == true) webViewRef?.goBack() else onExit()
@@ -565,6 +540,8 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(android.graphics.Color.BLACK) }
                 val webView = WebView(viewContext).apply {
                     setBackgroundColor(android.graphics.Color.BLACK)
+                    setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    settings.cacheMode = WebSettings.LOAD_DEFAULT
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
@@ -639,7 +616,31 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
                             pageFinished = true
-                            refreshServerOptions()
+                            // Convierte el D-pad del control remoto en navegación por foco/click
+                            // dentro del reproductor web, con un foco visual consistente.
+                            view?.evaluateJavascript("""(function(){
+                              if(window.__xuperRemoteNavInstalled)return;window.__xuperRemoteNavInstalled=true;
+                              var css='button:focus,a:focus,[role=button]:focus,input:focus,select:focus,video:focus,[tabindex]:focus{outline:3px solid #42d9ff!important;outline-offset:3px!important;box-shadow:0 0 0 4px rgba(66,217,255,.22)!important}';
+                              var st=document.getElementById('xuper-remote-focus');if(!st){st=document.createElement('style');st.id='xuper-remote-focus';(document.head||document.documentElement).appendChild(st)}st.textContent=css;
+                              window.__xuperRemoteKey=function(k){
+                                var sel='button:not([disabled]),a[href],[role=button]:not([aria-disabled=true]),input:not([disabled]),select:not([disabled]),video,[tabindex]:not([tabindex="-1"])';
+                                var els=Array.from(document.querySelectorAll(sel)).filter(function(e){var r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
+                                var active=document.activeElement, idx=els.indexOf(active);
+                                if(k==='enter'||k==='center'){if(active&&active!==document.body){active.click();return true}if(els[0]){els[0].focus();els[0].click();return true}return false}
+                                if(!['left','right','up','down'].includes(k))return false;
+                                var cur=idx>=0?els[idx]:null;if(!cur){if(els[0]){els[0].focus();els[0].scrollIntoView({block:'nearest',inline:'nearest'});return true}return false}
+                                var a=cur.getBoundingClientRect(),ax=a.left+a.width/2,ay=a.top+a.height/2,best=null,bestScore=Infinity;
+                                els.forEach(function(e){if(e===cur)return;var r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,dx=x-ax,dy=y-ay,primary,secondary;
+                                  if(k==='left'){if(dx>=-1)return;primary=-dx;secondary=Math.abs(dy)}
+                                  if(k==='right'){if(dx<=1)return;primary=dx;secondary=Math.abs(dy)}
+                                  if(k==='up'){if(dy>=-1)return;primary=-dy;secondary=Math.abs(dx)}
+                                  if(k==='down'){if(dy<=1)return;primary=dy;secondary=Math.abs(dx)}
+                                  var score=primary+secondary*1.8;if(score<bestScore){best=e;bestScore=score}
+                                });
+                                if(best){best.focus();best.scrollIntoView({block:'nearest',inline:'nearest',behavior:'auto'});return true}return false;
+                              };
+                              document.addEventListener('keydown',function(e){var map={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',Enter:'center',' ':'center'};var k=map[e.key];if(k&&window.__xuperRemoteKey&&window.__xuperRemoteKey(k)){e.preventDefault();e.stopPropagation()}},true);
+                            })();""", null)
                             if (view != null && !pageUrl.isNullOrBlank()) {
                                 runCatching { XuperBraveAdblock.injectCosmetics(view, pageUrl) }
                                     .onFailure { android.util.Log.w("XuperWebView", "No se pudieron aplicar reglas cosméticas", it) }
@@ -663,14 +664,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                                 if(!style){style=document.createElement('style');style.id='xuper-ad-cosmetics';(document.head||document.documentElement).appendChild(style);} style.textContent=css;
                               } catch(e) {}
                             })();""", null)
-                            // Se oculta el botón de fullscreen del reproductor del sitio porque
-                            // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
-                            // son best-effort: cada proveedor usa un reproductor distinto.
-                            view?.evaluateJavascript("""(function(){
-                              var css = '.jw-icon-fullscreen,.vjs-fullscreen-control,.plyr__control[data-plyr="fullscreen"],.shaka-fullscreen-button,.fullscreen-button,[aria-label*="Fullscreen" i],[title*="Fullscreen" i],[aria-label*="Pantalla completa" i],[title*="Pantalla completa" i]{display:none!important;visibility:hidden!important;width:0!important}';
-                              var style=document.getElementById('xuper-hide-fullscreen');
-                              if(!style){style=document.createElement('style');style.id='xuper-hide-fullscreen';document.head.appendChild(style);} style.textContent=css;
-                            })();""", null)
+
                         }
                         override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
                             // Android puede matar el proceso aislado de WebView por memoria o por un fallo del sitio.
@@ -720,26 +714,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }
-        if (serverOptions.isNotEmpty() && pageError == null) {
-            Button(onClick = { refreshServerOptions(); showServerPicker = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(20.dp)) {
-                Text("Cambiar servidor (${serverOptions.size})")
-            }
-        }
-        if (showServerPicker && serverOptions.isNotEmpty()) {
-            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.72f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Servidores disponibles en la página", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                serverOptions.forEachIndexed { index, label ->
-                    Button(onClick = {
-                        val safeIndex = index.coerceIn(0, 11)
-                        val clickScript = """(function(){try{var re=/(server|servidor|source|fuente|player|mirror|stream|opcion|opción|vidcloud|upcloud|filemoon|doodstream|mixdrop|streamwish|uqload|streamtape)/i;var els=Array.from(document.querySelectorAll('button,a,[role=button],.server,.servers,.source,.sources,.player-switcher,[data-server]'));var unique=[];els.forEach(function(e){var r=e.getBoundingClientRect();var t=((e.innerText||e.getAttribute('aria-label')||e.getAttribute('title')||'').trim()).replace(/\s+/g,' ');if(r.width>0&&r.height>0&&t&&t.length<70&&re.test(t)&&!unique.some(function(x){return x.t===t}))unique.push({e:e,t:t});});els=unique.slice(0,12).map(function(x){return x.e});if(els[SAFE_INDEX]){els[SAFE_INDEX].click();return 'ok'}return 'missing'}catch(e){return 'error'}})()""".replace("SAFE_INDEX", safeIndex.toString())
-                        webViewRef?.evaluateJavascript(clickScript, null)
-                        showServerPicker = false
-                        pageError = null
-                    }) { Text(label) }
-                }
-                Button(onClick = { showServerPicker = false }) { Text("Cerrar") }
-            }
-        }
         if (pageError != null) {
             Column(Modifier.align(Alignment.Center).fillMaxWidth(0.78f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No se pudo reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -747,16 +721,13 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { pageError = null; progress = 0; pageFinished = false; webViewRef?.reload() }) { Text("↻  Reintentar") }
-                    if (serverOptions.isNotEmpty()) {
-                        Button(onClick = { pageError = null; refreshServerOptions(); showServerPicker = true }) { Text("Cambiar servidor") }
-                    }
                     Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
                 }
             }
         }
         Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("Bloqueo reforzado activo · OK: controles · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
+            Text("Control remoto: flechas para navegar · OK para seleccionar · Atrás para salir", color = Color(0xFFD8E3EA), fontSize = 11.sp)
         }
     }
 }

@@ -278,16 +278,7 @@ class MainActivity : ComponentActivity() {
             XuperTheme {
                 val navController = rememberNavController()
                 val observedSections by repository.sections.collectAsState()
-                NavHost(navController = navController, startDestination = "framex-test") {
-                    // Modo de prueba aislado: abre FrameXTV directamente, sin pasar por IPTV,
-                    // resolutores de listas ni selección de fuentes.
-                    composable("framex-test") {
-                        PlayerScreen(
-                            name = "Prueba FrameXTV · TMDB 969681",
-                            streamUrl = "https://framextv.xyz/embed/969681?autoplay=1&muted=0",
-                            onExit = { navController.navigate("main") { popUpTo("framex-test") { inclusive = true } } },
-                        )
-                    }
+                NavHost(navController = navController, startDestination = "main") {
                     composable("main") {
                         MainScreen(
                             repository = repository,
@@ -305,10 +296,6 @@ class MainActivity : ComponentActivity() {
                         arguments = listOf(navArgument("titleId") { type = NavType.StringType }),
                     ) { entry ->
                         val id = entry.arguments?.getString("titleId").orEmpty()
-                        // Al abrir una ficha empezamos a consultar las listas. Cada fuente
-                        // publica sus resultados al terminar, así que una coincidencia puede
-                        // habilitar Reproducir antes de que finalice la descarga de todas.
-                        LaunchedEffect(id) { requestIptvRefresh() }
                         val title = remember(id, pendingDetailTitle.value?.id, observedSections) {
                             repository.find(id) ?: pendingDetailTitle.value?.takeIf { it.id == id }
                         }
@@ -316,7 +303,7 @@ class MainActivity : ComponentActivity() {
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { playableId ->
-                                val frameXUrl = WebSourceRegistry.frameXEmbedUrl(title.id)
+                                val frameXUrl = WebSourceRegistry.frameXEmbedUrl(playableId)
                                 if (frameXUrl != null) {
                                     val encodedUrl = Base64.encodeToString(
                                         frameXUrl.toByteArray(StandardCharsets.UTF_8),
@@ -330,32 +317,6 @@ class MainActivity : ComponentActivity() {
                             onOpenTitle = { relatedTitle ->
                                 pendingDetailTitle.value = relatedTitle
                                 navController.navigate("detail/${relatedTitle.id}")
-                            },
-                            onPlayStream = { streamName, streamUrl ->
-                                val encodedUrl = Base64.encodeToString(
-                                    streamUrl.toByteArray(StandardCharsets.UTF_8),
-                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                                )
-                                navController.navigate("external-player/${Uri.encode(streamName)}/$encodedUrl")
-                            },
-                            onSearchSource = { titleId, onResult ->
-                                lifecycleScope.launch {
-                                    localFilesReady.await()
-                                    val result = runCatching {
-                                        repository.refresh()
-                                        repository.find(titleId)?.takeIf { it.streamUrl.isNotBlank() }
-                                    }.onFailure {
-                                        android.util.Log.e("XuperQuilmesTV", "Falló la búsqueda de fuentes para $titleId", it)
-                                    }.getOrNull()
-                                    onResult(result)
-                                    if (result != null) {
-                                        pendingDetailTitle.value = result
-                                        navController.navigate("player/${Uri.encode(titleId)}")
-                                    }
-                                }
-                            },
-                            findPlayableEpisode = { seriesName, season, episode ->
-                                (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
                             },
                         )
                     }
