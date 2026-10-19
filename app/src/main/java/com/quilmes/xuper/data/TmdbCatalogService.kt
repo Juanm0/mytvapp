@@ -99,32 +99,65 @@ class TmdbCatalogService(private val cacheDir: File) {
     suspend fun search(query: String): List<Title> = withContext(Dispatchers.IO) {
         val q = query.trim()
         if (apiKey.isBlank() || q.length < 2) return@withContext emptyList()
+
         runCatching {
-            val data = request("search/multi?query=${URLEncoder.encode(q, "UTF-8")}&include_adult=false")
-            val results = data.optJSONArray("results") ?: JSONArray()
-            buildList {
-                for (i in 0 until results.length()) {
-                    val item = results.optJSONObject(i) ?: continue
-                    val mediaType = item.optString("media_type")
-                    if (mediaType != "movie" && mediaType != "tv") continue
-                    val id = item.optLong("id", 0L)
-                    if (id <= 0L) continue
-                    val isTv = mediaType == "tv"
-                    val name = item.optString(if (isTv) "name" else "title")
-                    if (name.isBlank()) continue
-                    val date = item.optString(if (isTv) "first_air_date" else "release_date")
-                    val rating = item.optDouble("vote_average", 0.0).takeIf { it > 0.0 }?.let { String.format(Locale.US, "%.1f", it) }
-                    add(Title(
-                        id = "tmdb-${if (isTv) "tv" else "movie"}-$id", name = name,
-                        description = item.optString("overview"),
-                        posterUrl = imageUrl(item.optString("poster_path"), "w500"),
-                        backdropUrl = imageUrl(item.optString("backdrop_path"), "w1280").ifBlank { imageUrl(item.optString("poster_path"), "w500") },
-                        streamUrl = "", isLive = false, year = date.take(4).takeIf { it.length == 4 }, rating = rating,
-                        contentKind = if (isTv) ContentKind.SERIES else ContentKind.MOVIE,
-                    ))
+            val found = linkedMapOf<String, Title>()
+
+            // La búsqueda por texto de TMDB no interpreta un número como ID.
+            // Si el usuario pega un ID (por ejemplo el de FrameXTV), consultar
+            // directamente las fichas de película y serie para poder encontrarlo.
+            if (q.matches(Regex("\\d{1,12}"))) {
+                val numericId = q.toLongOrNull()
+                if (numericId != null && numericId > 0L) {
+                    listOf("movie" to ContentKind.MOVIE, "tv" to ContentKind.SERIES).forEach { (type, kind) ->
+                        runCatching {
+                            val item = request("$type/$numericId")
+                            val title = titleFromJson(item, kind)
+                            found[title.id] = title
+                        }
+                    }
                 }
-            }.distinctBy { it.id }
+            }
+
+            val data = runCatching {
+                request("search/multi?query=${URLEncoder.encode(q, "UTF-8")}&include_adult=false")
+            }.getOrNull()
+            val results = data?.optJSONArray("results") ?: JSONArray()
+            for (i in 0 until results.length()) {
+                val item = results.optJSONObject(i) ?: continue
+                val mediaType = item.optString("media_type")
+                val kind = when (mediaType) {
+                    "movie" -> ContentKind.MOVIE
+                    "tv" -> ContentKind.SERIES
+                    else -> continue
+                }
+                runCatching { titleFromJson(item, kind) }.getOrNull()?.let { found[it.id] = it }
+            }
+            found.values.toList()
         }.getOrDefault(emptyList())
+    }
+
+    private fun titleFromJson(item: JSONObject, kind: ContentKind): Title {
+        val isTv = kind == ContentKind.SERIES
+        val id = item.optLong("id", 0L)
+        require(id > 0L) { "TMDB devolvió un ID inválido" }
+        val name = item.optString(if (isTv) "name" else "title").trim()
+        require(name.isNotBlank()) { "TMDB no devolvió título" }
+        val date = item.optString(if (isTv) "first_air_date" else "release_date")
+        val poster = imageUrl(item.optString("poster_path"), "w500")
+        return Title(
+            id = "tmdb-${if (isTv) "tv" else "movie"}-$id",
+            name = name,
+            description = item.optString("overview"),
+            posterUrl = poster,
+            backdropUrl = imageUrl(item.optString("backdrop_path"), "w1280").ifBlank { poster },
+            streamUrl = "",
+            isLive = false,
+            year = date.take(4).takeIf { it.length == 4 },
+            rating = item.optDouble("vote_average", 0.0).takeIf { it > 0.0 }
+                ?.let { String.format(Locale.US, "%.1f", it) },
+            contentKind = kind,
+        )
     }
 
     /** Recomendaciones y títulos similares de TMDB para mostrar debajo de la ficha. */
@@ -209,17 +242,6 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
-    /** Resuelve el IMDb ID para consultar fuentes web alternativas asociadas al título. */
-    suspend fun getImdbId(titleId: String): String? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) return@withContext null
-        val parsed = parseTmdbId(titleId) ?: return@withContext null
-        val endpoint = if (parsed.first == "tv") "tv" else "movie"
-        runCatching {
-            request("$endpoint/${parsed.second}/external_ids")
-                .optString("imdb_id")
-                .takeIf { it.matches(Regex("tt\\d{5,12}")) }
-        }.getOrNull()
-    }
 
     private fun parseTmdbId(id: String): Pair<String, Long>? {
         val match = Regex("^tmdb-(tv|movie)-(\\d+)$").matchEntire(id) ?: return null

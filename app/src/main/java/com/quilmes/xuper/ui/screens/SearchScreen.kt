@@ -62,10 +62,13 @@ fun SearchScreen(
         } else {
             val tmdb = catalogService.search(query)
             // registerCatalogTitles reconstruye el índice: nunca en el hilo principal.
-            results = withContext(Dispatchers.Default) {
+            val localResults = withContext(Dispatchers.Default) {
                 (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
                 repository.search(query)
-            }.distinctBy { it.id }.take(120)
+            }
+            // Conserva los resultados directos de TMDB: al buscar un ID numérico,
+            // el título se obtiene por ID y no coincide por texto con el índice local.
+            results = (tmdb + localResults).distinctBy { it.id }.take(120)
         }
     }
 
