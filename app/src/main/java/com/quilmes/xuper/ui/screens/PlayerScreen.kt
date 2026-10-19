@@ -104,6 +104,12 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
+    // Los embeds FrameXTV son páginas HTML, no streams directos. En modo de prueba
+    // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
+    if (streamUrl.startsWith("https://framextv.xyz/embed/")) {
+        WebEmbedPlayer(url = streamUrl, onExit = onExit)
+        return
+    }
     var resolveAsWebPage by remember(streamUrl) { mutableStateOf(false) }
     val resolvePageCallback = remember(streamUrl, directOnly) { { if (!directOnly) resolveAsWebPage = true } }
     if (resolveAsWebPage && !directOnly) {
@@ -508,7 +514,7 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
  * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
  */
 @Composable
-private fun WebEmbedPlayer(url: String) {
+private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     val context = LocalContext.current
     var progress by remember(url) { mutableStateOf(0) }
     var pageError by remember(url) { mutableStateOf<String?>(null) }
@@ -548,7 +554,9 @@ private fun WebEmbedPlayer(url: String) {
         }
     }
 
-    BackHandler(enabled = webViewRef?.canGoBack() == true) { webViewRef?.goBack() }
+    BackHandler(enabled = true) {
+        if (webViewRef?.canGoBack() == true) webViewRef?.goBack() else onExit()
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(

@@ -151,8 +151,11 @@ fun DetailScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             // TMDB catalog items use FrameXTV as the default player, even if
                             // no IPTV stream is associated with the catalog entry yet.
-                            if (WebSourceRegistry.frameXEmbedUrl(title.id) != null || title.streamUrl.isNotBlank()) {
-                                Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
+                            val frameXPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
+                                WebSourceRegistry.episodeKey(title.id, selectedSeason!!, selectedEpisode!!)
+                            } else title.id
+                            if (WebSourceRegistry.frameXEmbedUrl(frameXPlaybackId) != null || title.streamUrl.isNotBlank()) {
+                                Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  Reproducir") }
                             } else {
                                 Button(onClick = {
                                     if (!searchingSource) {

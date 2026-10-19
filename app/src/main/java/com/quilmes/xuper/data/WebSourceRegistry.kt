@@ -16,8 +16,13 @@ object WebSourceRegistry {
     const val FRAME_XTV_EXAMPLE = "https://framextv.xyz/watch/1396/3/11"
     const val FRAME_XTV_HOME = "https://framextv.xyz/"
 
-    /** Build the FrameXTV embed URL from the numeric TMDB movie/TV ID. */
+    /** Build the documented FrameXTV embed URL from a TMDB ID, optionally with season/episode. */
     fun frameXEmbedUrl(tmdbCatalogId: String): String? {
+        val episodeMatch = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(tmdbCatalogId)
+        if (episodeMatch != null) {
+            val (id, season, episode) = episodeMatch.destructured
+            return "https://framextv.xyz/embed/$id/$season/$episode?autoplay=1&muted=0"
+        }
         val match = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(tmdbCatalogId) ?: return null
         return "https://framextv.xyz/embed/${match.groupValues[1]}?autoplay=1&muted=0"
     }
@@ -71,10 +76,8 @@ object WebSourceRegistry {
 
         val generated = buildList {
             if (isSeries && seriesId != null && seasonNo != null && episodeNo != null) {
-                // Primary route matches the user-supplied Breaking Bad S03E11 example.
-                add("https://framextv.xyz/watch/$seriesId/$seasonNo/$episodeNo")
-                // Some catalogues use episode-season order; retain as an alternative, not as verified.
-                if (seasonNo != episodeNo) add("https://framextv.xyz/watch/$seriesId/$episodeNo/$seasonNo")
+                // Documented FrameXTV embed format: /embed/{TMDB ID}/{season}/{episode}.
+                add("https://framextv.xyz/embed/$seriesId/$seasonNo/$episodeNo?autoplay=1&muted=0")
                 // Movies2Watch uses provider-specific slugs/IDs, so use a title search candidate rather than inventing a detail slug.
                 if (encodedQuery.isNotBlank()) add("$MOVIES2WATCH_SEARCH$encodedQuery")
                 if (encodedTitle.isNotBlank() && encodedTitle != encodedQuery) add("$MOVIES2WATCH_SEARCH$encodedTitle")

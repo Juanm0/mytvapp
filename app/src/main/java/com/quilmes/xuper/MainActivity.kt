@@ -278,7 +278,16 @@ class MainActivity : ComponentActivity() {
             XuperTheme {
                 val navController = rememberNavController()
                 val observedSections by repository.sections.collectAsState()
-                NavHost(navController = navController, startDestination = "main") {
+                NavHost(navController = navController, startDestination = "framex-test") {
+                    // Modo de prueba aislado: abre FrameXTV directamente, sin pasar por IPTV,
+                    // resolutores de listas ni selección de fuentes.
+                    composable("framex-test") {
+                        PlayerScreen(
+                            name = "Prueba FrameXTV · TMDB 969681",
+                            streamUrl = "https://framextv.xyz/embed/969681?autoplay=1&muted=0",
+                            onExit = { navController.navigate("main") { popUpTo("framex-test") { inclusive = true } } },
+                        )
+                    }
                     composable("main") {
                         MainScreen(
                             repository = repository,
