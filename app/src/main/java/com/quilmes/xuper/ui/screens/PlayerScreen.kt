@@ -187,7 +187,14 @@ private fun NativePlayerScreen(
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
-            .build()
+            .build().apply {
+                // Preferir subtítulos en español automáticamente cuando el stream los ofrece.
+                // Media3 conserva esta preferencia al cambiar de contenido dentro del reproductor.
+                trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .setPreferredTextLanguage("es")
+                    .setSelectUndeterminedTextLanguage(false)
+                    .build()
+            }
     }
 
     fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
