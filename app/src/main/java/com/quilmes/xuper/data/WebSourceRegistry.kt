@@ -107,14 +107,15 @@ object WebSourceRegistry {
 
     /** Replace selected source atomically; don't hide/remove the old URL before the new one is saved. */
     fun replaceSource(context: Context, contentKey: String, oldUrl: String, rawUrl: String): Boolean {
-        val replacement = rawUrl.trim()
-        if (replacement.isEmpty()) return false
+        val replacement = rawUrl
+        if (replacement.isBlank()) return false
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val current = decode(prefs.getString(KEY_PREFIX + contentKey, null)).toMutableList()
-        val index = current.indexOf(oldUrl)
+        val index = oldUrl.takeIf { it.isNotBlank() }?.let(current::indexOf) ?: -1
         if (index >= 0) current[index] = replacement else current.add(replacement)
         val result = current.distinct()
-        val hidden = (decode(prefs.getString("hidden:$contentKey", null)) + oldUrl).distinct()
+        val hidden = if (oldUrl.isBlank()) decode(prefs.getString("hidden:$contentKey", null))
+            else (decode(prefs.getString("hidden:$contentKey", null)) + oldUrl).distinct()
         return prefs.edit()
             .putString(KEY_PREFIX + contentKey, JSONArray(result).toString())
             .putString("hidden:$contentKey", JSONArray(hidden).toString())

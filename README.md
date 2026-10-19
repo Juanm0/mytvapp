@@ -58,7 +58,7 @@ En la ficha de una película/serie y junto a cada episodio se muestra un QR que 
 
 ### Correcciones del editor QR (octubre de 2026)
 - El editor móvil recibe el IMDb ID de la ficha cuando está disponible y muestra StreamIMDb como fuente candidata de películas sin inventar IDs.
-- El campo de URL móvil usa texto con teclado de URL para evitar rechazos del control HTML `type=url` en algunos navegadores móviles. El guardado sigue validando protocolo HTTP/HTTPS y host.
+- El campo de URL móvil usa texto (no `type=url`) y guarda el texto pegado sin validar esquema ni host; solo rechaza un campo vacío.
 - El QR de la ficha se puede tocar para abrir una vista ampliada; al cerrarla/volver atrás se regresa al tamaño compacto.
 - Si una fuente no aparece, depende de que la ficha haya recuperado el IMDb ID y de que la fuente sea aplicable al tipo de contenido.
 
@@ -66,4 +66,6 @@ En la ficha de una película/serie y junto a cada episodio se muestra un QR que 
 ## QR editor fixes
 - The phone editor replaces a selected source atomically and hides the replaced generated candidate, so it does not reappear next time the title is opened.
 - URL input accepts the pasted text as-is (only blank input is rejected); no mandatory `http://` or `https://` prefix validation is applied by the editor. Playback still depends on whether the player/provider can handle the supplied text.
+- The phone editor can also add a brand-new source, rather than only replacing an existing candidate.
+- QR address selection prefers Wi-Fi/Ethernet LAN interfaces over virtual/VPN interfaces; Android network-state permissions are declared for the LAN editor.
 - QR codes have a high-contrast accent border and a clear touch prompt; tapping opens the larger scan view, and back/dismiss returns to the detail screen.
