@@ -12,6 +12,9 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceRequest
+import android.os.Message
+import java.net.URI
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -460,7 +463,16 @@ private fun WebEmbedPlayer(url: String) {
     val context = LocalContext.current
     var progress by remember(url) { mutableStateOf(0) }
     var pageError by remember(url) { mutableStateOf<String?>(null) }
+    var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    // No dejamos un indicador de carga infinito si el servidor no termina de responder.
+    LaunchedEffect(url) {
+        delay(30_000)
+        if (!pageFinished && pageError == null) {
+            pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
+        }
+    }
 
     BackHandler(enabled = webViewRef?.canGoBack() == true) { webViewRef?.goBack() }
 
@@ -474,10 +486,11 @@ private fun WebEmbedPlayer(url: String) {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mediaPlaybackRequiresUserGesture = false
-                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    // Bloqueo básico de ventanas emergentes y contenido mixto inseguro.
+                    settings.javaScriptCanOpenWindowsAutomatically = false
                     settings.setSupportMultipleWindows(false)
                     settings.loadsImagesAutomatically = true
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.userAgentString = settings.userAgentString + " XuperQuilmesTV/1.0"
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.safeBrowsingEnabled = true
                     CookieManager.getInstance().setAcceptCookie(true)
@@ -491,6 +504,10 @@ private fun WebEmbedPlayer(url: String) {
                         private var originalUi = 0
                         override fun onProgressChanged(view: WebView?, newProgress: Int) {
                             progress = newProgress
+                        }
+                        override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean {
+                            // Nunca crear una segunda ventana/pestaña; suele ser la vía de los popunders.
+                            return false
                         }
                         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                             if (view == null || fullscreenView != null) { callback?.onCustomViewHidden(); return }
@@ -514,9 +531,25 @@ private fun WebEmbedPlayer(url: String) {
                         }
                     }
                     webViewClient = object : WebViewClient() {
-                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) { progress = 0; pageError = null }
+                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                            val requestUrl = request?.url?.toString() ?: return null
+                            return if (XuperWebRequestFilter.shouldBlock(requestUrl)) XuperWebRequestFilter.emptyResponse() else null
+                        }
+                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                            val target = request?.url?.toString() ?: return true
+                            val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
+                            // Solo navegación web http(s); rechaza esquemas externos y destinos publicitarios conocidos.
+                            if (scheme != "http" && scheme != "https") return true
+                            if (XuperWebRequestFilter.shouldBlock(target)) {
+                                pageError = "Se bloqueó una redirección publicitaria o de seguimiento. Volvé al reproductor e intentá reproducir otra vez."
+                                return true
+                            }
+                            return false
+                        }
+                        override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) { progress = 0; pageFinished = false; pageError = null }
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
+                            pageFinished = true
                             // Se oculta el botón de fullscreen del reproductor del sitio porque
                             // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
                             // son best-effort: cada proveedor usa un reproductor distinto.
@@ -527,7 +560,10 @@ private fun WebEmbedPlayer(url: String) {
                             })();""", null)
                         }
                         override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
-                            if (request?.isForMainFrame == true) pageError = "No se pudo cargar el reproductor web. Revisá la conexión o reintentá."
+                            if (request?.isForMainFrame == true) {
+                                val description = error?.description?.toString()?.takeIf { it.isNotBlank() }
+                                pageError = if (description != null) "Falló la carga de la página: $description" else "No se pudo cargar la página. Revisá la conexión e intentá de nuevo."
+                            }
                         }
                         override fun onReceivedHttpError(view: WebView?, request: android.webkit.WebResourceRequest?, response: android.webkit.WebResourceResponse?) {
                             if (request?.isForMainFrame == true && (response?.statusCode ?: 200) >= 400) pageError = "El sitio respondió HTTP ${response?.statusCode}. Puede que el contenido no esté disponible."
@@ -559,14 +595,14 @@ private fun WebEmbedPlayer(url: String) {
                 Text(pageError.orEmpty(), color = Color(0xFFD8E3EA), fontSize = 15.sp)
                 Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(onClick = { pageError = null; progress = 0; webViewRef?.reload() }) { Text("↻  Reintentar") }
+                    Button(onClick = { pageError = null; progress = 0; pageFinished = false; webViewRef?.reload() }) { Text("↻  Reintentar") }
                     Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
                 }
             }
         }
         Column(Modifier.align(Alignment.TopStart).padding(start = 20.dp, top = 18.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text("XUPER · REPRODUCTOR WEB", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Text("OK: controles del sitio · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
+            Text("Bloqueo básico activo · OK: controles · Atrás: volver", color = Color(0xFFD8E3EA), fontSize = 11.sp)
         }
     }
 }

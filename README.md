@@ -291,3 +291,12 @@ La URL de ejemplo de Repelishd no queda codificada como proveedor especial y no 
 Las URL de detalle/episodio se abren ahora directamente en WebView para utilizar el reproductor HTML5 del proveedor, incluyendo sus controles, selector de subtítulos y selección de fuente cuando el sitio los ofrece. Ya no se intenta extraer primero una URL con Jsoup para esas páginas, porque eso podía perder funciones del reproductor original o no encontrar fuentes creadas por JavaScript.
 
 Ejemplo de URL de episodio: `https://movies2watch.vc/series/breaking-bad-18349/3-11/` (temporada 3, episodio 11 según el formato de la URL). El botón de pantalla completa se oculta mediante selectores CSS habituales, cuando el reproductor los usa; no es universal y depende del proveedor. No se extraen ni se desbloquean fuentes protegidas. El comportamiento real debe verificarse en un dispositivo con acceso al sitio.
+
+
+## Bloqueador básico del reproductor web (2026-10-19)
+
+- Se agregó `ui/screens/XuperWebRequestFilter.kt`, un filtro local para solicitudes del WebView que bloquea una lista acotada de dominios publicitarios/trackers y algunos patrones conocidos. Las solicitudes bloqueadas reciben una respuesta vacía HTTP 204.
+- Se desactivó el contenido mixto (`MIXED_CONTENT_NEVER_ALLOW`) y la apertura automática de ventanas JavaScript. `onCreateWindow` rechaza ventanas secundarias/popunders y la navegación rechaza esquemas externos y destinos que coincidan con el filtro.
+- El indicador de carga ya no puede quedar indefinidamente activo si la página principal no termina: tras 30 segundos se muestra un error y se ofrece reintentar. Los errores de red del frame principal muestran la descripción disponible y los errores HTTP conservan el código de estado.
+- **Limitaciones:** esto es un filtro básico, no Brave Shields ni una implementación completa de EasyList/uBlock. No puede garantizar el bloqueo de anuncios servidos desde el mismo dominio que el vídeo, anuncios insertados dentro del stream, todos los popups/redirects, ni páginas que dependan de contenido mixto o ventanas auxiliares. Un bloqueo agresivo también puede romper el reproductor; si pasa, el dominio o recurso debe revisarse con un caso concreto. No elude DRM, autenticación ni controles de acceso.
+- **Verificación:** se revisó la estructura del proyecto y se valida la integridad del ZIP. No se pudo compilar `assembleRelease` porque este entorno no tiene Android SDK/Gradle configurados. Probar en el Android TV/dispositivo destino sigue siendo necesario.
