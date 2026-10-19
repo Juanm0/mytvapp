@@ -608,6 +608,17 @@ private fun WebEmbedPlayer(url: String) {
                               if(!style){style=document.createElement('style');style.id='xuper-hide-fullscreen';document.head.appendChild(style);} style.textContent=css;
                             })();""", null)
                         }
+                        override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                            // Android puede matar el proceso aislado de WebView por memoria o por un fallo del sitio.
+                            // Consumir el evento evita que ese fallo arrastre la Activity de Xuper.
+                            pageError = "El reproductor web se cerró inesperadamente. Volvé atrás e intentá otra fuente."
+                            if (view != null) {
+                                runCatching { (view.parent as? ViewGroup)?.removeView(view) }
+                                runCatching { view.destroy() }
+                            }
+                            webViewRef = null
+                            return true
+                        }
                         override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
                             if (request?.isForMainFrame == true) {
                                 val description = error?.description?.toString()?.takeIf { it.isNotBlank() }

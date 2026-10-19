@@ -82,7 +82,7 @@ fun DetailScreen(
             loadingEpisodes = true
             episodes = catalogService.loadEpisodes(title.id, season)
             loadingEpisodes = false
-            selectedEpisode = null
+            selectedEpisode = episodes.firstOrNull()?.number
         } else episodes = emptyList()
     }
 
@@ -202,10 +202,14 @@ fun DetailScreen(
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { selectedEpisode = episode.number }) {
-                                Text(if (selectedEpisode == episode.number) "Episodio seleccionado" else "Elegir episodio")
-                            }
-                            if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Reproducir") }
+                            Button(onClick = {
+                                selectedEpisode = episode.number
+                                val seasonNo = selectedSeason ?: 1
+                                val seriesTmdbId = title.id.removePrefix("tmdb-tv-")
+                                val frameXUrl = "https://framextv.xyz/watch/$seriesTmdbId/$seasonNo/${episode.number}"
+                                onPlayStream("${title.name} · T${seasonNo}E${episode.number} · FrameXTV", frameXUrl)
+                            }) { Text("▶  Reproducir episodio") }
+                            if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Fuente IPTV") }
                         }
                     }
                 }
@@ -229,7 +233,7 @@ fun DetailScreen(
                         Text("Buscando el identificador IMDb…", color = XuperAccentBright, fontSize = 12.sp)
                     }
                     if (sourceKey == null) {
-                        Text("Seleccioná una temporada y un episodio para administrar sus fuentes.", color = XuperAccentBright, fontSize = 13.sp)
+                        Text("Las fuentes alternativas corresponden al episodio más reciente seleccionado.", color = XuperAccentBright, fontSize = 13.sp)
                     } else {
                         if (webSources.isEmpty()) {
                             Text("No se generaron fuentes para este contenido. Revisá que TMDB tenga IMDb ID o que haya un episodio seleccionado.", color = XuperTextSecondary, fontSize = 12.sp)

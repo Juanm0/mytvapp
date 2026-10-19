@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import android.util.Base64
+import java.nio.charset.StandardCharsets
 
 /**
  * Las listas M3U alimentan el catálogo y la búsqueda, pero no agregan opciones
@@ -179,7 +181,8 @@ class MainActivity : ComponentActivity() {
                                 (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
                             },
                             onPlayStream = { streamName, streamUrl ->
-                                navController.navigate("external-player/${Uri.encode(streamName)}/${Uri.encode(streamUrl)}")
+                                val encodedUrl = Base64.encodeToString(streamUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                navController.navigate("external-player/${Uri.encode(streamName)}/$encodedUrl")
                             },
                         )
                     }
@@ -191,7 +194,8 @@ class MainActivity : ComponentActivity() {
                         ),
                     ) { entry ->
                         val streamName = entry.arguments?.getString("streamName").orEmpty()
-                        val streamUrl = entry.arguments?.getString("streamUrl").orEmpty()
+                        val encodedUrl = entry.arguments?.getString("streamUrl").orEmpty()
+                        val streamUrl = runCatching { String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8) }.getOrDefault("")
                         if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
                             PlayerScreen(name = streamName, streamUrl = streamUrl)
                         }
