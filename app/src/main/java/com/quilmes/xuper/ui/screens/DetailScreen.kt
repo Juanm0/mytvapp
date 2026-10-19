@@ -2,7 +2,6 @@ package com.quilmes.xuper.ui.screens
 
 import android.content.Context
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,23 +27,12 @@ import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.TmdbEpisode
 import com.quilmes.xuper.data.TmdbSeason
-import com.quilmes.xuper.data.ImdbEmbedSource
-import com.quilmes.xuper.data.StremioRepository
-import com.quilmes.xuper.data.StremioStream
+import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.ui.theme.XuperAccentBright
 import com.quilmes.xuper.ui.theme.XuperBackground
 import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
 import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
-
-
-private fun StremioStream.qualityLabel(): String = when (qualityRank) {
-    4 -> "4K"
-    3 -> "2K"
-    2 -> "1080p"
-    1 -> "720p/HD"
-    else -> "Calidad sin especificar"
-}
 
 @Composable
 fun DetailScreen(
@@ -61,54 +49,24 @@ fun DetailScreen(
     var episodes by remember(title.id) { mutableStateOf<List<TmdbEpisode>>(emptyList()) }
     var selectedSeason by remember(title.id) { mutableStateOf<Int?>(null) }
     var selectedEpisode by remember(title.id) { mutableStateOf<Int?>(null) }
+    var loadingSeasons by remember(title.id) { mutableStateOf(false) }
     var loadingEpisodes by remember(title.id) { mutableStateOf(false) }
-    val stremioRepository = remember { StremioRepository() }
-    val addonManager = remember { com.quilmes.xuper.data.StremioAddonManager(context) }
-    var addonUrlsText by remember { mutableStateOf(addonManager.getAddons().joinToString("\n")) }
-    var imdbId by remember(title.id) { mutableStateOf<String?>(null) }
-    var stremioStreams by remember(title.id) { mutableStateOf<List<StremioStream>>(emptyList()) }
-    var loadingStreams by remember(title.id) { mutableStateOf(false) }
-    var streamMessage by remember(title.id) { mutableStateOf<String?>(null) }
-    val hasTmdbSeasons = title.id.startsWith("tmdb-tv-")
-    val seasonEpisode = remember(title.name) {
-        val match = Regex("(?i)(?:s(\\d{1,2})\\s*e(\\d{1,3})|(\\d{1,2})x(\\d{1,3})|temporada\\s*(\\d+).*?(?:episodio|ep)\\s*(\\d+))").find(title.name)
-        when {
-            match == null -> null
-            match.groupValues[1].isNotBlank() -> "Temporada ${match.groupValues[1]} · Episodio ${match.groupValues[2]}"
-            match.groupValues[3].isNotBlank() -> "Temporada ${match.groupValues[3]} · Episodio ${match.groupValues[4]}"
-            else -> "Temporada ${match.groupValues[5]} · Episodio ${match.groupValues[6]}"
-        }
-    }
+    var webSourceUrl by remember(title.id) { mutableStateOf("") }
+    var webSourcesVersion by remember(title.id) { mutableIntStateOf(0) }
+    val isTmdb = title.id.startsWith("tmdb-")
+    val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
 
     LaunchedEffect(title.id) {
-        imdbId = catalogService.getImdbId(title.id)
-        stremioStreams = emptyList()
-        streamMessage = null
-    }
-
-    LaunchedEffect(loadingStreams, title.id, imdbId, selectedSeason, selectedEpisode) {
-        if (!loadingStreams) return@LaunchedEffect
-        val id = imdbId
-        val addonUrls = addonManager.getAddons()
-        if (id == null) {
-            stremioStreams = emptyList()
-            streamMessage = "No se pudo obtener el IMDb ID desde TMDB para este título."
-        } else if (addonUrls.isEmpty()) {
-            stremioStreams = emptyList()
-            streamMessage = "Agregá al menos un addon válido (una URL por línea) y guardalo."
-        } else if (title.contentKind == ContentKind.SERIES && (selectedSeason == null || selectedEpisode == null)) {
-            stremioStreams = emptyList()
-            streamMessage = "Para buscar streams de una serie, seleccioná una temporada y un episodio primero."
+        if (hasTmdbSeasons) {
+            loadingSeasons = true
+            val loaded = catalogService.loadSeasons(title.id)
+            seasons = loaded
+            selectedSeason = loaded.firstOrNull { it.number > 0 }?.number ?: loaded.firstOrNull()?.number
+            loadingSeasons = false
         } else {
-            val result = if (title.contentKind == ContentKind.SERIES) {
-                stremioRepository.getSeriesStreams(addonUrls, id, selectedSeason ?: 0, selectedEpisode ?: 0)
-            } else {
-                stremioRepository.getMovieStreams(addonUrls, id)
-            }
-            stremioStreams = result
-            streamMessage = if (result.isEmpty()) "Ninguno de los ${addonUrls.size} addons devolvió URLs HTTP/HTTPS directas compatibles." else "${result.size} fuente(s) combinadas de ${addonUrls.size} addon(s), ordenadas por calidad."
+            seasons = emptyList()
+            selectedSeason = null
         }
-        loadingStreams = false
     }
 
     LaunchedEffect(title.id, selectedSeason) {
@@ -121,7 +79,20 @@ fun DetailScreen(
         } else episodes = emptyList()
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize().background(XuperBackground), contentPadding = PaddingValues(bottom = 40.dp)) {
+    val sourceKey = when {
+        title.contentKind == ContentKind.SERIES && selectedSeason != null && selectedEpisode != null ->
+            WebSourceRegistry.episodeKey(title.id, selectedSeason!!, selectedEpisode!!)
+        title.contentKind != ContentKind.SERIES -> WebSourceRegistry.titleKey(title.id)
+        else -> null
+    }
+    val webSources = remember(sourceKey, webSourcesVersion) {
+        sourceKey?.let { WebSourceRegistry.getSources(context, it) }.orEmpty()
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(XuperBackground),
+        contentPadding = PaddingValues(bottom = 40.dp),
+    ) {
         item {
             Box(Modifier.fillMaxWidth().height(350.dp)) {
                 AsyncImage(
@@ -148,11 +119,10 @@ fun DetailScreen(
                                 else -> "Contenido"
                             }).joinToString("  ·  "), color = XuperTextSecondary, fontSize = 16.sp,
                         )
-                        if (seasonEpisode != null) Text(seasonEpisode, color = XuperTextPrimary, fontSize = 16.sp)
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(onClick = { onPlay(title.id) }, enabled = title.streamUrl.isNotBlank()) {
-                                Text(if (title.streamUrl.isBlank()) "▶  Video no disponible" else "▶  Reproducir")
+                            if (title.streamUrl.isNotBlank()) {
+                                Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -160,93 +130,27 @@ fun DetailScreen(
                                 prefs.edit().putStringSet("favorites", ids).apply()
                                 favorites = !favorites
                             }) { Text(if (favorites) "♥  En mi lista" else "♡  Mi lista") }
-                            val embedUrl = ImdbEmbedSource.buildUrl(imdbId)
-                            if (title.id.startsWith("tmdb-") && title.contentKind != ContentKind.LIVE && embedUrl != null) {
-                                Button(onClick = { onPlayStream("${title.name} · Reproductor web", embedUrl) }) {
-                                    Text("▶  Abrir reproductor web")
-                                }
-                            }
                         }
-                        if (title.id.startsWith("tmdb-") && title.contentKind != ContentKind.LIVE) {
-                            Text(
-                                "IMDb: ${imdbId ?: "buscando…"}",
-                                color = XuperTextSecondary, fontSize = 11.sp,
-                            )
-                        }
-                        if (title.year != null || title.rating != null || title.id.startsWith("tmdb-")) {
-                            Text("Metadatos e imágenes: TMDB. Este producto no está respaldado ni certificado por TMDB.", color = XuperTextSecondary, fontSize = 10.sp)
-                        }
+                        if (isTmdb) Text(
+                            "Metadatos e imágenes: TMDB. La ficha no garantiza que exista una fuente de vídeo.",
+                            color = XuperTextSecondary, fontSize = 10.sp,
+                        )
                     }
                 }
             }
         }
-        if (title.id.startsWith("tmdb-") && title.contentKind != ContentKind.LIVE) {
-            item {
-                Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 18.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text("Fuentes Stremio · múltiples addons", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    Text("Pegá una URL de manifiesto o base por línea. Se consultan en paralelo; los resultados directos HTTP/HLS se combinan, deduplican y ordenan por calidad. Los torrents y enlaces externos no reproducibles directamente se omiten.", color = XuperTextSecondary, fontSize = 13.sp)
-                    BasicTextField(
-                        value = addonUrlsText,
-                        onValueChange = { addonUrlsText = it },
-                        textStyle = TextStyle(color = XuperTextPrimary, fontSize = 15.sp),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 70.dp, max = 150.dp)
-                            .background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
-                        decorationBox = { innerTextField ->
-                            Box {
-                                if (addonUrlsText.isBlank()) Text("https://addon-ejemplo/manifest.json\nhttps://otro-addon/manifest.json", color = XuperTextSecondary, fontSize = 14.sp)
-                                innerTextField()
-                            }
-                        },
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = {
-                            val urls = addonUrlsText.lines().map { it.trim() }.filter { it.isNotBlank() }
-                            addonManager.setAddons(urls)
-                            addonUrlsText = addonManager.getAddons().joinToString("\n")
-                            streamMessage = "Guardados ${addonManager.getAddons().size} addon(s)."
-                        }) { Text("Guardar addons") }
-                        Button(onClick = {
-                            addonManager.setAddons(addonUrlsText.lines().map { it.trim() }.filter { it.isNotBlank() })
-                            loadingStreams = true
-                            streamMessage = null
-                            stremioStreams = emptyList()
-                        }) { Text(if (title.contentKind == ContentKind.SERIES) "Buscar episodio" else "Buscar en todos") }
-                    }
-                    if (title.contentKind == ContentKind.SERIES) {
-                        Text("Series: seleccioná temporada y episodio en la sección Episodios y después buscá las fuentes.", color = XuperTextSecondary, fontSize = 12.sp)
-                    }
-                    if (loadingStreams) Text("Consultando addons en paralelo…", color = XuperAccentBright)
-                    streamMessage?.let { Text(it, color = XuperTextSecondary, fontSize = 13.sp) }
-                    stremioStreams.forEach { stream ->
-                        Row(
-                            Modifier.fillMaxWidth().background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                Text("${stream.name} · ${stream.qualityLabel()}", color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
-                                Text(stream.title, color = XuperTextSecondary, fontSize = 12.sp, maxLines = 2)
-                                Text(runCatching { java.net.URL(stream.addonUrl).host }.getOrDefault("Addon"), color = XuperAccentBright, fontSize = 11.sp)
-                            }
-                            Button(onClick = { onPlayStream("${title.name} · ${stream.name}", stream.url) }) { Text("▶ Reproducir") }
-                        }
-                    }
-                }
-            }
-        }
+
         if (hasTmdbSeasons) {
             item {
                 Column(Modifier.fillMaxWidth().padding(start = 48.dp, end = 48.dp, top = 20.dp, bottom = 8.dp)) {
-                    Text("Episodios", color = XuperTextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                    if (seasons.isEmpty()) {
-                        Text("Cargando temporadas o no hay temporadas disponibles.", color = XuperTextSecondary, fontSize = 15.sp, modifier = Modifier.padding(top = 8.dp))
-                    } else {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
+                    Text("Temporadas y episodios", color = XuperTextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    when {
+                        loadingSeasons -> Text("Cargando temporadas…", color = XuperTextSecondary, modifier = Modifier.padding(top = 8.dp))
+                        seasons.isEmpty() -> Text("No se pudieron cargar las temporadas. Revisá la conexión y la clave de TMDB.", color = XuperTextSecondary, modifier = Modifier.padding(top = 8.dp))
+                        else -> LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 12.dp)) {
                             items(seasons, key = { it.number }) { season ->
                                 Button(onClick = { selectedSeason = season.number }, enabled = selectedSeason != season.number) {
-                                    Text("${season.name}  ·  ${season.episodeCount} ep.")
+                                    Text("${season.name} · ${season.episodeCount} ep.")
                                 }
                             }
                         }
@@ -256,23 +160,23 @@ fun DetailScreen(
                     }
                 }
             }
-            if (loadingEpisodes) {
-                item { Text("Cargando episodios…", color = XuperTextSecondary, modifier = Modifier.padding(start = 48.dp, top = 8.dp)) }
+            if (loadingEpisodes) item {
+                Text("Cargando episodios…", color = XuperTextSecondary, modifier = Modifier.padding(start = 48.dp, top = 8.dp))
             }
             items(episodes, key = { "${selectedSeason}-${it.number}" }) { episode ->
                 val playableEpisode = findPlayableEpisode(title.name, selectedSeason ?: 0, episode.number)
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 6.dp)
-                        .background(if (selectedEpisode == episode.number) XuperSurfaceVariant else Color.Transparent, RoundedCornerShape(8.dp))
-                        .clickable { selectedEpisode = episode.number }
-                        .padding(10.dp),
+                        .background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (episode.stillUrl.isNotBlank()) {
-                        AsyncImage(model = episode.stillUrl, contentDescription = null, contentScale = ContentScale.Crop,
-                            modifier = Modifier.width(170.dp).height(96.dp).background(XuperSurfaceVariant, RoundedCornerShape(6.dp)))
+                        AsyncImage(
+                            model = episode.stillUrl, contentDescription = null, contentScale = ContentScale.Crop,
+                            modifier = Modifier.width(170.dp).height(96.dp).background(XuperBackground, RoundedCornerShape(6.dp)),
+                        )
                     } else {
-                        Box(Modifier.width(170.dp).height(96.dp).background(XuperSurfaceVariant, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
+                        Box(Modifier.width(170.dp).height(96.dp).background(XuperBackground), contentAlignment = Alignment.Center) {
                             Text("${episode.number}", color = XuperAccentBright, fontSize = 30.sp)
                         }
                     }
@@ -280,22 +184,80 @@ fun DetailScreen(
                         Text("${episode.number}. ${episode.name}", color = XuperTextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                         episode.runtime?.let { Text("${it} min", color = XuperAccentBright, fontSize = 12.sp) }
                         Text(episode.overview.ifBlank { "Sinopsis del episodio no disponible." }, color = XuperTextSecondary, fontSize = 13.sp, maxLines = 3)
-                        if (playableEpisode != null) {
-                            Button(onClick = { onPlay(playableEpisode.id) }) {
-                                Text("▶  Reproducir episodio")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { selectedEpisode = episode.number }) {
+                                Text(if (selectedEpisode == episode.number) "Episodio seleccionado" else "Elegir episodio")
                             }
-                        } else if (selectedEpisode == episode.number) {
-                            Text("Este episodio no tiene una fuente de video coincidente en las listas conectadas.", color = XuperAccentBright, fontSize = 12.sp)
+                            if (playableEpisode != null) Button(onClick = { onPlay(playableEpisode.id) }) { Text("▶  Reproducir") }
                         }
                     }
                 }
             }
-        } else if (title.contentKind == ContentKind.SERIES && seasonEpisode == null) {
+        }
+
+        if (isTmdb && title.contentKind != ContentKind.LIVE) {
             item {
-                Text(
-                    "Esta entrada no trae datos de temporada y episodio. Si está en el catálogo TMDB, abrí la ficha de la serie original para explorar sus temporadas.",
-                    color = XuperTextSecondary, fontSize = 14.sp, modifier = Modifier.padding(start = 48.dp, end = 48.dp, top = 18.dp),
-                )
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 48.dp, vertical = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("Fuentes web alternativas", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (title.contentKind == ContentKind.SERIES)
+                            "Elegí una temporada y un episodio. Cada episodio conserva sus propias URL alternativas."
+                        else "Guardá varias URL para esta película. Si una no funciona, probá otra. El filtro publicitario se aplica al abrir páginas web compatibles.",
+                        color = XuperTextSecondary, fontSize = 13.sp,
+                    )
+                    if (sourceKey == null) {
+                        Text("Seleccioná una temporada y un episodio para administrar sus fuentes.", color = XuperAccentBright, fontSize = 13.sp)
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            BasicTextField(
+                                value = webSourceUrl,
+                                onValueChange = { webSourceUrl = it },
+                                textStyle = TextStyle(color = XuperTextPrimary, fontSize = 14.sp),
+                                modifier = Modifier.weight(1f).background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
+                                decorationBox = { innerTextField ->
+                                    Box {
+                                        if (webSourceUrl.isBlank()) Text("https://sitio-ejemplo/pelicula-o-episodio", color = XuperTextSecondary, fontSize = 13.sp)
+                                        innerTextField()
+                                    }
+                                },
+                            )
+                            Button(
+                                onClick = {
+                                    if (WebSourceRegistry.addSource(context, sourceKey, webSourceUrl)) {
+                                        webSourceUrl = ""
+                                        webSourcesVersion++
+                                    }
+                                },
+                                enabled = webSourceUrl.trim().startsWith("https://", true) || webSourceUrl.trim().startsWith("http://", true),
+                            ) { Text("Agregar URL") }
+                        }
+                        if (webSources.isEmpty()) {
+                            Text("No hay fuentes guardadas para este contenido todavía.", color = XuperTextSecondary, fontSize = 12.sp)
+                        } else {
+                            webSources.forEachIndexed { index, source ->
+                                Row(
+                                    Modifier.fillMaxWidth().background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text("Fuente ${index + 1}", color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
+                                        Text(source, color = XuperTextSecondary, fontSize = 11.sp, maxLines = 2)
+                                        Text("URL guardada; reproducción no verificada", color = XuperTextSecondary, fontSize = 10.sp)
+                                    }
+                                    Button(onClick = { onPlayStream("${title.name} · Fuente ${index + 1}", source) }) { Text("▶ Probar") }
+                                    Spacer(Modifier.width(6.dp))
+                                    Button(onClick = {
+                                        WebSourceRegistry.removeSource(context, sourceKey, source)
+                                        webSourcesVersion++
+                                    }) { Text("Quitar") }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

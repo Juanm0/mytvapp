@@ -127,16 +127,6 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
-    /** IMDb ID usado por addons Stremio; TMDB sigue siendo solo proveedor de metadatos. */
-    suspend fun getImdbId(titleId: String): String? = withContext(Dispatchers.IO) {
-        val parsed = parseTmdbId(titleId) ?: return@withContext null
-        if (apiKey.isBlank()) return@withContext null
-        runCatching {
-            val endpoint = if (parsed.first == "tv") "tv/${parsed.second}/external_ids" else "movie/${parsed.second}/external_ids"
-            request(endpoint).optString("imdb_id").takeIf { it.matches(Regex("^tt\\d{7,10}$")) }
-        }.getOrNull()
-    }
-
     suspend fun loadSeasons(titleId: String): List<TmdbSeason> = withContext(Dispatchers.IO) {
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()

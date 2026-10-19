@@ -66,7 +66,6 @@ import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
-import com.quilmes.xuper.data.ImdbEmbedSource
 import com.quilmes.xuper.data.WebPageMediaResolver
 import kotlinx.coroutines.delay
 
@@ -78,6 +77,13 @@ import kotlinx.coroutines.delay
  * con un indicador que confirma el salto, play/pause, audio/subtítulos, cambiar fuente y
  * episodio siguiente. CH+/CH- siguen moviendo canales de Argentina como antes.
  */
+private fun isWebPageUrl(raw: String): Boolean {
+    val parsed = runCatching { URI(raw) }.getOrNull() ?: return false
+    if (parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank()) return false
+    val path = parsed.path.orEmpty().lowercase()
+    return !listOf(".m3u8", ".mpd", ".mp4", ".m4v", ".webm", ".mkv", ".mov", ".ts", ".aac", ".mp3").any(path::endsWith)
+}
+
 @OptIn(UnstableApi::class)
 @Composable
 fun PlayerScreen(
@@ -92,14 +98,10 @@ fun PlayerScreen(
     onChangePlayer: (String) -> Unit = {},
     onPlayNextEpisode: (String) -> Unit = {},
 ) {
-    if (ImdbEmbedSource.isEmbedUrl(streamUrl)) {
-        WebEmbedPlayer(url = streamUrl)
-        return
-    }
-    if (WebPageMediaResolver.looksLikeDetailPage(streamUrl)) {
-        // Las páginas de episodios (p. ej. movies2watch /series/titulo/3-11/) tienen
-        // su propio reproductor HTML5, selección de subtítulos y fuentes. Abrimos la
-        // página en WebView en vez de intentar extraer el stream y reemplazar sus controles.
+    if (isWebPageUrl(streamUrl)) {
+        // Una página de película/episodio debe ejecutarse en WebView: ExoPlayer solo puede
+        // reproducir medios directos, no HTML. Esto también permite que las URL alternativas
+        // guardadas desde la ficha usen el reproductor del proveedor.
         WebEmbedPlayer(url = streamUrl)
         return
     }
@@ -577,6 +579,25 @@ private fun WebEmbedPlayer(url: String) {
                             progress = 100
                             pageFinished = true
                             refreshServerOptions()
+                            // Refuerzo best-effort del filtro: reduce banners/capas publicitarias,
+                            // bloquea window.open y enlaces de salida claramente publicitarios. No
+                            // oculta video/iframe de forma global para no romper el reproductor.
+                            view?.evaluateJavascript("""(function(){
+                              try {
+                                if (!window.__xuperAdGuardInstalled) {
+                                  window.__xuperAdGuardInstalled = true;
+                                  window.open = function(){ return null; };
+                                  var adHref = /doubleclick|googlesyndication|googleadservices|popunder|popcash|popads|adsterra|exoclick|onclickads|clickadu|trafficjunky|ad-maven|admaven|hilltopads|monetag/i;
+                                  document.addEventListener('click', function(ev){
+                                    var a = ev.target && ev.target.closest ? ev.target.closest('a[href]') : null;
+                                    if (a && adHref.test(a.href || '')) { ev.preventDefault(); ev.stopImmediatePropagation(); }
+                                  }, true);
+                                }
+                                var css = '[id*="ad-" i],[id^="ads" i],[class*="popunder" i],[class*="popup-ad" i],[class*="advertisement" i],[class*="ad-banner" i],[class*="adsbox" i],[class*="ad-container" i],iframe[src*="doubleclick" i],iframe[src*="googlesyndication" i]{display:none!important;visibility:hidden!important;pointer-events:none!important;max-height:0!important;max-width:0!important}';
+                                var style=document.getElementById('xuper-ad-cosmetics');
+                                if(!style){style=document.createElement('style');style.id='xuper-ad-cosmetics';(document.head||document.documentElement).appendChild(style);} style.textContent=css;
+                              } catch(e) {}
+                            })();""", null)
                             // Se oculta el botón de fullscreen del reproductor del sitio porque
                             // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
                             // son best-effort: cada proveedor usa un reproductor distinto.
