@@ -19,7 +19,11 @@ import java.util.Locale
 class TmdbCatalogService(private val cacheDir: File) {
     private val apiKey = BuildConfig.TMDB_API_KEY.trim()
     private val cacheFile = File(cacheDir, "tmdb_home_catalog.json")
+    private val imdbIdCacheFile = File(cacheDir, "tmdb_imdb_ids.json")
     private val cacheMaxAgeMs = 18 * 60 * 60 * 1000L
+    private val imdbIdCacheTtlMs = 180L * 24 * 60 * 60 * 1000
+    private val imdbIdMissTtlMs = 7L * 24 * 60 * 60 * 1000
+    private val imdbIdCacheLock = Any()
 
     suspend fun loadCatalog(): List<Category> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext emptyList()
@@ -125,6 +129,48 @@ class TmdbCatalogService(private val cacheDir: File) {
                 }
             }.distinctBy { it.id }
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Resolve the real IMDb tt ID through TMDB's /{movie|tv}/{id}/external_ids endpoint.
+     * Cache positive results for 180 days and missing IDs for 7 days so opening a title does
+     * not repeatedly hit TMDB. Never derive or guess an IMDb ID from a TMDB numeric ID.
+     */
+    suspend fun loadImdbId(titleId: String): String? = withContext(Dispatchers.IO) {
+        val parsed = parseTmdbId(titleId) ?: return@withContext null
+        if (apiKey.isBlank()) return@withContext null
+        val cacheKey = "${parsed.first}-${parsed.second}"
+        readCachedImdbId(cacheKey)?.let { return@withContext it }
+
+        val resolved = runCatching {
+            val endpoint = if (parsed.first == "tv") "tv" else "movie"
+            request("$endpoint/${parsed.second}/external_ids").optString("imdb_id")
+                .takeIf { it.matches(Regex("tt\\d{5,12}")) }
+        }.getOrNull()
+        writeCachedImdbId(cacheKey, resolved)
+        resolved
+    }
+
+    /** Cache records include their timestamp; an empty ID is a short-lived negative result. */
+    private fun readCachedImdbId(key: String): String? = synchronized(imdbIdCacheLock) {
+        runCatching {
+            if (!imdbIdCacheFile.exists()) return@synchronized null
+            val record = JSONObject(imdbIdCacheFile.readText()).optJSONObject(key) ?: return@synchronized null
+            val savedAt = record.optLong("savedAt", 0L)
+            val imdbId = record.optString("imdbId").takeIf { it.matches(Regex("tt\\d{5,12}")) }
+            val ttl = if (imdbId == null) imdbIdMissTtlMs else imdbIdCacheTtlMs
+            if (savedAt <= 0L || System.currentTimeMillis() - savedAt > ttl) null else imdbId
+        }.getOrNull()
+    }
+
+    private fun writeCachedImdbId(key: String, imdbId: String?) = synchronized(imdbIdCacheLock) {
+        runCatching {
+            val root = if (imdbIdCacheFile.exists()) JSONObject(imdbIdCacheFile.readText()) else JSONObject()
+            root.put(key, JSONObject().put("imdbId", imdbId.orEmpty()).put("savedAt", System.currentTimeMillis()))
+            imdbIdCacheFile.parentFile?.mkdirs()
+            imdbIdCacheFile.writeText(root.toString())
+        }
+        Unit
     }
 
     suspend fun loadSeasons(titleId: String): List<TmdbSeason> = withContext(Dispatchers.IO) {

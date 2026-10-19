@@ -9,18 +9,14 @@ Aplicación personal de streaming para Android TV, escrita en Kotlin + Jetpack C
 - **Buscar:** búsqueda de películas y series en TMDB y el catálogo local.
 - **Mi lista / Continuar viendo / Perfil:** utilidades locales de la aplicación.
 - **Ficha de una serie:** selector de temporadas, lista de episodios con título, sinopsis, duración e imagen cuando está disponible. El usuario elige el episodio concreto antes de abrir sus fuentes.
-- **Fuentes web alternativas globales:** cada episodio obtiene una URL candidata de FrameXTV con el patrón observado `/watch/{TMDB_ID}/{temporada}/{episodio}`. Para películas se ofrece la página principal del proveedor porque no se verificó un patrón de película. Se pueden agregar, probar y quitar URLs específicas por título/episodio. Una URL candidata no garantiza reproducción.
+- **Fuentes web alternativas globales:** películas generan el embed de StreamIMDB usando el IMDb ID real consultado en TMDB (`/embed/movie/{imdb_id}/`), más búsqueda en Movies2Watch y búsqueda/catálogo de RePelisHD. Movies2Watch usa rutas internas con slug e identificador propio; Xuper genera una URL candidata de búsqueda (`/?s=...`) a partir del título y no inventa IDs internos. Esa ruta de búsqueda debe verificarse contra el sitio activo. Episodios generan las dos variantes de FrameXTV (`/watch/{TMDB_ID}/{temporada}/{episodio}` y el orden inverso) y búsqueda de Movies2Watch y búsqueda/catálogo de RePelisHD. Se muestran botones Reproducir, sin exigir pegar URLs con el mando. Las rutas de FrameXTV y RePelisHD son candidatas y no garantizan que el proveedor encuentre o reproduzca ese título.
 - **IPTV:** las URL M3U8/MP4 y otros medios directos se reproducen con Media3/ExoPlayer. Las páginas web se abren dentro de WebView, con protección publicitaria compartida.
 
 ## Fuentes web y límites
 
-`data/WebSourceRegistry.kt` centraliza las URL alternativas. Para películas se utiliza la clave de la ficha; para episodios, `ID_SERIE|sTEMPORADA|eEPISODIO`. El ejemplo FrameXTV se guarda solo para *Breaking Bad*, temporada 3, episodio 11:
+`data/WebSourceRegistry.kt` centraliza la generación de fuentes. Para películas se utiliza la clave de la ficha y el IMDb ID real que devuelve `TmdbCatalogService.loadImdbId`; el servicio consulta `/{movie|tv}/{tmdb_id}/external_ids` de TMDB y cachea los IDs reales durante 180 días (los resultados sin ID durante 7 días), sin derivarlos ni inventarlos. Para episodios, la clave es `ID_SERIE|sTEMPORADA|eEPISODIO`. Movies2Watch se incorpora como fuente global con búsqueda candidata basada en el título (`https://movies2watch.vc/?s=...`); las fichas observadas usan slugs e IDs propios, así que Xuper no puede construir una ficha específica sin resolver primero el resultado del catálogo. La ruta `/?s=` aún debe probarse en Android TV. La URL que dio el usuario para FrameXTV fue `https://framextv.xyz/watch/1396/3/11`; Xuper prueba esa estructura y también la variante temporada/episodio invertida, porque un único ejemplo no confirma el patrón universal. RePelisHD recibe una búsqueda de título con temporada/capítulo, además de enlaces a sus catálogos. Los botones Reproducir abren cada candidata dentro de la app; no hace falta escribir ni copiar URLs con el control remoto.
 
-`https://framextv.xyz/watch/1396/3/11`
-
-No debe asumirse que ese enlace sirve para otras series o episodios. Para añadir una fuente desde la ficha, seleccionar el episodio (en series), pegar una URL HTTP/HTTPS y pulsar **Agregar URL**. Las fuentes se guardan en SharedPreferences del dispositivo.
-
-El patrón de episodio de FrameXTV se infirió de la URL aportada por el usuario (`https://framextv.xyz/watch/1396/3/11`), que coincide con el ID TMDB de Breaking Bad y temporada/capítulo. Xuper construye candidatos para el resto de episodios, pero **no se verificó que el proveedor acepte ese patrón en todos los títulos**. Las páginas `lewblivehdplay.ru` y `qqwebplay.xyz` aparecen como cabeceras Referer en una lista IPTV aportada por el usuario; no se tratan como catálogos VOD porque no se confirmó una ruta de películas/series. El parser M3U conserva las cabeceras HTTP que cada stream necesita.
+**Estado de verificación:** la plantilla StreamIMDB se construye según el formato explícito que dio el usuario (`/embed/movie/{IMDb_ID}/`) y solo se genera si TMDB devuelve un identificador `tt...`. Las rutas de FrameXTV y la búsqueda de RePelisHD son candidatas; no se ha verificado que cada una resuelva todos los títulos ni que todos sus reproductores permitan reproducción en WebView. Las páginas `lewblivehdplay.ru` y `qqwebplay.xyz` aparecen como cabeceras Referer en una lista IPTV aportada por el usuario; no se tratan como catálogos VOD. El parser M3U conserva las cabeceras HTTP que cada stream necesita.
 
 Los proveedores cambian su estructura y pueden requerir JavaScript, cookies, acceso regional o mecanismos incompatibles con WebView. No se inventan URLs de vídeo directas ni se considera una fuente válida solo por guardarla. Usar únicamente fuentes a las que se tenga acceso legítimo.
 
@@ -43,7 +39,8 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 - `MainActivity.kt`: navegación, carga inicial y fuentes M3U.
 - `data/M3uRepository.kt`: carga, indexación y búsqueda de canales/entradas M3U.
 - `data/TmdbCatalogService.kt`: metadatos TMDB y temporadas/episodios.
-- `data/WebSourceRegistry.kt`: registro global de URL alternativas por título/episodio y candidatos generados para FrameXTV.
+- `data/WebSourceRegistry.kt`: generación de candidatos globales StreamIMDB, FrameXTV, Movies2Watch y RePelisHD por película/episodio, más URL guardadas localmente.
+- `data/TmdbCatalogService.kt`: consulta de temporadas, episodios y IMDb IDs reales para construir enlaces StreamIMDB.
 - `data/WebPageMediaResolver.kt`: extracción conservadora de medios declarados en HTML inicial; no ejecuta JavaScript ni elude DRM/autenticación.
 - `ui/screens/XuperBraveAdblock.kt`: motor adblock-rust, actualización/caché de listas, intercepción de red y filtros cosméticos.
 - `ui/screens/HomeScreen.kt`: Inicio tipo streaming sin IPTV argentino ni listas M3U antiguas.
@@ -53,7 +50,7 @@ El Inicio se construye en `ui/screens/HomeScreen.kt` y solo usa las categorías 
 
 ## Compilar
 
-Requisitos: Android Studio, **JDK 21** y Android SDK 34 y Gradle 8.11.1 o superior. La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
+Requisitos: Android Studio, **JDK 21**, Android SDK 34 y Gradle **8.11.1 o superior**. El workflow de GitHub Actions configura explícitamente JDK 21 y Gradle 8.11.1 (AGP 8.10.1 rechaza Gradle 8.7). La integración JNI de adblock-rust requiere Android **8.0 / API 26 o superior**. Este repositorio no incluye `gradlew`; abrir la carpeta raíz en Android Studio y sincronizar Gradle. Configurar `TMDB_API_KEY` en `local.properties` antes de compilar. La primera sincronización necesita acceso a Maven Central para descargar el wrapper nativo.
 
 El ZIP de trabajo contiene configuración local y una clave de firma personal. No publicar ni compartir públicamente esos archivos. Si se publica el proyecto, quitar `local.properties`, reemplazar la clave y sus contraseñas y no subir secretos al control de versiones.
 
@@ -65,6 +62,7 @@ El ZIP de trabajo contiene configuración local y una clave de firma personal. N
 - En series, conservar el selector de temporada y el título/sinopsis de cada episodio.
 - No presentar un póster de TMDB como reproducción garantizada: si no hay stream directo, ofrecer ficha y fuentes alternativas guardadas.
 - Las URL generadas por plantilla son candidatas no verificadas. No etiquetar un sitio como fuente funcional hasta probarlo.
+- No exigir pegar enlaces con el control remoto: generar fuentes desde IMDb ID de TMDB, título, temporada y episodio; mostrar botones Reproducir por proveedor.
 - El motor Brave se integra en WebView; no abrir un navegador externo ni incorporar las funciones generales de Brave.
 - Los controles del reproductor deben mantener el comportamiento del mando descrito en el código existente.
 - Si un sitio muestra anuncios, registrar el dominio/patrón concreto antes de añadir una regla; bloquear agresivamente un dominio completo puede romper el vídeo.

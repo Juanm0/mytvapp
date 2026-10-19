@@ -2,7 +2,6 @@ package com.quilmes.xuper.ui.screens
 
 import android.content.Context
 import androidx.compose.foundation.background
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -15,7 +14,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,10 +49,19 @@ fun DetailScreen(
     var selectedEpisode by remember(title.id) { mutableStateOf<Int?>(null) }
     var loadingSeasons by remember(title.id) { mutableStateOf(false) }
     var loadingEpisodes by remember(title.id) { mutableStateOf(false) }
-    var webSourceUrl by remember(title.id) { mutableStateOf("") }
     var webSourcesVersion by remember(title.id) { mutableIntStateOf(0) }
+    var imdbId by remember(title.id) { mutableStateOf<String?>(null) }
+    var loadingImdbId by remember(title.id) { mutableStateOf(false) }
     val isTmdb = title.id.startsWith("tmdb-")
     val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
+
+    LaunchedEffect(title.id) {
+        if (isTmdb && title.contentKind != ContentKind.LIVE) {
+            loadingImdbId = true
+            imdbId = catalogService.loadImdbId(title.id)
+            loadingImdbId = false
+        } else imdbId = null
+    }
 
     LaunchedEffect(title.id) {
         if (hasTmdbSeasons) {
@@ -85,8 +92,18 @@ fun DetailScreen(
         title.contentKind != ContentKind.SERIES -> WebSourceRegistry.titleKey(title.id)
         else -> null
     }
-    val webSources = remember(sourceKey, webSourcesVersion) {
-        sourceKey?.let { WebSourceRegistry.getSources(context, it) }.orEmpty()
+    val webSources = remember(sourceKey, webSourcesVersion, imdbId, title.name, selectedSeason, selectedEpisode) {
+        sourceKey?.let {
+            WebSourceRegistry.getSources(
+                context = context,
+                contentKey = it,
+                imdbId = imdbId,
+                displayTitle = title.name,
+                isSeries = title.contentKind == ContentKind.SERIES,
+                season = selectedSeason,
+                episodeNumber = selectedEpisode,
+            )
+        }.orEmpty()
     }
 
     LazyColumn(
@@ -204,38 +221,18 @@ fun DetailScreen(
                     Text("Fuentes web alternativas", color = XuperTextPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Text(
                         if (title.contentKind == ContentKind.SERIES)
-                            "Elegí una temporada y un episodio. Xuper propone automáticamente FrameXTV como fuente candidata global y conserva las URL propias de cada capítulo. La disponibilidad debe comprobarse al abrirla."
-                        else "Xuper incluye FrameXTV como punto de búsqueda global y permite guardar varias URL específicas para esta película. El filtro publicitario se aplica al abrir páginas web compatibles.",
+                            "Xuper prepara fuentes automáticamente para el episodio elegido: FrameXTV (ambos órdenes de temporada/capítulo), búsqueda en Movies2Watch y búsqueda en RePelisHD. Tocá Reproducir; no hace falta escribir enlaces."
+                        else "Xuper genera StreamIMDB usando el IMDb ID real consultado a TMDB y agrega búsquedas en Movies2Watch y RePelisHD. Las páginas se abren dentro de Xuper con el filtro web activo.",
                         color = XuperTextSecondary, fontSize = 13.sp,
                     )
+                    if (title.contentKind != ContentKind.SERIES && loadingImdbId) {
+                        Text("Buscando el identificador IMDb…", color = XuperAccentBright, fontSize = 12.sp)
+                    }
                     if (sourceKey == null) {
                         Text("Seleccioná una temporada y un episodio para administrar sus fuentes.", color = XuperAccentBright, fontSize = 13.sp)
                     } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            BasicTextField(
-                                value = webSourceUrl,
-                                onValueChange = { webSourceUrl = it },
-                                textStyle = TextStyle(color = XuperTextPrimary, fontSize = 14.sp),
-                                modifier = Modifier.weight(1f).background(XuperSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp),
-                                decorationBox = { innerTextField ->
-                                    Box {
-                                        if (webSourceUrl.isBlank()) Text("https://sitio-ejemplo/pelicula-o-episodio", color = XuperTextSecondary, fontSize = 13.sp)
-                                        innerTextField()
-                                    }
-                                },
-                            )
-                            Button(
-                                onClick = {
-                                    if (WebSourceRegistry.addSource(context, sourceKey, webSourceUrl)) {
-                                        webSourceUrl = ""
-                                        webSourcesVersion++
-                                    }
-                                },
-                                enabled = webSourceUrl.trim().startsWith("https://", true) || webSourceUrl.trim().startsWith("http://", true),
-                            ) { Text("Agregar URL") }
-                        }
                         if (webSources.isEmpty()) {
-                            Text("No hay fuentes guardadas para este contenido todavía.", color = XuperTextSecondary, fontSize = 12.sp)
+                            Text("No se generaron fuentes para este contenido. Revisá que TMDB tenga IMDb ID o que haya un episodio seleccionado.", color = XuperTextSecondary, fontSize = 12.sp)
                         } else {
                             webSources.forEachIndexed { index, source ->
                                 Row(
@@ -243,11 +240,25 @@ fun DetailScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                        Text("Fuente ${index + 1}", color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
+                                        val providerLabel = when {
+                                            source.contains("streamimdb.ru", true) -> "StreamIMDB · embed por IMDb"
+                                            source.contains("movies2watch.vc", true) -> "Movies2Watch · búsqueda del título"
+                                            source.contains("framextv.xyz", true) -> "FrameXTV · episodio"
+                                            source.contains("repelishd", true) && source.contains("?s=", true) -> "RePelisHD · búsqueda del título"
+                                            source.contains("repelishd", true) -> "RePelisHD · catálogo"
+                                            else -> "Fuente alternativa ${index + 1}"
+                                        }
+                                        Text(providerLabel, color = XuperTextPrimary, fontWeight = FontWeight.SemiBold)
                                         Text(source, color = XuperTextSecondary, fontSize = 11.sp, maxLines = 2)
-                                        Text("URL guardada; reproducción no verificada", color = XuperTextSecondary, fontSize = 10.sp)
+                                        Text("Candidata · se comprueba al abrir", color = XuperTextSecondary, fontSize = 10.sp)
                                     }
-                                    Button(onClick = { onPlayStream("${title.name} · Fuente ${index + 1}", source) }) { Text("▶ Probar") }
+                                    Button(onClick = { onPlayStream("${title.name} · ${when {
+                                        source.contains("streamimdb.ru", true) -> "StreamIMDB"
+                                        source.contains("movies2watch.vc", true) -> "Movies2Watch"
+                                        source.contains("framextv.xyz", true) -> "FrameXTV"
+                                        source.contains("repelishd", true) -> "RePelisHD"
+                                        else -> "Fuente ${index + 1}"
+                                    }}", source) }) { Text("▶ Reproducir") }
                                     Spacer(Modifier.width(6.dp))
                                     Button(onClick = {
                                         WebSourceRegistry.removeSource(context, sourceKey, source)

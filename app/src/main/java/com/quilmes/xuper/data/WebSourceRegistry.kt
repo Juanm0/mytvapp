@@ -3,11 +3,11 @@ package com.quilmes.xuper.data
 import android.content.Context
 import org.json.JSONArray
 import java.net.URI
+import java.net.URLEncoder
 
 /**
- * Fuentes web alternativas guardadas por contenido. Las películas usan su ID de catálogo;
- * las series usan ID + temporada + episodio. Esto hace que el mismo flujo sirva para todo el catálogo.
- * Las URL se consideran candidatas, no prueba de que el video esté disponible.
+ * Central source planner for the whole catalog. Generated URLs are candidates: the app still
+ * opens them in its protected WebView and cannot promise a provider has the requested title.
  */
 object WebSourceRegistry {
     private const val PREFS = "xuper-web-sources"
@@ -15,29 +15,78 @@ object WebSourceRegistry {
 
     const val FRAME_XTV_EXAMPLE = "https://framextv.xyz/watch/1396/3/11"
     const val FRAME_XTV_HOME = "https://framextv.xyz/"
+    const val STREAMIMDB_MOVIE_TEMPLATE = "https://streamimdb.ru/embed/movie/"
+    const val REPELISHD_MOVIES = "https://repelishd.cv/peliculas/"
+    const val REPELISHD_SERIES = "https://repelishd.cv/series/"
+    const val MOVIES2WATCH_HOME = "https://movies2watch.vc/"
+    // Candidate search URL; confirm against the live site because its internal routes can change.
+    const val MOVIES2WATCH_SEARCH = "https://movies2watch.vc/?s="
 
-    /** Estos dos dominios aparecen como Referer en la lista IPTV del usuario, no como URLs VOD. */
+    /** These domains appeared as Referer values in the user's IPTV playlist, not as VOD catalogues. */
     const val IPTV_REFERER_LEWBLIVE = "https://lewblivehdplay.ru/"
     const val IPTV_REFERER_QQWEBPLAY = "https://qqwebplay.xyz/"
 
     fun titleKey(titleId: String): String = titleId
-
     fun episodeKey(seriesId: String, season: Int, episode: Int): String = "$seriesId|s$season|e$episode"
 
-    fun getSources(context: Context, contentKey: String): List<String> {
+    /**
+     * Return ready-to-open candidates in preferred order. IMDb IDs are retrieved asynchronously
+     * from TMDB; they are never guessed. FrameXTV season/episode orders are both included because
+     * the example establishes one URL but not the provider's universal parameter order.
+     */
+    fun getSources(
+        context: Context,
+        contentKey: String,
+        imdbId: String? = null,
+        displayTitle: String = "",
+        isSeries: Boolean = false,
+        season: Int? = null,
+        episodeNumber: Int? = null,
+    ): List<String> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val stored = decode(prefs.getString(KEY_PREFIX + contentKey, null))
         val hiddenDefaults = decode(prefs.getString("hidden:$contentKey", null)).toSet()
-        // Fuente global candidata: la única ruta que pudimos observar directamente fue
-        // /watch/{TMDB_ID}/{temporada}/{episodio}. Se genera por episodio y se etiqueta como no verificada.
-        // Para películas no inventamos un patrón de reproducción: dejamos la página del proveedor como búsqueda.
-        val episode = Regex("^(?:tmdb-tv-)?(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
-        val defaults = when {
-            episode != null -> listOf("https://framextv.xyz/watch/${episode.groupValues[1]}/${episode.groupValues[2]}/${episode.groupValues[3]}")
-            contentKey.startsWith("tmdb-movie-") -> listOf(FRAME_XTV_HOME)
-            else -> emptyList()
+        val episodeMatch = Regex("^(?:tmdb-tv-)?(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
+        val seriesId = episodeMatch?.groupValues?.get(1)
+        val seasonNo = season ?: episodeMatch?.groupValues?.get(2)?.toIntOrNull()
+        val episodeNo = episodeNumber ?: episodeMatch?.groupValues?.get(3)?.toIntOrNull()
+        val queryTitle = buildString {
+            append(displayTitle.trim())
+            if (isSeries && seasonNo != null && episodeNo != null) {
+                append(" S").append(seasonNo.toString().padStart(2, '0'))
+                append("E").append(episodeNo.toString().padStart(2, '0'))
+            }
+        }.trim()
+        val encodedQuery = URLEncoder.encode(queryTitle.ifBlank { "" }, "UTF-8")
+        val encodedTitle = URLEncoder.encode(displayTitle.trim(), "UTF-8")
+
+        val generated = buildList {
+            if (isSeries && seriesId != null && seasonNo != null && episodeNo != null) {
+                // Primary route matches the user-supplied Breaking Bad S03E11 example.
+                add("https://framextv.xyz/watch/$seriesId/$seasonNo/$episodeNo")
+                // Some catalogues use episode-season order; retain as an alternative, not as verified.
+                if (seasonNo != episodeNo) add("https://framextv.xyz/watch/$seriesId/$episodeNo/$seasonNo")
+                // Movies2Watch uses provider-specific slugs/IDs, so use a title search candidate rather than inventing a detail slug.
+                if (encodedQuery.isNotBlank()) add("$MOVIES2WATCH_SEARCH$encodedQuery")
+                if (encodedTitle.isNotBlank() && encodedTitle != encodedQuery) add("$MOVIES2WATCH_SEARCH$encodedTitle")
+                // RePelisHD opens a title search, letting the site's own catalogue resolve its slug/player.
+                if (encodedQuery.isNotBlank()) add("https://repelishd.cv/?s=$encodedQuery")
+                // Some catalog search forms index the series title but not the SxxExx suffix.
+                if (encodedTitle.isNotBlank() && encodedTitle != encodedQuery) add("https://repelishd.cv/?s=$encodedTitle")
+                add(REPELISHD_SERIES)
+            } else if (!isSeries) {
+                // The provider's documented template requires an IMDb tt ID; don't fabricate one.
+                if (!imdbId.isNullOrBlank() && imdbId.matches(Regex("tt\\d{5,12}"))) {
+                    add("$STREAMIMDB_MOVIE_TEMPLATE$imdbId/")
+                }
+                if (encodedQuery.isNotBlank()) add("$MOVIES2WATCH_SEARCH$encodedQuery")
+                if (encodedTitle.isNotBlank() && encodedTitle != encodedQuery) add("$MOVIES2WATCH_SEARCH$encodedTitle")
+                if (encodedQuery.isNotBlank()) add("https://repelishd.cv/?s=$encodedQuery")
+                add(REPELISHD_MOVIES)
+            }
         }.filterNot { it in hiddenDefaults }
-        return (defaults + stored).distinct()
+
+        return (generated + stored).distinct()
     }
 
     fun addSource(context: Context, contentKey: String, rawUrl: String): Boolean {
@@ -54,7 +103,6 @@ object WebSourceRegistry {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val current = decode(prefs.getString(KEY_PREFIX + contentKey, null)).filterNot { it == rawUrl }
         val editor = prefs.edit().putString(KEY_PREFIX + contentKey, JSONArray(current).toString())
-        // Las fuentes predeterminadas se ocultan solo para este contenido cuando el usuario las quita.
         val hidden = (decode(prefs.getString("hidden:$contentKey", null)) + rawUrl).distinct()
         editor.putString("hidden:$contentKey", JSONArray(hidden).toString())
         editor.apply()
