@@ -4,18 +4,20 @@ Aplicación nativa para Android TV hecha con Kotlin, Jetpack Compose for TV y Me
 
 > **Importante:** una lista M3U solo describe contenido y direcciones de reproducción; no descarga ni almacena automáticamente las películas. El video se reproduce desde el servidor de origen. Usá fuentes propias, autorizadas o de dominio público. No asumir que una lista IPTV de canales contiene películas o episodios bajo demanda.
 
-## Estado actual
+## Estado actual (iteración de Argentina + VOD)
 
-- **Inicio:** ahora es la pantalla inicial y prioriza filas VOD (películas y series/episodios) antes de TV en vivo; el destacado prioriza un título VOD con póster cuando existe.
-- **Buscar:** busca títulos dentro del catálogo cargado.
-- **TV EN VIVO:** muestra transmisiones lineales.
-- **PELÍCULAS:** muestra entradas clasificadas como película o contenido VOD genérico.
-- **SERIES:** muestra entradas reconocidas como series o episodios.
-- **ANIMACIÓN:** filtro transversal por términos de anime, dibujos, infantil y animación; puede incluir canales en vivo o títulos VOD.
-- **DESCUBRIR:** cuadrícula de todos los elementos no clasificados como TV en vivo.
+- **Inicio:** pantalla inicial tipo Netflix; prioriza películas y series VOD cuando hay títulos disponibles.
+- **ARGENTINA:** reemplaza el antiguo rótulo TV EN VIVO. Usa una lista específica de canales argentinos, intenta ordenar TN, Crónica, El Trece, Telefe y América al principio, y coloca Gran Hermano inmediatamente después del top 5 cuando aparece en la lista adicional local.
+- **OTROS PAÍSES:** agrupa las demás listas de canales. El zapping de Argentina no debe saltar a otros países.
+- **Cambio de canal:** en el reproductor, flecha arriba oculta los controles para despejar la imagen. Las teclas dedicadas CH+/CH- recorren la cola argentina en orden y no salen de ella. La compatibilidad depende de que el control remoto exponga esos keycodes; probar en dispositivo real.
+- **Catálogo VOD:** hay una fuente remota de películas de dominio público, otra de series y un pequeño catálogo local de películas clásicas empaquetado como M3U de respaldo. La lista anterior `iptv-extra.m3u` también incluye enlaces antiguos con apariencia VOD (por ejemplo, `GRANDE FRATELLO 2020 EP1/EP2` y una conferencia grabada); se ajustó la clasificación para reconocer episodios `EP1` y rutas `/vod`. El catálogo local garantiza que Películas tenga metadatos aunque la descarga remota falle, pero reproducir los videos requiere conexión y los enlaces de terceros pueden cambiar.
+- **SERIES:** muestra entradas clasificadas como series/episodios; la fuente remota actual puede no ofrecer muchas series o episodios con metadatos. No se inventan temporadas ni sinopsis.
+- **ANIMACIÓN:** filtro transversal por términos de anime, dibujos, infantil y animación.
+- **DESCUBRIR:** cuadrícula de elementos no clasificados como TV en vivo.
 - **Reproductor:** Media3/ExoPlayer con HLS, DASH y MP4.
-- **Caché:** carga el catálogo local al iniciar y actualiza las fuentes en segundo plano.
+- **Caché:** carga el catálogo local al iniciar y actualiza fuentes en segundo plano.
 - **Streams fallidos:** cuando ExoPlayer confirma un error, la entrada se oculta y su URL se registra localmente.
+- **Límite importante:** no se verificó reproducción de todos los enlaces ni se pudo compilar un APK completo en el entorno de edición. Validar en Android Studio/GitHub Actions y dispositivo real.
 
 ## Clasificación de contenido
 
@@ -25,7 +27,7 @@ Esta clasificación es heurística, no una garantía. Algunas listas M3U son sol
 
 ## Fuentes configuradas
 
-Las fuentes actuales se configuran en `buildRepository()` dentro de `app/src/main/java/com/quilmes/xuper/MainActivity.kt`. Incluyen listas públicas de canales, el archivo local `app/src/main/assets/iptv-extra.m3u` y dos listas VOD de dominio público de OnlineM3U: películas y series. Estas dos fuentes tienen `contentHint` explícito para que no dependan de heurísticas de nombre/URL. Las listas públicas pueden cambiar, dejar de funcionar o contener enlaces no disponibles en ciertas regiones. No se consideran verificadas por el mero hecho de descargarse.
+Las fuentes actuales se configuran en `buildRepository()` dentro de `app/src/main/java/com/quilmes/xuper/MainActivity.kt`. Incluyen una lista de canales de Argentina (`https://iptv-org.github.io/iptv/countries/ar.m3u`), listas públicas de canales, el archivo local `app/src/main/assets/iptv-extra.m3u`, un catálogo de respaldo `app/src/main/assets/peliculas-dominio-publico.m3u` y dos listas VOD remotas de OnlineM3U: películas y series. Las listas VOD dedicadas usan `contentHint` explícito. El catálogo local es una selección pequeña de clásicos de dominio público; sus URLs apuntan a terceros y no se garantiza disponibilidad permanente. Las listas públicas pueden cambiar, dejar de funcionar o contener enlaces no disponibles en ciertas regiones. No se consideran verificadas por el mero hecho de descargarse.
 
 La lista compartida `https://raw.githubusercontent.com/srfarias/Arg-IpTv/master/m3u` puede evaluarse como una fuente adicional, pero **no debe tratarse automáticamente como catálogo de películas y series**: primero hay que revisar su estructura y confirmar si contiene VOD real o únicamente canales lineales de cine/series. No eliminar fuentes actuales sin comprobar antes su función.
 
@@ -73,7 +75,7 @@ app/src/main/java/com/quilmes/xuper/
 
 ## Próximas prioridades
 
-1. **Mejorar la experiencia tipo Netflix:** Home como destino inicial, hero destacado que priorice películas/series VOD, filas “Películas”, “Series”, “Agregados recientemente” cuando haya datos reales y estados vacíos claros.
+1. **Netflix-style:** mejorar el destacado y sumar filas “Agregados recientemente” solo cuando haya datos reales.
 2. **Modelo de series:** separar serie, temporada y episodio si la fuente lo permite; no inventar temporadas ni sinopsis. Agregar una pantalla de detalle antes de reproducir, con selección de episodio cuando exista información suficiente.
 3. **Metadatos:** aprovechar `tvg-logo` como póster cuando exista. Si se integra un proveedor externo de metadatos, hacerlo mediante una API autorizada y mantener separado el catálogo de metadatos de las URLs de reproducción.
 4. **Favoritos y continuar viendo:** persistencia local y progreso solo para contenido bajo demanda; el progreso de TV en vivo debe manejarse distinto.
@@ -82,9 +84,23 @@ app/src/main/java/com/quilmes/xuper/
 
 ---
 
+## Registro de esta iteración
+
+- Se agregó la sección **Argentina** con fuente dedicada y orden de canales prioritarios.
+- Se agregó **Otros países** separado para que el zapping argentino no cambie de país.
+- El reproductor ahora intenta ocultar controles con flecha arriba y cambiar canales con teclas dedicadas CH+/CH-.
+- Se agregó una pequeña lista M3U local de respaldo para películas clásicas de dominio público, además de las fuentes VOD remotas.
+- Se amplió la clasificación para detectar episodios etiquetados `EP1`/`EP2` y rutas `/vod`, lo que ayuda a recuperar entradas bajo demanda que ya existían en `iptv-extra.m3u` pero se clasificaban como canales en vivo.
+- La URL argentina `https://raw.githubusercontent.com/srfarias/Arg-IpTv/master/m3u` no se activó como VOD porque su descripción habla principalmente de canales premium de películas/series; eso normalmente significa canales lineales, no un catálogo individual bajo demanda. Puede añadirse como fuente de canales si se desea, sin etiquetarla como catálogo VOD.
+- No fue posible acceder a Internet desde el entorno de edición ni ejecutar una compilación Android completa. Las URLs y los keycodes de control remoto necesitan validación real.
+
 # PROMPT DE CONTINUIDAD PARA LA PRÓXIMA IA
 
 Estás trabajando sobre el proyecto existente **Xuper Quilmes TV**, una app Android TV nativa Kotlin + Jetpack Compose for TV + Media3/ExoPlayer. El usuario quiere una experiencia principalmente tipo Netflix, con películas y series bajo demanda como foco y TV en vivo como complemento. Debés leer este README y revisar el código real antes de cambiar cosas. No le pidas al usuario que vuelva a explicar el proyecto ni hagas preguntas si podés avanzar con decisiones razonables.
+
+## Estado más reciente que debes respetar
+
+La barra lateral ya muestra **ARGENTINA** y **OTROS PAÍSES**. La lista argentina se configura en `MainActivity.kt` y se ordena en `M3uRepository.kt`; la cola de zapping argentina incluye los canales de esa fuente y un único canal Gran Hermano de la lista local cuando está disponible. La flecha arriba debe ocultar controles, y las teclas `KEYCODE_CHANNEL_UP/DOWN` cambian de canal sin salir de la cola. Hay un catálogo M3U local pequeño de películas en `app/src/main/assets/peliculas-dominio-publico.m3u`, además de las fuentes remotas. La lista `iptv-extra.m3u` también contiene dos entradas antiguas de episodios (`EP1`/`EP2`) y una conferencia grabada que deben clasificarse como VOD, no como canales en vivo. Comprobar que los cambios compilen y que el mando real entregue los keycodes esperados antes de rehacer la lógica.
 
 ## Reglas de trabajo
 

@@ -1,6 +1,7 @@
 package com.quilmes.xuper.ui.screens
 
 import android.view.ViewGroup
+import android.view.KeyEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +29,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Text
+import com.quilmes.xuper.data.Title
 import kotlinx.coroutines.delay
 
 /**
@@ -37,7 +39,14 @@ import kotlinx.coroutines.delay
  */
 @OptIn(UnstableApi::class)
 @Composable
-fun PlayerScreen(name: String, streamUrl: String, onPlaybackError: () -> Unit = {}) {
+fun PlayerScreen(
+    name: String,
+    streamUrl: String,
+    channelQueue: List<Title> = emptyList(),
+    currentTitleId: String = "",
+    onChangeChannel: (String) -> Unit = {},
+    onPlaybackError: () -> Unit = {},
+) {
     val context = LocalContext.current
     var error by remember { mutableStateOf<String?>(null) }
     var showName by remember { mutableStateOf(true) }
@@ -81,11 +90,37 @@ fun PlayerScreen(name: String, streamUrl: String, onPlaybackError: () -> Unit = 
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = {
-                PlayerView(context).apply {
+                object : PlayerView(context) {
+                    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            when (event.keyCode) {
+                                KeyEvent.KEYCODE_DPAD_UP -> {
+                                    hideController()
+                                    return true
+                                }
+                                KeyEvent.KEYCODE_CHANNEL_UP -> {
+                                    val index = channelQueue.indexOfFirst { it.id == currentTitleId }
+                                    if (index >= 0 && channelQueue.isNotEmpty()) {
+                                        onChangeChannel(channelQueue[(index + 1) % channelQueue.size].id)
+                                        return true
+                                    }
+                                }
+                                KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                                    val index = channelQueue.indexOfFirst { it.id == currentTitleId }
+                                    if (index >= 0 && channelQueue.isNotEmpty()) {
+                                        onChangeChannel(channelQueue[(index - 1 + channelQueue.size) % channelQueue.size].id)
+                                        return true
+                                    }
+                                }
+                            }
+                        }
+                        return super.dispatchKeyEvent(event)
+                    }
+                }.apply {
                     player = exoPlayer
                     useController = true
-                    // Los controles quedan visibles permanentemente: no desaparecen solos
-                    // y no hace falta acertar una tecla para volver a mostrarlos.
+                    // Flecha arriba despeja la pantalla ocultando los controles. Las teclas
+                    // dedicadas CH+/CH- hacen zapping dentro de la cola argentina.
                     controllerShowTimeoutMs = 0
                     controllerHideOnTouch = false
                     keepScreenOn = true
@@ -104,7 +139,7 @@ fun PlayerScreen(name: String, streamUrl: String, onPlaybackError: () -> Unit = 
 
         if (showName) {
             Text(
-                text = "$name   ·   OK: controles",
+                text = "$name   ·   OK: controles · CH+/CH-: cambiar canal",
                 color = Color.White,
                 fontSize = 18.sp,
                 modifier = Modifier

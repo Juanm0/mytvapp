@@ -29,6 +29,25 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
     cacheDir = cacheDir,
     sources = listOf(
         M3uSource(
+            name = "Argentina",
+            url = "https://iptv-org.github.io/iptv/countries/ar.m3u",
+            icon = "🇦🇷",
+            homeRows = 5,
+            priorityNames = listOf("TN", "Crónica", "El Trece", "Eltrece", "Telefe", "América"),
+            flattenIntoOneCategory = true,
+            maxPerRow = 80,
+            maxRows = 1,
+        ),
+        M3uSource(
+            name = "Películas clásicas (catálogo local)",
+            url = File(cacheDir, "peliculas-dominio-publico.m3u").toURI().toString(),
+            icon = "🎞️",
+            homeRows = 4,
+            maxPerRow = 30,
+            maxRows = 30,
+            contentHint = ContentKind.MOVIE,
+        ),
+        M3uSource(
             name = "Free-TV",
             url = "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8",
             icon = "📡",
@@ -105,6 +124,13 @@ class MainActivity : ComponentActivity() {
         }.onFailure { error ->
             android.util.Log.e("XuperQuilmesTV", "No se pudo instalar la lista IPTV adicional", error)
         }
+        runCatching {
+            assets.open("peliculas-dominio-publico.m3u").use { input ->
+                File(filesDir, "peliculas-dominio-publico.m3u").outputStream().use { output -> input.copyTo(output) }
+            }
+        }.onFailure { error ->
+            android.util.Log.e("XuperQuilmesTV", "No se pudo instalar el catálogo local de películas", error)
+        }
 
         // Arranca ya mismo: lee el caché del disco y baja las listas en segundo plano
         lifecycleScope.launch { repository.refresh() }
@@ -129,6 +155,12 @@ class MainActivity : ComponentActivity() {
                             PlayerScreen(
                                 name = title.name,
                                 streamUrl = title.streamUrl,
+                                channelQueue = (repository as? M3uRepository)?.getArgentinaChannels().orEmpty(),
+                                currentTitleId = id,
+                                onChangeChannel = { nextId ->
+                                    navController.popBackStack("main", false)
+                                    navController.navigate("player/$nextId")
+                                },
                                 onPlaybackError = { lifecycleScope.launch { repository.markUnavailable(id) } },
                             )
                         }

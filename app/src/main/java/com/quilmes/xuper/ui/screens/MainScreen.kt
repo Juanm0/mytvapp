@@ -32,11 +32,13 @@ fun MainScreen(
     val items = listOf(
         NavItem("home", "⌂", "INICIO"),
         NavItem("search", "🔍", "Buscar"),
-        NavItem("live", "📺", "TV EN VIVO"),
+        NavItem("live", "🇦🇷", "ARGENTINA"),
         NavItem("movies", "🎬", "PELÍCULAS"),
         NavItem("series", "📺", "SERIES"),
         NavItem("animation", "🍥", "ANIMACIÓN"),
         NavItem("discover", "✨", "DESCUBRIR"),
+        NavItem("countries", "🌎", "OTROS PAÍSES"),
+        NavItem("countries", "🌎", "OTROS PAÍSES"),
     )
 
     BackHandler(enabled = dest != "home") { dest = "home" }
@@ -48,7 +50,12 @@ fun MainScreen(
                 "search" -> SearchScreen(repository = repository, onPlay = onPlay)
                 "live" -> LibraryScreen(
                     sections = sections,
-                    mode = LibraryMode.LIVE,
+                    mode = LibraryMode.ARGENTINA,
+                    onPlay = onPlay,
+                )
+                "countries" -> LibraryScreen(
+                    sections = sections,
+                    mode = LibraryMode.OTHER_COUNTRIES,
                     onPlay = onPlay,
                 )
                 "movies" -> LibraryScreen(

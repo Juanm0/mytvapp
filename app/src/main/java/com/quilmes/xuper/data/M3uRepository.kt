@@ -31,6 +31,10 @@ data class M3uSource(
     val icon: String = "📺",
     val homeRows: Int = 3,
     val priorityGroups: List<String> = emptyList(),
+    /** Nombres que deben aparecer primero dentro de una lista curada. */
+    val priorityNames: List<String> = emptyList(),
+    /** Para una lista nacional, muestra todos los canales en una única fila ordenada. */
+    val flattenIntoOneCategory: Boolean = false,
     val maxPerRow: Int = 60,
     val maxRows: Int = 40,
     /** Hint explícito para listas dedicadas a VOD; null para listas mixtas o de canales. */
@@ -165,7 +169,67 @@ class M3uRepository(
         }
     }
 
+    /** Cola de zapping de Argentina. No incluye canales de otros países. */
+    fun getArgentinaChannels(): List<Title> {
+        val all = synchronized(lock) {
+            entriesBySource.values.flatten().map { it.title }
+        }.distinctBy { it.streamUrl }
+        val argSection = _sections.value.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+        val argUrls = argSection?.categories.orEmpty().flatMap { it.items }.map { it.streamUrl }.toSet()
+        val gh = all.firstOrNull { it.name.contains("gran hermano", ignoreCase = true) || it.name.equals("GH", ignoreCase = true) }
+            ?.let(::listOf).orEmpty()
+        val titles = all.filter { it.streamUrl in argUrls } + gh
+        val unique = titles.distinctBy { it.streamUrl }.distinctBy { title ->
+            val n = normalize(title.name)
+            when {
+                n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "brand:tn"
+                "cronica" in n -> "brand:cronica"
+                "el trece" in n || "eltrece" in n -> "brand:el trece"
+                "telefe" in n -> "brand:telefe"
+                n == "america" || n.startsWith("america ") || "america tv" in n -> "brand:america"
+                "gran hermano" in n || n == "gh" -> "brand:gran hermano"
+                else -> "url:${title.streamUrl}"
+            }
+        }
+        val priority = listOf("tn", "cronica", "el trece", "eltrece", "telefe", "america", "gran hermano")
+        fun rank(title: Title): Int {
+            val name = normalize(title.name)
+            return priority.indexOfFirst { key ->
+                when (key) {
+                    "tn" -> name == "tn" || name.startsWith("tn ") || name.startsWith("tn-")
+                    "cronica" -> "cronica" in name
+                    "el trece", "eltrece" -> "el trece" in name || "eltrece" in name
+                    "telefe" -> "telefe" in name
+                    "america" -> name == "america" || name.startsWith("america ") || "america tv" in name
+                    "gran hermano" -> "gran hermano" in name
+                    else -> key in name
+                }
+            }.let { if (it < 0) Int.MAX_VALUE else it }
+        }
+        return unique.sortedWith(compareBy<Title>({ rank(it) }, { normalize(it.name) }))
+    }
+
     private fun buildSection(i: Int, source: M3uSource, entries: List<Entry>): Section {
+        if (source.flattenIntoOneCategory) {
+            val sorted = entries.map { it.title }.distinctBy { it.streamUrl }.sortedWith(
+                compareBy<Title>(
+                    { title ->
+                        val name = normalize(title.name)
+                        source.priorityNames.indexOfFirst { key ->
+                            val normalizedKey = normalize(key)
+                            when (normalizedKey) {
+                                "tn" -> name == "tn" || name.startsWith("tn ") || name.startsWith("tn-")
+                                "el trece", "eltrece" -> "el trece" in name || "eltrece" in name
+                                else -> name.contains(normalizedKey)
+                            }
+                        }.let { if (it < 0) Int.MAX_VALUE else it }
+                    },
+                    { normalize(it.name) },
+                )
+            )
+            val category = Category("s$i-argentina", "Canales argentinos", sorted)
+            return Section("s$i", source.name, source.icon, listOf(category), source.homeRows)
+        }
         val groups = entries.groupBy { it.group }
         val ordered = groups.keys.sortedWith(
             compareBy<String>(
@@ -269,7 +333,7 @@ class M3uRepository(
         val metadata = "$n $g $path"
 
         val seriesPath = Regex("(^|/)(series|serie|shows|tvshows)(/|$)").containsMatchIn(path)
-        val episodePattern = Regex("\\b(s\\d{1,2}\\s*e\\d{1,3}|\\d{1,2}x\\d{1,3}|season\\s*\\d+|temporada\\s*\\d+|episode\\s*\\d+|episodio\\s*\\d+)\\b")
+        val episodePattern = Regex("\\b(s\\d{1,2}\\s*e\\d{1,3}|\\d{1,2}x\\d{1,3}|season\\s*\\d+|temporada\\s*\\d+|episode\\s*\\d+|episodio\\s*\\d+|ep\\s*\\d+)\\b")
         val seriesWords = listOf("series vod", "tv series", "series on demand", "series a la carta", "episodios", "episodes")
         val seriesGroup = g in setOf("series", "series tv", "episodios", "episodes", "series completas")
         if (seriesPath || episodePattern.containsMatchIn(n) || seriesGroup || seriesWords.any { it in metadata }) {
@@ -282,7 +346,8 @@ class M3uRepository(
         val movieTitle = listOf("pelicula completa", "full movie", "movie:", "pelicula:").any { n.startsWith(it) }
         if (moviePath || videoExtension || explicitVodGroup || movieTitle) return ContentKind.MOVIE
 
-        val explicitVod = listOf("conferencia grabada", "contenido bajo demanda", "vod").any { it in metadata }
+        val explicitVod = listOf("conferencia grabada", "contenido bajo demanda", "vod").any { it in metadata } ||
+            path.contains("/vod")
         if (explicitVod) return ContentKind.OTHER_VOD
         return ContentKind.LIVE
     }

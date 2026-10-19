@@ -30,7 +30,7 @@ import com.quilmes.xuper.ui.components.SkeletonRows
 import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 
-internal enum class LibraryMode { LIVE, MOVIES, SERIES, ANIMATION }
+internal enum class LibraryMode { ARGENTINA, OTHER_COUNTRIES, MOVIES, SERIES, ANIMATION }
 
 @Composable
 internal fun LibraryScreen(
@@ -39,27 +39,46 @@ internal fun LibraryScreen(
     onPlay: (String) -> Unit,
 ) {
     val rows = remember(sections, mode) {
-        sections.flatMap { section ->
-            section.categories.mapNotNull { category ->
-                val filtered = category.items.filter { title ->
-                    when (mode) {
-                        LibraryMode.LIVE -> title.isLive && !isAnimation(title)
-                        LibraryMode.MOVIES -> title.contentKind == ContentKind.MOVIE || title.contentKind == ContentKind.OTHER_VOD
-                        LibraryMode.SERIES -> title.contentKind == ContentKind.SERIES
-                        LibraryMode.ANIMATION -> isAnimation(title)
+        when (mode) {
+            LibraryMode.ARGENTINA -> {
+                val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
+                    ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+                val gh = sections.flatMap { it.categories }.flatMap { it.items }
+                    .filter { it.isLive && it.name.contains("gran hermano", ignoreCase = true) }
+                val ordered = (argentina + gh).distinctBy { it.streamUrl }
+                    .distinctBy { t -> argentinaBrand(t.name) ?: "url:${t.streamUrl}" }
+                    .sortedWith(
+                        compareBy<Title>(
+                            { t -> argentinaPriority(t.name) },
+                            { normalizeName(it.name) },
+                        )
+                    )
+                if (ordered.isEmpty()) emptyList() else listOf(Category("argentina-live", "Argentina · Canales principales", ordered))
+            }
+            LibraryMode.OTHER_COUNTRIES -> sections.filterNot { it.name.equals("Argentina", ignoreCase = true) }
+                .flatMap { section -> section.categories.mapNotNull { category ->
+                    val filtered = category.items.filter { it.isLive && !it.name.contains("gran hermano", ignoreCase = true) }
+                    if (filtered.isEmpty()) null else Category("countries-${category.id}", "${section.name} · ${category.title}", filtered)
+                } }
+            else -> sections.flatMap { section ->
+                section.categories.mapNotNull { category ->
+                    val filtered = category.items.filter { title ->
+                        when (mode) {
+                            LibraryMode.MOVIES -> title.contentKind == ContentKind.MOVIE || title.contentKind == ContentKind.OTHER_VOD
+                            LibraryMode.SERIES -> title.contentKind == ContentKind.SERIES
+                            LibraryMode.ANIMATION -> isAnimation(title)
+                            else -> false
+                        }
                     }
+                    if (filtered.isEmpty()) null else Category("${mode.name}-${category.id}", category.title, filtered)
                 }
-                if (filtered.isEmpty()) null else Category(
-                    id = "${mode.name}-${category.id}",
-                    title = if (mode == LibraryMode.LIVE) "${section.name} · ${category.title}" else category.title,
-                    items = filtered,
-                )
             }
         }
     }
 
     val heading = when (mode) {
-        LibraryMode.LIVE -> "TV EN VIVO"
+        LibraryMode.ARGENTINA -> "ARGENTINA"
+        LibraryMode.OTHER_COUNTRIES -> "OTROS PAÍSES"
         LibraryMode.MOVIES -> "PELÍCULAS"
         LibraryMode.SERIES -> "SERIES"
         LibraryMode.ANIMATION -> "ANIMACIÓN"
@@ -71,13 +90,15 @@ internal fun LibraryScreen(
         } else {
             EmptyMessage(
                 title = when (mode) {
-                    LibraryMode.LIVE -> "No hay canales disponibles"
+                    LibraryMode.ARGENTINA -> "No hay canales argentinos disponibles"
+                    LibraryMode.OTHER_COUNTRIES -> "No hay canales internacionales disponibles"
                     LibraryMode.MOVIES -> "Todavía no hay películas"
                     LibraryMode.SERIES -> "Todavía no hay series"
                     LibraryMode.ANIMATION -> "No encontramos canales de animación"
                 },
                 message = when (mode) {
-                    LibraryMode.LIVE -> "Las listas IPTV no devolvieron canales reproducibles."
+                    LibraryMode.ARGENTINA -> "La lista de Argentina no devolvió canales reproducibles. Comprobá la conexión o actualizá la fuente."
+                    LibraryMode.OTHER_COUNTRIES -> "Las listas internacionales no devolvieron canales reproducibles."
                     LibraryMode.MOVIES -> "Todavía no encontramos películas bajo demanda. Una lista de canales de cine en vivo no alcanza: la fuente tiene que incluir enlaces directos a películas."
                     LibraryMode.SERIES -> "Todavía no encontramos series o episodios bajo demanda. Agregá una fuente VOD autorizada con episodios y metadatos."
                     LibraryMode.ANIMATION -> "Cuando una lista incluya canales o títulos de anime, dibujos o animación, van a aparecer acá."
@@ -157,6 +178,35 @@ private fun EmptyMessage(title: String, message: String) {
         }
     }
 }
+
+private fun normalizeName(value: String): String = java.text.Normalizer.normalize(value.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
+private fun argentinaBrand(value: String): String? {
+    val n = normalizeName(value)
+    return when {
+        n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "tn"
+        "cronica" in n -> "cronica"
+        "el trece" in n || "eltrece" in n -> "el trece"
+        "telefe" in n -> "telefe"
+        n == "america" || n.startsWith("america ") || "america tv" in n -> "america"
+        "gran hermano" in n || n == "gh" -> "gran hermano"
+        else -> null
+    }
+}
+
+private fun argentinaPriority(value: String): Int {
+    val n = normalizeName(value)
+    return when {
+        n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> 0
+        "cronica" in n -> 1
+        "el trece" in n || "eltrece" in n -> 2
+        "telefe" in n -> 3
+        n == "america" || n.startsWith("america ") || "america tv" in n -> 4
+        "gran hermano" in n || n == "gh" -> 5
+        else -> 100
+    }
+}
+
 
 private fun isAnimation(title: Title): Boolean {
     val text = Normalizer.normalize(
