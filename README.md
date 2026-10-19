@@ -41,7 +41,7 @@ La librería wrapper está documentada en https://github.com/mlm-games/adblock-r
 
 ## Estabilidad del reproductor y filtro publicitario
 
-Se deshabilitó la integración nativa `adblock-rust`/Brave (JNI), porque un fallo dentro de una biblioteca nativa puede cerrar el proceso de Android sin que la app pueda recuperarse. El proyecto ya no descarga ni enlaza el AAR nativo. El WebView conserva el filtro local `XuperWebRequestFilter` para bloquear dominios y rutas publicitarias comunes. La cobertura es menor que la de las listas completas de Brave, pero evita cargar el motor nativo en el flujo de reproducción. Esta modificación elimina ese componente como posible causa; el cierre solo puede darse por confirmado como resuelto después de probar el APK en el dispositivo.
+Se deshabilitó la integración nativa `adblock-rust`/Brave (JNI), por un fallo dentro de una biblioteca nativa puede cerrar el proceso de Android sin que la app pueda recuperarse. El proyecto ya no descarga ni enlaza el AAR nativo. El WebView conserva el filtro local `XuperWebRequestFilter` para bloquear dominios y rutas publicitarias comunes. La cobertura es menor que la de las listas completas de Brave, pero evita cargar el motor nativo en el flujo de reproducción. Esta modificación elimina ese componente como posible causa; el cierre solo puede darse por confirmado como resuelto después de probar el APK en el dispositivo.
 
 
 ## Reproducción web integrada (actualización)
