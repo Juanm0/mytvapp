@@ -87,6 +87,8 @@ dependencies {
     // Navegación
     implementation("androidx.navigation:navigation-compose:2.7.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // Parseo HTML de páginas públicas; no ejecuta JavaScript ni resuelve players ofuscados.
+    implementation("org.jsoup:jsoup:1.18.3")
 
     // Carga de imágenes (pósters, backdrops) desde URL
     implementation("io.coil-kt:coil-compose:2.6.0")

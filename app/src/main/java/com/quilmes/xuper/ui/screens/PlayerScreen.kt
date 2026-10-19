@@ -63,6 +63,7 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.ImdbEmbedSource
+import com.quilmes.xuper.data.WebPageMediaResolver
 import kotlinx.coroutines.delay
 
 /**
@@ -88,7 +89,14 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
 ) {
     if (ImdbEmbedSource.isEmbedUrl(streamUrl)) {
-        ImdbEmbedPlayer(url = streamUrl)
+        WebEmbedPlayer(url = streamUrl)
+        return
+    }
+    if (WebPageMediaResolver.looksLikeDetailPage(streamUrl)) {
+        // Las páginas de episodios (p. ej. movies2watch /series/titulo/3-11/) tienen
+        // su propio reproductor HTML5, selección de subtítulos y fuentes. Abrimos la
+        // página en WebView en vez de intentar extraer el stream y reemplazar sus controles.
+        WebEmbedPlayer(url = streamUrl)
         return
     }
     val context = LocalContext.current
@@ -407,12 +415,48 @@ private fun formatTime(ms: Long): String {
 }
 
 
+/** Resuelve una URL de detalle fuera del hilo principal y deriva al reproductor adecuado. */
+@Composable
+private fun WebPageResolverPlayer(name: String, pageUrl: String) {
+    var attempt by remember(pageUrl) { mutableStateOf(0) }
+    var result by remember(pageUrl) { mutableStateOf<WebPageMediaResolver.Result?>(null) }
+
+    LaunchedEffect(pageUrl, attempt) {
+        result = null
+        result = WebPageMediaResolver.resolve(pageUrl)
+    }
+
+    when (val resolved = result) {
+        null -> Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Buscando una fuente declarada por la página…", color = Color.White, fontSize = 18.sp)
+                Text("Esto puede tardar unos segundos", color = Color(0xFF9CCBD4), fontSize = 13.sp)
+            }
+        }
+        is WebPageMediaResolver.Result.DirectMedia -> PlayerScreen(name = name, streamUrl = resolved.url)
+        is WebPageMediaResolver.Result.EmbedPage -> WebEmbedPlayer(url = resolved.url)
+        is WebPageMediaResolver.Result.NotFound -> Box(
+            Modifier.fillMaxSize().background(Color(0xFF07111B)).padding(32.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("No se encontró una fuente reproducible", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(resolved.reason, color = Color(0xFFB9CDD6), fontSize = 15.sp)
+                Text("El extractor solo lee fuentes públicas del HTML inicial. Si el sitio construye el reproductor con JavaScript, la app no puede deducir una URL de vídeo fiable con Jsoup.", color = Color(0xFF8BA7B5), fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { attempt++ }) { Text("Reintentar") }
+                }
+            }
+        }
+    }
+}
+
 /**
  * Un embed es una página HTML, no un archivo de video: se renderiza en WebView.
  * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
  */
 @Composable
-private fun ImdbEmbedPlayer(url: String) {
+private fun WebEmbedPlayer(url: String) {
     val context = LocalContext.current
     var progress by remember(url) { mutableStateOf(0) }
     var pageError by remember(url) { mutableStateOf<String?>(null) }
@@ -471,7 +515,17 @@ private fun ImdbEmbedPlayer(url: String) {
                     }
                     webViewClient = object : WebViewClient() {
                         override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) { progress = 0; pageError = null }
-                        override fun onPageFinished(view: WebView?, pageUrl: String?) { progress = 100 }
+                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                            progress = 100
+                            // Se oculta el botón de fullscreen del reproductor del sitio porque
+                            // Xuper ya presenta esta pantalla a pantalla completa. Los selectores
+                            // son best-effort: cada proveedor usa un reproductor distinto.
+                            view?.evaluateJavascript("""(function(){
+                              var css = '.jw-icon-fullscreen,.vjs-fullscreen-control,.plyr__control[data-plyr="fullscreen"],.shaka-fullscreen-button,.fullscreen-button,[aria-label*="Fullscreen" i],[title*="Fullscreen" i],[aria-label*="Pantalla completa" i],[title*="Pantalla completa" i]{display:none!important;visibility:hidden!important;width:0!important}';
+                              var style=document.getElementById('xuper-hide-fullscreen');
+                              if(!style){style=document.createElement('style');style.id='xuper-hide-fullscreen';document.head.appendChild(style);} style.textContent=css;
+                            })();""", null)
+                        }
                         override fun onReceivedError(view: WebView?, request: android.webkit.WebResourceRequest?, error: android.webkit.WebResourceError?) {
                             if (request?.isForMainFrame == true) pageError = "No se pudo cargar el reproductor web. Revisá la conexión o reintentá."
                         }

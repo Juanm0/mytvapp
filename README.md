@@ -275,3 +275,19 @@ Si estás aplicando el ZIP sobre un checkout existente, reemplazá los archivos 
 - Se corrigió el foco inicial del reproductor nativo con un `FocusRequester` explícito y se hizo más clara la leyenda del control remoto. Las flechas izquierda/derecha siguen saltando 10 segundos; arriba/abajo recorre los controles; OK ejecuta el control enfocado.
 - Si `streamimdb.ru` no contiene el título solicitado, devuelve un error, exige una verificación no compatible o bloquea WebView, la app no puede crear un stream por sí sola. El ID de IMDb sirve para construir la página, no demuestra que exista una fuente reproducible. Para diagnosticar un título concreto, mirar el mensaje HTTP/de carga que muestra la app.
 - No se pudo ejecutar `assembleRelease` en este entorno porque no hay Android SDK/Gradle instalados. Se verificó la estructura y sintaxis textual, pero el build final debe validarse en CI/Android Studio.
+
+
+## Resolución limitada de páginas HTML con Jsoup (2026-10-19)
+
+Se agregó `data/WebPageMediaResolver.kt` y la dependencia `org.jsoup:jsoup:1.18.3`. Al enviar al reproductor una URL de detalle reconocible (`.html`, `/ver-pelicula/`, `/ver-serie/`, `/episodio/` o `/capitulo/`), Xuper consulta la página en `Dispatchers.IO` y busca únicamente fuentes declaradas en el HTML recibido: `video[src]`, `source[src]`, metadatos `og:video` / `twitter:player:stream` y `link[rel=video_src]`. Si encuentra una URL de vídeo/HLS/DASH la deriva a Media3/ExoPlayer; si encuentra un iframe cuyo src/clase/id indica player/embed/video/watch/reproductor, lo abre como página HTML en WebView. El estado sin resultado muestra un mensaje y permite reintentar.
+
+**Límite deliberado:** Jsoup no ejecuta JavaScript. Esto no descifra reproductores ofuscados, no evita DRM, autenticación, paywalls ni protecciones anti-bot, y no garantiza eliminar anuncios. Muchos sitios montan el stream desde scripts, tokens temporales o un iframe que carga otras páginas; en esos casos no hay un enlace directo fiable en el HTML inicial y el resolver lo indicará. Un iframe es HTML, no una URL que se pueda pasar directamente a ExoPlayer. Para series, la URL de detalle debe identificar el episodio concreto; el extractor no adivina temporadas ni episodios a partir del nombre.
+
+La URL de ejemplo de Repelishd no queda codificada como proveedor especial y no se afirma que funcione con ese sitio: solo funcionará si la respuesta pública contiene alguna de las fuentes declaradas que reconoce el extractor y el proveedor permite la reproducción. No se ha ejecutado una compilación Android real en este entorno porque no hay SDK/Gradle instalados.
+
+
+## Reproductor de páginas de episodios (2026-10-19)
+
+Las URL de detalle/episodio se abren ahora directamente en WebView para utilizar el reproductor HTML5 del proveedor, incluyendo sus controles, selector de subtítulos y selección de fuente cuando el sitio los ofrece. Ya no se intenta extraer primero una URL con Jsoup para esas páginas, porque eso podía perder funciones del reproductor original o no encontrar fuentes creadas por JavaScript.
+
+Ejemplo de URL de episodio: `https://movies2watch.vc/series/breaking-bad-18349/3-11/` (temporada 3, episodio 11 según el formato de la URL). El botón de pantalla completa se oculta mediante selectores CSS habituales, cuando el reproductor los usa; no es universal y depende del proveedor. No se extraen ni se desbloquean fuentes protegidas. El comportamiento real debe verificarse en un dispositivo con acceso al sitio.
