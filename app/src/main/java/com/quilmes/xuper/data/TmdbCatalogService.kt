@@ -209,7 +209,7 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
-    /** Resuelve el IMDb ID que necesita el protocolo de streams de Stremio. */
+    /** Resuelve el IMDb ID para consultar fuentes web alternativas asociadas al título. */
     suspend fun getImdbId(titleId: String): String? = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext null
         val parsed = parseTmdbId(titleId) ?: return@withContext null

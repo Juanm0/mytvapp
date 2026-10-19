@@ -179,7 +179,7 @@ El entorno de edición no dispone de Gradle/Android SDK para compilar el APK com
 app/src/main/java/com/quilmes/xuper/
   MainActivity.kt                      # navegación, fuentes activas y reproductor
   data/M3uRepository.kt                # canales argentinos, caché, búsqueda y cola de episodios
-  data/TmdbCatalogService.kt           # filas TMDB, búsqueda, temporadas y episodios
+  data/TmdbCatalogService.kt           # filas TMDB, búsqueda, temporadas, episodios y títulos relacionados
   data/TmdbMetadataService.kt          # metadata de títulos existentes de listas M3U
   ui/screens/MainScreen.kt             # navegación lateral original y perfil
   ui/screens/HomeScreen.kt             # portada y filas horizontales
@@ -213,8 +213,3 @@ Antes de cambiar, revisá el código real. Después de cada iteración actualiz�
 - Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
 - El panel se oculta tras 5 segundos sin interacción.
 
-## Stremio (apaño temporal)
-
-En Perfil hay accesos para abrir Stremio, intentar instalar el addon oficial **Public Domain Movies** y abrir Stremio Web. El addon de películas ofrece contenido de dominio público, pero sus resultados están basados en torrents: se reproducen desde Stremio si el dispositivo tiene la app y soporte P2P. Esto es una apertura externa; todavía no es una integración de streams de addons dentro del reproductor Xuper. La integración nativa requiere consultar `/manifest.json`, catálogos y `/stream/{type}/{id}.json`, y solo pasar a Media3 enlaces HTTP(S) directos compatibles. Los enlaces magnet/torrent no los reproduce ExoPlayer por sí solo. Las URLs DASH/Widevine protegidas siguen requiriendo una licencia autorizada.
-
-Referencia del protocolo: https://stremio.github.io/stremio-addon-sdk/protocol.html
