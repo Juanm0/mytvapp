@@ -202,19 +202,44 @@ REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que 
 
 Antes de cambiar, revisá el código real. Después de cada iteración actualizá este README, verificá referencias/imports y, si el entorno no tiene Android SDK/Gradle, decilo con claridad y no afirmes que compiló. Conservá el keystore local existente para que las actualizaciones firmadas puedan instalarse sobre el APK anterior; nunca publiques sus credenciales. Entregá un ZIP completo cuando sea posible.
 
+---
 
-## Controles del reproductor Android TV
+## Integración Stremio (streams directos configurables)
 
-- Flechas izquierda/derecha: salto de 10 segundos; al mantener pulsado, acelera progresivamente a 20, 30 y hasta 60 segundos por repetición del mando.
-- Arriba/abajo: muestra el panel y permite recorrer sus botones; Back oculta el panel y, si ya estaba oculto, sale del reproductor.
-- OK/Select: activa el botón enfocado; si el panel está oculto, reproduce/pausa y lo vuelve a mostrar.
-- Play/Pause y Stop: alterna reproducción/pausa; Stop detiene y vuelve a la pantalla anterior.
-- CH+/CH-: cambia de canal en la cola disponible.
-- Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
-- El panel se oculta tras 5 segundos sin interacción.
+Se agregó `data/StremioRepository.kt` y una sección **Fuentes Stremio** en las fichas de películas/series que vienen de TMDB.
 
-## Stremio (apaño temporal)
+- La app consulta el IMDb ID correspondiente mediante `movie/{tmdbId}/external_ids` o `tv/{tmdbId}/external_ids` de TMDB.
+- En la ficha se puede introducir y guardar la URL de manifiesto de un addon Stremio (o su URL base). La app consulta `/stream/movie/{imdb_id}.json` o `/stream/series/{imdb_id}.json` según corresponda.
+- Los resultados aparecen en la ficha y abren el reproductor Media3 existente.
+- Solo se aceptan enlaces HTTP/HTTPS directos. Los resultados con `infoHash` o `externalUrl` se descartan porque no son una URL reproducible directa de ExoPlayer. No se instala ni se preconfigura Torrentio ni ningún addon de terceros.
+- No se garantiza que un addon tenga resultados para cada título, que sus enlaces estén activos o que todos los formatos/DRM sean compatibles. Configurá solo addons de confianza y contenido que tengas derecho a reproducir.
+- La integración usa `HttpURLConnection` y `org.json` ya disponibles en Android; no hace falta agregar Retrofit/Gson.
 
-En Perfil hay accesos para abrir Stremio, intentar instalar el addon oficial **Public Domain Movies** y abrir Stremio Web. El addon de películas ofrece contenido de dominio público, pero sus resultados están basados en torrents: se reproducen desde Stremio si el dispositivo tiene la app y soporte P2P. Esto es una apertura externa; todavía no es una integración de streams de addons dentro del reproductor Xuper. La integración nativa requiere consultar `/manifest.json`, catálogos y `/stream/{type}/{id}.json`, y solo pasar a Media3 enlaces HTTP(S) directos compatibles. Los enlaces magnet/torrent no los reproduce ExoPlayer por sí solo. Las URLs DASH/Widevine protegidas siguen requiriendo una licencia autorizada.
+### Uso
 
-Referencia del protocolo: https://stremio.github.io/stremio-addon-sdk/protocol.html
+1. Abrí la ficha de una película o serie del catálogo TMDB.
+2. En **Fuentes Stremio**, pegá la URL de manifiesto de un addon que permita streams HTTP/HLS directos y que tengas autorización para usar.
+3. Tocá **Guardar addon y buscar**.
+4. Elegí una fuente devuelta para abrirla en el reproductor.
+
+Si el título no tiene IMDb ID en TMDB o el addon no devuelve una URL directa, se mostrará un mensaje y no se inventará una fuente. Las entradas M3U existentes continúan usando su flujo de reproducción previo.
+
+### Cambios de esta iteración
+
+- `data/StremioRepository.kt`: cliente de streams de addons, validación de URLs y filtrado de resultados no directos.
+- `data/TmdbCatalogService.kt`: resolución del IMDb ID para películas y series.
+- `ui/screens/DetailScreen.kt`: configuración persistida de addon, búsqueda manual y selector de fuentes.
+- `MainActivity.kt`: ruta de reproducción para una URL directa obtenida desde un addon.
+
+**Verificación:** revisión estática solamente. El proyecto no incluye `gradlew` y este entorno no dispone de Android SDK/Gradle para confirmar una compilación Android real; compilar y probar en Android Studio o GitHub Actions antes de instalar.
+
+## Stremio multifuente (última actualización)
+
+- `data/StremioRepository.kt` ahora incluye `StremioAddonManager`, que persiste varias URLs de addons en `SharedPreferences` (un manifiesto o URL base por línea).
+- Las peticiones a todos los addons se ejecutan concurrentemente con corutinas (`async(Dispatchers.IO)`) y un fallo individual no cancela el resto.
+- Los resultados directos HTTP/HTTPS se unifican, deduplican por URL y ordenan por calidad detectada en nombre/título (4K, 2K, 1080p, HD y desconocida).
+- Cada fuente conserva el nombre y host del addon de origen para que el usuario pueda elegir en la ficha de contenido.
+- En películas se consulta `/stream/movie/{imdbId}.json`. En series, Stremio requiere un episodio concreto: `/stream/series/{imdbId}:{season}:{episode}.json`; se selecciona temporada y episodio en la ficha antes de buscar.
+- No se preconfiguran proveedores de terceros ni se promete cobertura total: cada addon puede devolver cero fuentes, estar caído o usar torrent/DRM. Solo se pasan URLs directas reproducibles por Media3; `infoHash` y `externalUrl` se descartan.
+- No se añadieron dependencias: se conservan `HttpURLConnection`, `org.json` y las corutinas que ya usa la app.
+- Verificación: revisar/compilar en Android Studio o GitHub Actions; este entorno no dispone de Android SDK ni Gradle Wrapper para validar una compilación Android completa.

@@ -1,8 +1,6 @@
 package com.quilmes.xuper.ui.screens
 
 import android.view.KeyEvent as AndroidKeyEvent
-import android.content.Context
-import android.media.AudioManager
 import android.view.ViewGroup
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
@@ -76,13 +74,10 @@ fun PlayerScreen(
     onChangeChannel: (String) -> Unit = {},
     onChangePlayer: (String) -> Unit = {},
     onPlayNextEpisode: (String) -> Unit = {},
-    onExit: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl) { mutableStateOf(true) }
-    var controlInteractionTick by remember(streamUrl) { mutableStateOf(0) }
-    var previousVolume by remember(streamUrl) { mutableStateOf(-1) }
     var showNextEpisode by remember { mutableStateOf(false) }
     var sourceIndex by remember(streamUrl, alternatePlayers) {
         mutableStateOf(alternatePlayers.indexOfFirst { it.streamUrl == streamUrl })
@@ -97,8 +92,6 @@ fun PlayerScreen(
     // como en cualquier reproductor de streaming grande).
     var seekFlash by remember { mutableStateOf<String?>(null) }
     var seekFlashToken by remember { mutableStateOf(0) }
-    var repeatedKeyCode by remember { mutableStateOf(0) }
-    var repeatedKeyCount by remember { mutableStateOf(0) }
 
     // Fila de botones de abajo: en vez de depender de que izquierda/derecha muevan el foco
     // entre botones (eso es lo que quedaba "pegado" — la flecha derecha quedaba reservada
@@ -107,24 +100,6 @@ fun PlayerScreen(
     val buttonCount = 4 // Reproducir/Pausar, Cambiar reproductor, Audio, Subtítulos
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
-    val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-
-    fun revealControls() {
-        showControls = true
-        controlInteractionTick++
-    }
-
-    fun toggleMute() {
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (current > 0) {
-            previousVolume = current
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, AudioManager.FLAG_SHOW_UI)
-        } else {
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val restore = previousVolume.takeIf { it > 0 } ?: (max / 2).coerceAtLeast(1)
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, restore.coerceAtMost(max), AudioManager.FLAG_SHOW_UI)
-        }
-    }
 
     val dataSourceFactory = remember {
         DefaultHttpDataSource.Factory()
@@ -168,16 +143,10 @@ fun PlayerScreen(
     }
 
     fun seekBy(deltaMs: Long) {
-        if (!exoPlayer.isCurrentMediaItemSeekable) {
-            flashSeek("⏭  No disponible")
-            revealControls()
-            return
-        }
         val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L)
-        exoPlayer.seekTo(if (exoPlayer.duration > 0) target.coerceAtMost(exoPlayer.duration) else target)
-        val seconds = kotlin.math.abs(deltaMs / 1000L)
-        flashSeek(if (deltaMs < 0) "⏪  ${seconds} s" else "${seconds} s  ⏩")
-        revealControls()
+        exoPlayer.seekTo(target)
+        flashSeek(if (deltaMs < 0) "⏪  10 s" else "10 s  ⏩")
+        showControls = true
     }
 
     LaunchedEffect(exoPlayer, streamUrl) {
@@ -192,9 +161,9 @@ fun PlayerScreen(
             runCatching { buttonFocusRequesters[0].requestFocus() }
         }
     }
-    LaunchedEffect(exoPlayer, showControls, controlInteractionTick) {
+    LaunchedEffect(exoPlayer, showControls) {
         if (showControls) {
-            delay(5000)
+            delay(6000)
             showControls = false
         }
     }
@@ -224,10 +193,10 @@ fun PlayerScreen(
                     sourceIndex = nextIndex
                     failedSources++
                     setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
-                    revealControls()
+                    showControls = true
                 } else {
                     error = "No se encontró otro enlace coincidente que no se haya probado. Puede que esta película o episodio no esté disponible en las listas cargadas."
-                    revealControls()
+                    showControls = true
                 }
             }
         }
@@ -251,13 +220,13 @@ fun PlayerScreen(
 
     fun togglePlayPause() {
         if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-        revealControls()
+        showControls = true
     }
 
     fun changeSource() {
         if (alternatePlayers.isEmpty()) {
             error = "No hay otra fuente coincidente en las listas cargadas."
-            revealControls()
+            showControls = true
             return
         }
         val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
@@ -270,76 +239,47 @@ fun PlayerScreen(
             // are recreated and the user loses the playback overlay.
             setUrl(alternatePlayers[nextIndex].streamUrl, alternatePlayers[nextIndex].requestHeaders)
             error = null
-            revealControls()
+            showControls = true
         } else {
             error = "No se encontraron más enlaces distintos para este contenido."
-            revealControls()
+            showControls = true
         }
     }
 
     fun moveButtonFocus(delta: Int) {
         focusedButton = (focusedButton + delta).coerceIn(0, buttonCount - 1)
-        controlInteractionTick++
         runCatching { buttonFocusRequesters[focusedButton].requestFocus() }
     }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusable()
             .onPreviewKeyEvent { event ->
-                val keyCode = event.key.keyCode.toInt()
-                if (event.type == KeyEventType.KeyUp) {
-                    if (keyCode == repeatedKeyCode) {
-                        repeatedKeyCode = 0
-                        repeatedKeyCount = 0
-                    }
-                    return@onPreviewKeyEvent false
-                }
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (keyCode == repeatedKeyCode) repeatedKeyCount++ else {
-                    repeatedKeyCode = keyCode
-                    repeatedKeyCount = 0
-                }
-                val repeat = repeatedKeyCount
-                when (keyCode) {
+                // CH+/CH- y las teclas físicas de medios (si el control remoto las tiene)
+                // funcionan siempre, se vean o no los controles — como en cualquier TV.
+                when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-10_000); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(10_000); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer.play(); isPlaying = true; revealControls(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; revealControls(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_STOP -> { exoPlayer.stop(); onExit(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_UP -> { audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_DOWN -> { audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_VOLUME_MUTE, AndroidKeyEvent.KEYCODE_MUTE -> { toggleMute(); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
-                        if (showControls) { showControls = false; return@onPreviewKeyEvent true }
-                        onExit(); return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> {
-                        val seconds = when { repeat >= 6 -> 60L; repeat >= 3 -> 30L; repeat > 0 -> 20L; else -> 10L }
-                        seekBy(-seconds * 1000L)
-                        return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        val seconds = when { repeat >= 6 -> 60L; repeat >= 3 -> 30L; repeat > 0 -> 20L; else -> 10L }
-                        seekBy(seconds * 1000L)
-                        return@onPreviewKeyEvent true
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER -> {
-                        if (!showControls) { togglePlayPause(); return@onPreviewKeyEvent true }
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                        if (!showControls) { revealControls(); return@onPreviewKeyEvent true }
-                    }
-                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (!showControls) { revealControls(); return@onPreviewKeyEvent true }
-                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer.play(); isPlaying = true; return@onPreviewKeyEvent true }
+                    AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; return@onPreviewKeyEvent true }
                 }
                 when (event.key) {
-                    Key.DirectionUp -> { if (showControls) { moveButtonFocus(-1); true } else { revealControls(); true } }
-                    Key.DirectionDown -> { if (showControls) { moveButtonFocus(1); true } else { revealControls(); true } }
-                    Key.DirectionCenter, Key.Enter -> if (!showControls) { togglePlayPause(); true } else false
+                    // Izquierda/derecha SIEMPRE adelantan o atrasan 10 s, se vean los controles
+                    // o no y esté el foco donde esté — no hace falta "entrar" a un botón primero.
+                    Key.DirectionLeft -> { seekBy(-10_000); true }
+                    Key.DirectionRight -> { seekBy(10_000); true }
+                    Key.DirectionCenter, Key.Enter -> {
+                        if (!showControls) { showControls = true; true } else false
+                    }
+                    Key.DirectionUp -> {
+                        if (!showControls) { showControls = true; true } else { moveButtonFocus(-1); true }
+                    }
+                    Key.DirectionDown -> {
+                        if (!showControls) { showControls = true; true } else { moveButtonFocus(1); true }
+                    }
                     else -> false
                 }
             }
@@ -354,7 +294,7 @@ fun PlayerScreen(
                     isFocusable = false
                     isFocusableInTouchMode = false
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                    setOnClickListener { revealControls() }
+                    setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                 }
             },
@@ -411,14 +351,14 @@ fun PlayerScreen(
                     Button(
                         modifier = Modifier.focusRequester(buttonFocusRequesters[2]),
                         onClick = {
-                            revealControls()
+                            showControls = true
                             TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
                         },
                     ) { Text("♫  Audio") }
                     Button(
                         modifier = Modifier.focusRequester(buttonFocusRequesters[3]),
                         onClick = {
-                            revealControls()
+                            showControls = true
                             TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
                         },
                     ) { Text("CC  Subtítulos") }

@@ -1,11 +1,11 @@
 package com.quilmes.xuper
 
 import android.os.Bundle
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -102,8 +102,6 @@ private fun buildRepository(cacheDir: File): ContentRepository = M3uRepository(
 
 class MainActivity : ComponentActivity() {
 
-    private val pendingStremioStream = mutableStateOf<Pair<String, String>?>(null)
-
     private val repository: ContentRepository by lazy { buildRepository(filesDir) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
 
@@ -174,26 +172,25 @@ class MainActivity : ComponentActivity() {
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { playableId -> navController.navigate("player/$playableId") },
-                            onPlayStremio = { streamName, streamUrl ->
-                                pendingStremioStream.value = streamName to streamUrl
-                                navController.navigate("stremio-player")
-                            },
                             findPlayableEpisode = { seriesName, season, episode ->
                                 (repository as? M3uRepository)?.findPlayableEpisode(seriesName, season, episode)
                             },
+                            onPlayStream = { streamName, streamUrl ->
+                                navController.navigate("external-player/${Uri.encode(streamName)}/${Uri.encode(streamUrl)}")
+                            },
                         )
                     }
-                    composable("stremio-player") {
-                        val selected = pendingStremioStream.value
-                        if (selected != null) {
-                            PlayerScreen(
-                                name = selected.first,
-                                streamUrl = selected.second,
-                                onExit = {
-                                    pendingStremioStream.value = null
-                                    navController.popBackStack()
-                                },
-                            )
+                    composable(
+                        route = "external-player/{streamName}/{streamUrl}",
+                        arguments = listOf(
+                            navArgument("streamName") { type = NavType.StringType },
+                            navArgument("streamUrl") { type = NavType.StringType },
+                        ),
+                    ) { entry ->
+                        val streamName = entry.arguments?.getString("streamName").orEmpty()
+                        val streamUrl = entry.arguments?.getString("streamUrl").orEmpty()
+                        if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
+                            PlayerScreen(name = streamName, streamUrl = streamUrl)
                         }
                     }
                     composable(
@@ -235,7 +232,6 @@ class MainActivity : ComponentActivity() {
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$nextId")
                                 },
-                                onExit = { navController.popBackStack() },
                             )
                         }
                     }
