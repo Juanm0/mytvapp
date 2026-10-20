@@ -49,14 +49,26 @@ fun DetailScreen(
     var loadingEpisodes by remember(title.id) { mutableStateOf(false) }
     var relatedTitles by remember(title.id) { mutableStateOf<List<Title>>(emptyList()) }
     val isTmdb = title.id.startsWith("tmdb-")
-    val hasTmdbSeasons = title.id.startsWith("tmdb-tv-") && title.contentKind == ContentKind.SERIES
+    // Los Simuladores (TMDb 332) usa un reproductor independiente y un listado fijo de episodios.
+    val isLosSimuladores = title.contentKind == ContentKind.SERIES &&
+        (title.id == "tmdb-tv-332" || title.id == "332" || title.id.endsWith("-332")) &&
+        title.name.contains("simuladores", ignoreCase = true)
+    val hasTmdbSeasons = (title.id.startsWith("tmdb-tv-") || isLosSimuladores) && title.contentKind == ContentKind.SERIES
 
     LaunchedEffect(title.id) {
         relatedTitles = if (isTmdb && title.contentKind != ContentKind.LIVE) catalogService.loadRelatedTitles(title.id) else emptyList()
     }
 
     LaunchedEffect(title.id) {
-        if (hasTmdbSeasons) {
+        if (isLosSimuladores) {
+            seasons = listOf(
+                TmdbSeason(1, "Temporada 1", 13, "13 episodios", ""),
+                TmdbSeason(2, "Temporada 2", 11, "11 episodios", ""),
+            )
+            selectedSeason = 1
+            selectedEpisode = 1
+            loadingSeasons = false
+        } else if (hasTmdbSeasons) {
             loadingSeasons = true
             val loaded = catalogService.loadSeasons(title.id)
             seasons = loaded
@@ -70,7 +82,12 @@ fun DetailScreen(
 
     LaunchedEffect(title.id, selectedSeason) {
         val season = selectedSeason
-        if (hasTmdbSeasons && season != null) {
+        if (isLosSimuladores && season != null) {
+            val count = if (season == 1) 13 else 11
+            episodes = (1..count).map { TmdbEpisode(it, "Episodio $it", "", "", null) }
+            selectedEpisode = 1
+            loadingEpisodes = false
+        } else if (hasTmdbSeasons && season != null) {
             loadingEpisodes = true
             episodes = catalogService.loadEpisodes(title.id, season)
             loadingEpisodes = false
@@ -178,12 +195,19 @@ fun DetailScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
                                 selectedEpisode = episode.number
-                                onPlay("framextv:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                            }) { Text("▶  Reproducir episodio") }
-                            Button(onClick = {
-                                selectedEpisode = episode.number
-                                onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                            }) { Text("▶  Latino") }
+                                val seasonNumber = selectedSeason ?: 1
+                                if (isLosSimuladores) {
+                                    onPlay("simuladores:${title.id}|s$seasonNumber|e${episode.number}")
+                                } else {
+                                    onPlay("framextv:${title.id}|s$seasonNumber|e${episode.number}")
+                                }
+                            }) { Text(if (isLosSimuladores) "▶  Reproducir episodio" else "▶  Reproducir episodio") }
+                            if (!isLosSimuladores) {
+                                Button(onClick = {
+                                    selectedEpisode = episode.number
+                                    onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  Latino") }
+                            }
                         }
                     }
 

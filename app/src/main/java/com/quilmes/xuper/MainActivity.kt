@@ -307,14 +307,21 @@ class MainActivity : ComponentActivity() {
                             onPlay = { request ->
                                 val useFrameXtv = request.startsWith("framextv:")
                                 val useVideoApi = request.startsWith("videoapi:")
+                                val useSimuladores = request.startsWith("simuladores:")
                                 val requestedId = when {
                                     useFrameXtv -> request.removePrefix("framextv:")
                                     useVideoApi -> request.removePrefix("videoapi:")
+                                    useSimuladores -> request.removePrefix("simuladores:")
                                     else -> request
                                 }
                                 val url = when {
                                     useFrameXtv -> WebSourceRegistry.frameXtvUrl(requestedId)
                                     useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
+                                    useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
+                                        val season = match.groupValues[1]
+                                        val episode = match.groupValues[2]
+                                        "https://los-simuladores.bringfeel.com.ar/reproductor?temporada=$season&capitulo=$episode"
+                                    }
                                     else -> WebSourceRegistry.frameXtvUrl(requestedId)
                                 }
                                 if (url != null) {

@@ -179,7 +179,7 @@ fun PlayerScreen(
 ) {
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/")) {
+    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor")) {
         WebEmbedPlayer(
             url = streamUrl,
             contentKey = currentTitleId.ifBlank { streamUrl },
@@ -750,6 +750,7 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false) }
+    // El hub solo se dibuja sobre FrameXTV y VideoAPI. Los Simuladores usa su propio player.
     val hasCustomHub = isFrameXtv || isVideoApi
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
@@ -793,9 +794,13 @@ private fun WebEmbedPlayer(
             delay(180)
             runCatching { frameControlsFocus.requestFocus() }
         } else if (hasCustomHub) {
-            // El WebView recupera el foco; su dispatchKeyEvent intercepta abajo para reabrir el hub.
+            // Al ocultar el hub, quitar el foco del iframe exterior y devolverlo al WebView.
+            // No llamamos focus() sobre el reproductor: era la causa más probable del borde persistente.
             delay(80)
-            runCatching { webViewRef?.requestFocus() }
+            runCatching {
+                webViewRef?.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.blur()}catch(e){}}); if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();", null)
+                webViewRef?.requestFocus()
+            }
         } else {
             Unit
         }
@@ -819,9 +824,15 @@ private fun WebEmbedPlayer(
 
     BackHandler(enabled = true) {
         when {
-            // Atrás con el hub abierto solo lo cierra; recién con el hub cerrado sale del reproductor.
-            hasCustomHub && frameControlsVisible -> frameControlsVisible = false
-            webViewRef?.canGoBack() == true -> webViewRef?.goBack()
+            // El hub abierto se cierra primero. Con el hub cerrado, Atrás sale directamente
+            // a la ficha; nunca recorre el historial interno que puede contener recargas de servidores.
+            hasCustomHub && frameControlsVisible -> {
+                frameControlsVisible = false
+                runCatching {
+                    webViewRef?.evaluateJavascript("document.activeElement && document.activeElement.blur && document.activeElement.blur();", null)
+                    webViewRef?.requestFocus()
+                }
+            }
             else -> onExit()
         }
     }
@@ -949,20 +960,13 @@ private fun WebEmbedPlayer(
                             // y hacemos que los iframes sean alcanzables con el control remoto.
                             view?.evaluateJavascript("""(function(){
                               try {
-                                if (!window.__xuperTvFocusStyle) {
-                                  window.__xuperTvFocusStyle = true;
-                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus,iframe:focus{transform:scale(1.025)!important;z-index:2147483647!important}`;
-                                  var st=document.createElement('style');st.id='xuper-tv-focus-style';st.textContent=css;(document.head||document.documentElement).appendChild(st);
-                                  var frames=Array.from(document.querySelectorAll('iframe'));
-                                  frames.forEach(function(f){
-                                    if(!f.hasAttribute('tabindex')) f.setAttribute('tabindex','0');
-                                    if(!f.getAttribute('title')) f.setAttribute('title','Reproductor de video');
-                                  });
-                                  var playerFrame=frames.find(function(f){return /player|embed|video|stream|watch/i.test((f.src||'')+' '+(f.title||''))}) || frames[0];
-                                  if(playerFrame) setTimeout(function(){try{playerFrame.focus()}catch(e){}},250);
-                                  // No se bloquean ni se redirigen ArrowLeft/Right/Up/Down: hacerlo
-                                  // aquí impide que el iframe de otro origen controle su propio player.
-                                }
+                                // No forzamos el foco al iframe: en Android TV eso deja un contorno
+                                // del proveedor visible incluso después de ocultar el hub.
+                                // Tampoco agregamos outline/box-shadow propios sobre el reproductor.
+                                var css='html,body{outline:0!important;box-shadow:none!important;background:#000!important} iframe:focus{outline:0!important;box-shadow:none!important;border:0!important;transform:none!important;filter:none!important}';
+                                var st=document.getElementById('xuper-tv-focus-style');
+                                if(!st){st=document.createElement('style');st.id='xuper-tv-focus-style';(document.head||document.documentElement).appendChild(st);}st.textContent=css;
+                                Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               } catch(e) {}
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
@@ -1119,7 +1123,9 @@ private fun WebEmbedPlayer(
                             webViewRef?.evaluateJavascript("window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');", null)
                         } else {
                             webViewRef?.evaluateJavascript(videoApiCommandScript("playPause", frameSubtitleIndex, 0)) { result ->
-                                if (result != "true") dispatchWebKey(webViewRef, AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                if (result != "true" && result != "\"true\"") {
+                                    dispatchWebKey(webViewRef, AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                }
                             }
                         }
                         framePaused = !framePaused
