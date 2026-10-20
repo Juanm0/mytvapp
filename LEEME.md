@@ -1,15 +1,14 @@
-# XuperQuilmesTV — prueba 4: persistencia del servidor
+# XuperQuilmesTV — prueba de proveedores FrameXTV
 
-Reemplazar únicamente:
-- `app/src/main/java/com/quilmes/xuper/MainActivity.kt`
+## Archivo incluido
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`
 
 ## Cambios
-- El índice elegido de servidor ahora se aplica también al abrir/recrear el WebView, no solo al tocar el botón.
-- El botón `Guardar servidor` es independiente de `Guardar pista` (subtítulos).
-- `Guardar servidor` guarda la selección por contenido; al desactivarlo, elimina la preferencia guardada.
-- Al cambiar servidor, se reinicia el índice de subtítulos y se borra su preferencia, porque las pistas pueden ser distintas.
-- La etiqueta muestra el índice que se está probando (`Pista servidor · 2`, etc.), acorde al mensaje `Connecting to 2` que se observó.
+- Sustituye los parámetros de URL experimentales (`server`, `source`, `line`) por el mensaje documentado `postMessage({ action: 'setProvider', provider: '...' }, '*')`.
+- El botón recorre Auto, Barbarian, Archer, Goblin y P.E.K.K.A.
+- Conserva el guardado de la selección por contenido y aplica el proveedor al cargar el iframe.
+- Reinicia la selección de subtítulos cuando se cambia de proveedor.
+- Conserva el listener `frameXTV:timeupdate` existente para guardar progreso real cuando el reproductor emite ese evento.
 
-## Limitación
-Los parámetros `server`, `source` y `line` siguen siendo intentos exploratorios, no una API confirmada de FrameXTV. Esta versión corrige el guardado/aplicación del índice, pero no puede garantizar que el sitio acepte ese índice como servidor real. No se ejecutó compilación Gradle en este entorno.
+## Importante
+El ejemplo de la documentación confirma explícitamente `archer`. Los identificadores `barbarian`, `goblin` y `pekka` se infieren de los nombres publicados y necesitan validación. No se ejecutó una compilación Android en este entorno.

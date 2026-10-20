@@ -655,21 +655,19 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
     }
 }
 
-/** Prueba el selector por URL además de postMessage: FrameXTV puede ignorar comandos no documentados. */
-private fun frameXtvServerUrl(rawUrl: String, serverIndex: Int): String {
-    val clean = rawUrl.substringBefore("#")
-    val fragment = rawUrl.substringAfter("#", "")
-    val base = clean.substringBefore("?")
-    val query = clean.substringAfter("?", "").split("&")
-        .filter { it.isNotBlank() && it.substringBefore("=").lowercase() !in setOf("server", "source", "line", "host") }
-        .toMutableList()
-    if (serverIndex > 0) {
-        query += "server=$serverIndex"
-        query += "source=$serverIndex"
-        query += "line=$serverIndex"
-    }
-    return base + (if (query.isEmpty()) "" else "?" + query.joinToString("&")) +
-        (if (fragment.isNotEmpty()) "#$fragment" else "")
+/** Identificadores de proveedores publicados en la documentación de FrameXTV.
+ * "archer" está confirmado por el ejemplo de la API; los otros slugs se infieren
+ * de los nombres visibles y deben validarse con el reproductor real.
+ */
+private val frameXtvProviders = listOf("auto", "barbarian", "archer", "goblin", "pekka")
+private fun frameXtvProvider(serverIndex: Int): String =
+    frameXtvProviders.getOrElse(serverIndex.coerceIn(0, frameXtvProviders.lastIndex)) { "auto" }
+private fun frameXtvProviderLabel(serverIndex: Int): String = when (frameXtvProvider(serverIndex)) {
+    "barbarian" -> "Barbarian"
+    "archer" -> "Archer"
+    "goblin" -> "Goblin"
+    "pekka" -> "P.E.K.K.A."
+    else -> "Auto"
 }
 
 /** Construye la página contenedora de FrameXTV y conserva el canal postMessage documentado. */
@@ -679,22 +677,13 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
     if (!Regex("(?:[?&])muted=").containsMatchIn(embedUrl)) embedUrl += "&muted=0"
     if (!Regex("(?:[?&])controls=").containsMatchIn(embedUrl)) embedUrl += "&controls=1"
     val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;")
+    val providerName = frameXtvProvider(serverIndex)
     return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
       (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};
       f.addEventListener('load',function(){
         setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex})},2200);
         if($serverIndex>0) setTimeout(function(){
-          var payloads=[
-            {action:'setServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {action:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {action:'switchServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {action:'selectServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {type:'setServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {type:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {event:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
-            {action:'nextServer'}
-          ];
-          payloads.forEach(function(p){try{f.contentWindow.postMessage(p,'*')}catch(e){}});
+          window.xuperFrameCommand('setProvider',{provider:'$providerName'});
         },2600);
         if($resumePositionSeconds>5) setTimeout(function(){window.xuperFrameCommand('seekBy',{seconds:$resumePositionSeconds})},3200);
       });
@@ -770,7 +759,7 @@ private fun WebEmbedPlayer(
     val showNextEpisodeCard = nextEpisode != null && frameDuration > 0.0 && nextEpisodeRemaining <= 20.0 && !nextEpisodeDismissed && !nextEpisodeTriggered
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
-    // No conocemos los nombres reales: se recorren índices numerados y se vuelve al 1 tras el 32.
+    // Índice de pista de subtítulos; se reinicia al cambiar de proveedor.
     var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
     var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
@@ -1055,7 +1044,7 @@ private fun WebEmbedPlayer(
                         }, "XuperBridge")
                     }
                     if (isFrameXtv) {
-                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(frameXtvServerUrl(url, frameServerIndex), savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
+                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         // En VideoAPI se activan los controles/subtítulos documentados y se carga su página real,
                         // sin simular un origen ni crear una capa externa que no puede controlar el iframe.
@@ -1072,7 +1061,7 @@ private fun WebEmbedPlayer(
                 if (webView != null && webView.tag != url) {
                     webView.tag = url
                     if (isFrameXtv) {
-                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(frameXtvServerUrl(url, frameServerIndex), savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
+                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else webView.loadUrl(url)
@@ -1160,10 +1149,9 @@ private fun WebEmbedPlayer(
                             frameInteraction++
                         }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
                         Button(onClick = {
-                            // Al cambiar de fuente, los índices de subtítulos anteriores ya no son fiables.
-                            // Cicla 1..5 y recarga el embed con parámetros de servidor; también
-                            // prueba mensajes alternativos por si esta versión de FrameXTV los admite.
-                            frameServerIndex = if (frameServerIndex >= 5) 1 else frameServerIndex + 1
+                            // Cambia entre proveedores de extracción documentados por FrameXTV.
+                            // El índice 0 representa Auto; 1..4 son los proveedores nombrados.
+                            frameServerIndex = if (frameServerIndex >= 4) 1 else frameServerIndex + 1
                             frameSubtitleIndex = 0
                             saveSubtitleForContent = false
                             playbackPrefs.edit()
@@ -1173,14 +1161,13 @@ private fun WebEmbedPlayer(
                                     remove(subtitlePreferenceKey)
                                 }
                                 .apply()
-                            val candidateUrl = frameXtvServerUrl(url, frameServerIndex)
                             webViewRef?.loadDataWithBaseURL(
                                 "https://xuper.local/",
-                                frameXtvWrapper(candidateUrl, 0L, 0, frameServerIndex),
+                                frameXtvWrapper(url, 0L, 0, frameServerIndex),
                                 "text/html", "UTF-8", null
                             )
                             frameInteraction++
-                        }) { Text(if (frameServerIndex == 0) "Pista servidor · Auto" else "Pista servidor · $frameServerIndex") }
+                        }) { Text("Proveedor · ${frameXtvProviderLabel(frameServerIndex)}") }
                         Button(onClick = {
                             saveServerForContent = !saveServerForContent
                             playbackPrefs.edit().apply {
