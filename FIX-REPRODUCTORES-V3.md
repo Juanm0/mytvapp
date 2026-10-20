@@ -1,3 +1,5 @@
+> **OBSOLETO (20/10/2026).** Varias afirmaciones de este documento ya no describen el código (por ejemplo, el hub de Latino y el selector de subtítulos). Ver `CAMBIOS-HUB-REPRODUCTORES.md`.
+
 # Corrección de reproductores V3
 
 ## FrameXTV

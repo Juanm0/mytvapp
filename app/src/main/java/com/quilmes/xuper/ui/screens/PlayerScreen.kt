@@ -1,3 +1,5 @@
+package com.quilmes.xuper.ui.screens
+
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -38,12 +40,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -53,6 +58,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -126,7 +132,8 @@ private fun videoApiCommandScript(action: String, index: Int, seconds: Int): Str
           var videos=Array.from(d.querySelectorAll('video'));
           if(videos.length){
             var v=videos[0];
-            if(action==='playPause'){
+            if(action==='probe'){handled=true;}
+            else if(action==='playPause'){
               if(v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){});}else v.pause();
               handled=true;
             }else if(action==='seekBack'||action==='seekForward'){
@@ -632,7 +639,7 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
         if($serverIndex>0) setTimeout(function(){window.xuperFrameCommand('setProvider',{provider:'$providerName'});},2600);
         if($resumePositionSeconds>5) setTimeout(function(){window.xuperFrameCommand('seekBy',{seconds:$resumePositionSeconds})},3200);
       });
-      window.addEventListener('message',function(e){var d=e.data;if(d&&typeof d==='object'&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
+      window.addEventListener('message',function(e){var d=e.data;if(d&&typeof d==='object'&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}return;}try{window.XuperBridge.onFrameMessage(typeof d==='string'?d:JSON.stringify(d))}catch(x){}});})();</script></body></html>"""
 }
 
 private fun dispatchWebKey(webView: WebView?, keyCode: Int) {
@@ -742,6 +749,11 @@ private fun WebEmbedPlayer(
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isVideoApi || isOkRu || isSimuladores
+    // Latino/VideoAPI: su API pública no documenta ningún canal de control (post_message/communication
+    // figura como "bloqueado"). El hub de Xuper solo se ofrece cuando una sonda confirma que hay un
+    // <video> accesible desde el documento; si no, el mando va directo al reproductor original.
+    var latinoDomControl by remember(url) { mutableStateOf(false) }
+    val hubActive = hasCustomHub && (!isVideoApi || latinoDomControl)
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
@@ -752,10 +764,14 @@ private fun WebEmbedPlayer(
     var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
     var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
-    var frameControlsVisible by remember(url) { mutableStateOf(true) }
+    // Latino arranca sin hub (solo aparece si la sonda confirma que puede controlarse).
+    var frameControlsVisible by remember(url) { mutableStateOf(!isVideoApi) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     // A TV remote often sends only one key-down on long press. Keep seeking while held.
     var heldSeekAction by remember(url) { mutableStateOf<String?>(null) }
+    var hubHasFocus by remember(url) { mutableStateOf(false) }
+    var showLatinoHint by remember(url) { mutableStateOf(true) }
+    val focusManager = LocalFocusManager.current
     val frameControlsFocus = remember(url) { FocusRequester() }
     val hiddenHubFocus = remember(url) { FocusRequester() }
     val nextEpisodePlayFocus = remember(url, nextEpisode?.id) { FocusRequester() }
@@ -767,11 +783,12 @@ private fun WebEmbedPlayer(
             pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
         }
     }
-    LaunchedEffect(hasCustomHub, frameControlsVisible) {
-        if (hasCustomHub && frameControlsVisible) {
+    LaunchedEffect(hubActive, frameControlsVisible) {
+        if (hubActive && frameControlsVisible) {
             delay(180)
             runCatching { frameControlsFocus.requestFocus() }
-        } else if (hasCustomHub) {
+        } else if (hubActive) {
+            hubHasFocus = false
             delay(100)
             runCatching {
                 webViewRef?.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.blur()}catch(e){}}); if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();", null)
@@ -779,11 +796,42 @@ private fun WebEmbedPlayer(
             }
         }
     }
-    LaunchedEffect(hasCustomHub, frameControlsVisible, frameInteraction) {
-        if (hasCustomHub && frameControlsVisible) {
+    // El hub se oculta 5 s después de la última interacción (tecla, comando o cambio de foco);
+    // cualquier interacción reinicia la cuenta porque cambia `frameInteraction`.
+    LaunchedEffect(hubActive, frameControlsVisible, frameInteraction) {
+        if (hubActive && frameControlsVisible) {
             delay(5_000)
             frameControlsVisible = false
         }
+    }
+
+    // Latino: sonda periódica. Con 3 fallos seguidos se considera que ya no es controlable.
+    LaunchedEffect(isVideoApi, pageFinished) {
+        if (!isVideoApi || !pageFinished) return@LaunchedEffect
+        var misses = 0
+        while (true) {
+            webViewRef?.evaluateJavascript(videoApiCommandScript("probe", 0, 0)) { raw ->
+                if (raw == "true") {
+                    misses = 0
+                    latinoDomControl = true
+                } else if (++misses >= 3) {
+                    latinoDomControl = false
+                }
+            }
+            delay(1_500)
+        }
+    }
+    // Latino sin control por DOM: el WebView conserva el foco para que el mando llegue al reproductor original.
+    LaunchedEffect(isVideoApi, hubActive) {
+        if (isVideoApi && !hubActive) {
+            frameControlsVisible = false
+            delay(150)
+            runCatching { webViewRef?.requestFocus() }
+        }
+    }
+    LaunchedEffect(url) {
+        delay(7_000)
+        showLatinoHint = false
     }
     LaunchedEffect(videoEnded, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered) {
         if (videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
@@ -829,71 +877,72 @@ private fun WebEmbedPlayer(
     // All web commands pass through this function so the UI only reflects commands that
     // were handled in an accessible HTML5 player. Cross-origin embeds may still reject them.
     fun runWebCommand(action: String, subtitleIndex: Int, seconds: Int) {
-        val webView = webViewRef
-        if (webView == null) {
-            return
-        }
+        val webView = webViewRef ?: return
         frameInteraction++
+
         if (isFrameXtv) {
             val js = when (action) {
                 "playPause" -> "window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');"
                 "seekBack" -> "window.xuperFrameCommand('seekBy',{seconds:-${kotlin.math.abs(seconds)}});"
                 "seekForward" -> "window.xuperFrameCommand('seekBy',{seconds:${kotlin.math.abs(seconds)}});"
-                "mute" -> if (frameMuted) "window.xuperFrameCommand('setVolume',{volume:1});" else "window.xuperFrameCommand('mute');"
+                "mute" -> if (frameMuted) {
+                    "window.xuperFrameCommand('setVolume',{volume:1});"
+                } else {
+                    "window.xuperFrameCommand('mute');"
+                }
                 "subtitle" -> "window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex});"
                 else -> return
             }
             webView.evaluateJavascript(js, null)
             when (action) {
-                "playPause" -> { framePaused = !framePaused }
-                "mute" -> { frameMuted = !frameMuted }
+                "playPause" -> framePaused = !framePaused
+                "mute" -> frameMuted = !frameMuted
             }
             return
         }
 
+        if (isVideoApi) {
+            // Latino/VideoAPI: solo control directo sobre el <video> accesible. NO se inyectan teclas:
+            // la API pública no define atajos y una flecha/Espacio inyectado puede terminar moviendo el
+            // volumen o activando un control cualquiera del reproductor original.
+            webView.evaluateJavascript(videoApiCommandScript(action, subtitleIndex, seconds)) { rawResult ->
+                if (rawResult == "true") {
+                    when (action) {
+                        "playPause" -> framePaused = !framePaused
+                        "mute" -> frameMuted = !frameMuted
+                    }
+                }
+            }
+            return
+        }
+
+        // OK.ru / Simuladores: comportamiento anterior (DOM y, si no alcanza, teclas estándar).
         webView.evaluateJavascript(videoApiCommandScript(action, subtitleIndex, seconds)) { rawResult ->
-            val handled = rawResult == "true"
-            if (handled) {
+            if (rawResult == "true") {
                 when (action) {
                     "playPause" -> framePaused = !framePaused
                     "mute" -> frameMuted = !frameMuted
                 }
-            } else {
-                if (isSimuladores || isOkRu) {
-                    // The actual OK.ru video may live in a cross-origin iframe, so JS cannot
-                    // reach its <video>. Focus the iframe and try its native TV/media keys.
-                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
-                        when (action) {
-                            "playPause" -> {
-                                // One toggle event only: sending several alternatives can
-                                // immediately undo the first toggle on some embedded players.
-                                dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
-                                framePaused = !framePaused
-                            }
-                            "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
-                            "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
-                            "mute" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_M)
-                            "subtitle" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_CAPTIONS)
-                        }
-                    })
-                } else {
-                    // Send exactly one fallback event per user action. Sending media, Space,
-                    // Center and Enter in sequence can toggle play/pause several times and
-                    // leave Latino stuck in a rapid pause/play loop.
-                    val keyCode = when (action) {
-                        "playPause" -> AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                        "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
-                        "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
-                        "mute" -> AndroidKeyEvent.KEYCODE_M
-                        "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
-                        else -> return@evaluateJavascript
-                    }
-                    // Focus the embedded player first. This is especially important for Latino,
-                    // whose media controls often live in a cross-origin iframe.
-                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
-                        dispatchWebKey(webView, keyCode)
-                    })
-                }
+                return@evaluateJavascript
+            }
+
+            val fallbackKey = when (action) {
+                "playPause" -> AndroidKeyEvent.KEYCODE_DPAD_CENTER
+                "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
+                "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
+                "mute" -> AndroidKeyEvent.KEYCODE_M
+                "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
+                else -> return@evaluateJavascript
+            }
+
+            // Focus the iframe first. Cross-origin policy still means this is best-effort:
+            // Android/WebView may not route the key into every embedded player.
+            webView.evaluateJavascript(
+                "Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});"
+            ) {
+                dispatchWebKey(webView, fallbackKey)
+                // The event is only a request to the embedded player. We deliberately
+                // don't toggle framePaused here because we cannot confirm that it worked.
             }
         }
     }
@@ -914,7 +963,7 @@ private fun WebEmbedPlayer(
 
     BackHandler(enabled = true) {
         when {
-            hasCustomHub && frameControlsVisible -> {
+            hubActive && frameControlsVisible -> {
                 frameControlsVisible = false
                 runCatching {
                     webViewRef?.evaluateJavascript("document.activeElement && document.activeElement.blur && document.activeElement.blur();", null)
@@ -925,120 +974,99 @@ private fun WebEmbedPlayer(
         }
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
-        if (!hasCustomHub) return@onPreviewKeyEvent false
-        val native = event.nativeKeyEvent
-        val keyCode = native.keyCode
+    fun applyFrameSubtitle(newIndex: Int) {
+        frameSubtitleIndex = newIndex
+        if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, newIndex).apply()
+        webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:$newIndex});", null)
+        frameInteraction++
+    }
 
-        // Stop the repeat loop on key-up, including remotes that send no repeated key-downs.
-        if (event.type == KeyEventType.KeyUp) {
-            val releasedAction = when (keyCode) {
-                AndroidKeyEvent.KEYCODE_MEDIA_REWIND, AndroidKeyEvent.KEYCODE_DPAD_LEFT -> "seekBack"
-                AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD, AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> "seekForward"
+    // ÚNICO manejador de teclas del hub. Lo usan tanto Compose (onPreviewKeyEvent, cuando el foco está
+    // en Compose) como el WebView (HubAwareWebView, cuando el foco de Android quedó en el WebView).
+    // Se lee siempre vía rememberUpdatedState: el lambda del `factory` del AndroidView se crea una sola
+    // vez y, sin esto, vería valores viejos de showNextEpisodeCard/nextEpisode/hubActive.
+    val onHubKey: (AndroidKeyEvent) -> Boolean = hubKey@{ ev ->
+        if (!hubActive) return@hubKey false
+        val key = when (ev.keyCode) {
+            AndroidKeyEvent.KEYCODE_DPAD_UP -> HubKey.UP
+            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> HubKey.DOWN
+            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> HubKey.LEFT
+            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> HubKey.RIGHT
+            AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER, AndroidKeyEvent.KEYCODE_NUMPAD_ENTER -> HubKey.OK
+            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> HubKey.REWIND
+            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> HubKey.FAST_FORWARD
+            AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> HubKey.PLAY_PAUSE
+            else -> HubKey.OTHER
+        }
+
+        // Soltar la tecla corta el seek sostenido (hay mandos que no envían repeticiones).
+        if (ev.action == AndroidKeyEvent.ACTION_UP) {
+            val released = when (key) {
+                HubKey.LEFT, HubKey.REWIND -> "seekBack"
+                HubKey.RIGHT, HubKey.FAST_FORWARD -> "seekForward"
                 else -> null
             }
-            if (releasedAction != null && heldSeekAction == releasedAction) {
+            return@hubKey if (released != null && heldSeekAction == released) {
                 heldSeekAction = null
-                return@onPreviewKeyEvent true
-            }
-            return@onPreviewKeyEvent false
-        }
-        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-
-        // Do not steal arrows/OK from the mini-hub buttons once its card is visible.
-        if (showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
-                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
-            )) return@onPreviewKeyEvent false
-
-        val seekAction = when (keyCode) {
-            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> "seekBack"
-            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "seekForward"
-            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) "seekBack" else null
-            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) "seekForward" else null
-            else -> null
-        }
-        if (seekAction != null) {
-            // Only issue the initial seek on the first key-down. LaunchedEffect repeats it
-            // until key-up, so devices with repeatCount=0 still fast-seek reliably.
-            if (native.repeatCount == 0 && heldSeekAction == null) {
-                heldSeekAction = seekAction
-                runWebCommand(seekAction, frameSubtitleIndex, 10)
-            }
-            return@onPreviewKeyEvent true
-        }
-
-        when (keyCode) {
-            AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                if (!frameControlsVisible) frameControlsVisible = true
-                frameInteraction++
-                runCatching { frameControlsFocus.requestFocus() }
                 true
-            }
-            AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                runWebCommand("playPause", 0, 0)
-                true
-            }
-            else -> {
+            } else false
+        }
+        if (ev.action != AndroidKeyEvent.ACTION_DOWN) return@hubKey false
+
+        when (val action = WebHubKeyRouter.route(key, frameControlsVisible, showNextEpisodeCard && nextEpisode != null)) {
+            HubKeyAction.PassThrough -> {
                 if (frameControlsVisible) frameInteraction++
                 false
             }
+            HubKeyAction.OpenHub -> {
+                hubHasFocus = false
+                frameControlsVisible = true
+                frameInteraction++
+                runCatching { frameControlsFocus.requestFocus() } // si aún no está compuesto, lo repite el efecto de foco
+                true
+            }
+            is HubKeyAction.MoveFocus -> {
+                frameInteraction++
+                if (hubHasFocus) {
+                    focusManager.moveFocus(
+                        when (action.direction) {
+                            HubDirection.UP -> FocusDirection.Up
+                            HubDirection.DOWN -> FocusDirection.Down
+                            HubDirection.LEFT -> FocusDirection.Left
+                            HubDirection.RIGHT -> FocusDirection.Right
+                        }
+                    )
+                } else {
+                    // El foco se escapó del hub (p. ej. volvió al WebView): lo recuperamos.
+                    runCatching { frameControlsFocus.requestFocus() }
+                }
+                true
+            }
+            is HubKeyAction.Seek -> {
+                val seekAction = if (action.forward) "seekForward" else "seekBack"
+                // Solo el primer key-down dispara el seek; LaunchedEffect(heldSeekAction) repite mientras se mantenga.
+                if (ev.repeatCount == 0 && heldSeekAction == null) {
+                    heldSeekAction = seekAction
+                    runWebCommand(seekAction, frameSubtitleIndex, 10)
+                }
+                true
+            }
+            HubKeyAction.TogglePlayPause -> {
+                runWebCommand("playPause", frameSubtitleIndex, 0)
+                true
+            }
         }
+    }
+    val onHubKeyState = rememberUpdatedState(onHubKey)
+
+    Box(Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
+        onHubKeyState.value(event.nativeKeyEvent)
     }) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext) { keyEvent ->
-                    if (!hasCustomHub) {
-                        false
-                    } else {
-                        val keyCode = keyEvent.keyCode
-                        val seekAction = when (keyCode) {
-                            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> "seekBack"
-                            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "seekForward"
-                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) "seekBack" else null
-                            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) "seekForward" else null
-                            else -> null
-                        }
-                        if (keyEvent.action == AndroidKeyEvent.ACTION_UP) {
-                            if (seekAction != null && heldSeekAction == seekAction) {
-                                heldSeekAction = null
-                                true
-                            } else false
-                        } else if (keyEvent.action != AndroidKeyEvent.ACTION_DOWN) {
-                            false
-                        } else {
-                            val overlayOwnsArrows = showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
-                                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
-                            )
-                            if (overlayOwnsArrows) {
-                                false
-                            } else if (seekAction != null) {
-                                if (keyEvent.repeatCount == 0 && heldSeekAction == null) {
-                                    heldSeekAction = seekAction
-                                    runWebCommand(seekAction, frameSubtitleIndex, 10)
-                                }
-                                true
-                            } else when (keyCode) {
-                                AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                                    if (!frameControlsVisible) frameControlsVisible = true
-                                    runCatching { frameControlsFocus.requestFocus() }
-                                    frameInteraction++
-                                    true
-                                }
-                                AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                                    runWebCommand("playPause", frameSubtitleIndex, 0)
-                                    true
-                                }
-                                else -> false
-                            }
-                        }
-                    }
-                }.apply {
+                val webView = HubAwareWebView(viewContext) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1189,6 +1217,25 @@ private fun WebEmbedPlayer(
                     if (hasCustomHub) {
                         addJavascriptInterface(object {
                             private var lastPersistedPosition = -1L
+                            private val seenFrameMessages = HashSet<String>()
+
+                            /**
+                             * Diagnóstico: FrameXTV no documenta qué mensajes emite además de `frameXTV:timeupdate`.
+                             * Se registra en logcat (tag XuperFrameXTV) la primera aparición de cada tipo de mensaje
+                             * para poder ver, con un dispositivo real, si el player informa sus pistas de subtítulos.
+                             * Corre en un hilo del puente de WebView, no en el principal.
+                             */
+                            @JavascriptInterface fun onFrameMessage(raw: String) {
+                                val text = raw.take(400)
+                                val name = runCatching {
+                                    val json = org.json.JSONObject(raw)
+                                    json.optString("event").ifBlank { json.optString("type") }.ifBlank { json.optString("action") }
+                                }.getOrDefault("")
+                                val key = name.ifBlank { text.take(40) }
+                                val first = synchronized(seenFrameMessages) { seenFrameMessages.add(key) }
+                                if (first) android.util.Log.i("XuperFrameXTV", "mensaje del iframe: $text")
+                            }
+
                             @JavascriptInterface fun onTimeUpdate(current: Double, duration: Double) {
                                 Handler(Looper.getMainLooper()).post {
                                     val safeCurrent = current.coerceAtLeast(0.0)
@@ -1256,16 +1303,17 @@ private fun WebEmbedPlayer(
                     }
                 },
                 onDismiss = { nextEpisodeDismissed = true },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = if (frameControlsVisible) 154.dp else 22.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = if (hubActive && frameControlsVisible) 200.dp else 22.dp),
                 playFocusRequester = nextEpisodePlayFocus,
                 dismissFocusRequester = nextEpisodeDismissFocus,
             )
         }
 
-        if (hasCustomHub && frameControlsVisible && pageError == null) {
+        if (hubActive && frameControlsVisible && pageError == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
-                    .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp),
+                    .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp)
+                    .onFocusChanged { hubHasFocus = it.hasFocus },
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (isFrameXtv) {
@@ -1288,6 +1336,8 @@ private fun WebEmbedPlayer(
                     color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold
                 )
 
+                // Fila 1: transporte (+ subtítulos en FrameXTV). Fila 2: opciones de FrameXTV.
+                // Antes eran hasta 8 botones en una sola fila, que no entran en pantalla.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = {
                         runWebCommand("playPause", frameSubtitleIndex, 0)
@@ -1298,12 +1348,14 @@ private fun WebEmbedPlayer(
                     Button(onClick = { runWebCommand("mute", frameSubtitleIndex, 0) }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
 
                     if (isFrameXtv) {
-                        Button(onClick = {
-                            frameSubtitleIndex = (frameSubtitleIndex + 1) % 32
-                            if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, frameSubtitleIndex).apply()
-                            webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:$frameSubtitleIndex});", null)
-                            frameInteraction++
-                        }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
+                        // FrameXTV no permite listar las pistas ni sus nombres: solo existe setSubtitle{index}.
+                        Button(onClick = { applyFrameSubtitle(FrameXtvSubtitleSlots.previous(frameSubtitleIndex)) }) { Text("◀ CC") }
+                        Button(onClick = { applyFrameSubtitle(FrameXtvSubtitleSlots.next(frameSubtitleIndex)) }) { Text("CC · Pista ${frameSubtitleIndex + 1} ▶") }
+                    }
+                }
+
+                if (isFrameXtv) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(onClick = {
                             frameServerIndex = if (frameServerIndex >= 4) 1 else frameServerIndex + 1
                             frameSubtitleIndex = 0
@@ -1333,6 +1385,13 @@ private fun WebEmbedPlayer(
                 }
             }
         }
+        if (isVideoApi && !hubActive && showLatinoHint && pageError == null && progress >= 100) {
+            Text(
+                "Latino: el control remoto maneja el reproductor original de VideoAPI",
+                Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp),
+                color = Color.White, fontSize = 14.sp
+            )
+        }
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }
@@ -1347,7 +1406,7 @@ private fun WebEmbedPlayer(
                 }
             }
         }
-        if (hasCustomHub && !frameControlsVisible) {
+        if (hubActive && !frameControlsVisible) {
             Box(Modifier.align(Alignment.TopStart).width(1.dp).height(1.dp).alpha(0f).focusRequester(hiddenHubFocus).focusable())
         }
     }

@@ -1,5 +1,9 @@
 # Xuper Quilmes TV — Android TV
 
+## Hub de reproductores web — control remoto, ocultamiento y subtítulos (20/10/2026)
+
+Detalle, hallazgos sobre las APIs y lo pendiente de probar en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen: un único manejador de teclas para el hub (nuevo `WebHubKeyRouter.kt`); con el hub oculto ↓ lo abre; con el hub visible las flechas se mueven dentro de él y el hub se oculta a los 5 s sin interacción; FrameXTV suma `◀ CC` / `CC · Pista N ▶` (la API no permite listar pistas ni nombres); Latino solo muestra el hub si el `<video>` es accesible, porque la API pública de VideoAPI no documenta ningún canal de control. **No se compiló** (sin Android SDK/Gradle en el entorno de edición): compilar y probar en el televisor. El `PlayerScreen.kt` de la raíz del repo es una copia vieja fuera de `src/`; la real está en `app/src/main/.../ui/screens/`.
+
 ## Correcciones de listas argentinas y reproducción (19/10/2026)
 
 - Se vuelven a instalar desde `assets` y registrar en el catálogo las listas locales `iptv-extra.m3u`, `lista-extendida.m3u`, `mi-lista.m3u` y `peliculas-dominio-publico.m3u`, además de `argentina-extra.m3u` y `vod-original.m3u`.
