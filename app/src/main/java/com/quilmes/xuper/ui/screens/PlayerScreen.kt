@@ -558,11 +558,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
-    // FrameXTV documenta índices de subtítulos, pero no expone una lista de nombres.
-    // Se ofrece Spanish como selección inicial y Spanish (2) como alternativa solicitada.
-    var frameSubtitleIndex by remember(url) { mutableStateOf(0) }
-    var frameControlsVisible by remember(url) { mutableStateOf(true) }
-    var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
     val videoApiControlsFocus = remember(url) { FocusRequester() }
     val frameSubtitleLabels = listOf("Pista 1 — Spanish", "Pista 2 — Spanish (2)", "Pista 3", "Pista 4", "Pista 5", "Pista 6", "Pista 7", "Pista 8", "Pista 9", "Pista 10", "Pista 11", "Pista 12")
@@ -574,45 +569,20 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
             pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
         }
     }
-    LaunchedEffect(hasCustomHub, frameControlsVisible) {
-        if (hasCustomHub && frameControlsVisible) {
-            delay(120)
-            runCatching { if (isFrameXtv) frameControlsFocus.requestFocus() else videoApiControlsFocus.requestFocus() }
-        }
-    }
-    // El hub vuelve a ocultarse tras la inactividad, pero cualquier tecla D-pad lo reabre.
-    LaunchedEffect(hasCustomHub, frameControlsVisible, frameInteraction) {
-        if (hasCustomHub && frameControlsVisible) {
-            delay(5_000)
-            frameControlsVisible = false
+    LaunchedEffect(isFrameXtv) {
+        if (isFrameXtv) {
+            delay(1_500)
+            runCatching { frameControlsFocus.requestFocus() }
         }
     }
 
-    fun sendVideoApiKey(keyCode: Int) {
-        val web = webViewRef ?: return
-        val now = android.os.SystemClock.uptimeMillis()
-        web.post {
-            web.dispatchKeyEvent(AndroidKeyEvent(now, now, AndroidKeyEvent.ACTION_DOWN, keyCode, 0))
-            web.dispatchKeyEvent(AndroidKeyEvent(android.os.SystemClock.uptimeMillis(), now, AndroidKeyEvent.ACTION_UP, keyCode, 0))
-        }
-    }
 
     BackHandler(enabled = true) {
         if (webViewRef?.canGoBack() == true) webViewRef?.goBack() else onExit()
     }
 
     Box(
-        Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
-            if (!hasCustomHub || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-            // El D-pad reabre el hub incluso si el iframe suele consumir la flecha abajo como volumen.
-            if (!frameControlsVisible) {
-                frameControlsVisible = true
-                frameInteraction++
-                return@onPreviewKeyEvent true
-            }
-            frameInteraction++
-            false
-        }
+        Modifier.fillMaxSize().background(Color.Black)
     ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -637,17 +607,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     // El reproductor oficial controla sus propios botones y navegación.
                     isFocusable = true
                     isFocusableInTouchMode = true
-                    setOnKeyListener { _, _, event ->
-                        if (hasCustomHub && event.action == AndroidKeyEvent.ACTION_DOWN) {
-                            if (!frameControlsVisible && event.keyCode in listOf(AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT, AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER)) {
-                                frameControlsVisible = true
-                                frameInteraction++
-                                return@setOnKeyListener true
-                            }
-                            frameInteraction++
-                        }
-                        false // con el hub visible, los botones Compose reciben el foco del mando
-                    }
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     webChromeClient = object : WebChromeClient() {
                         private var fullscreenView: View? = null
@@ -865,7 +824,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 webViewRef = null
             },
         )
-        if (hasCustomHub && frameControlsVisible && pageError == null && isFrameXtv) {
+        if (isFrameXtv && pageError == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
                     .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp),
@@ -882,33 +841,11 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');", null); framePaused = !framePaused; frameControlsVisible = true; frameInteraction++ }) { Text(if (framePaused) "▶ Reproducir" else "Ⅱ Pausar") }
-                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:-10});", null); frameControlsVisible = true; frameInteraction++ }) { Text("↶ 10 s") }
-                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:10});", null); frameControlsVisible = true; frameInteraction++ }) { Text("10 s ↷") }
-                    Button(onClick = { webViewRef?.evaluateJavascript(if (frameMuted) "window.xuperFrameCommand('setVolume',{volume:1});" else "window.xuperFrameCommand('mute');", null); frameMuted = !frameMuted; frameControlsVisible = true; frameInteraction++ }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
-                    Button(onClick = {
-                        // Índices 0 y 1 se presentan como las pistas españolas solicitadas; FrameXTV no documenta cómo enumerar nombres reales.
-                        frameSubtitleIndex = (frameSubtitleIndex + 1) % frameSubtitleLabels.size
-                        webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:$frameSubtitleIndex});", null)
-                        frameControlsVisible = true
-                        frameInteraction++
-                    }) { Text("CC ${frameSubtitleLabels[frameSubtitleIndex]}") }
-                }
-            }
-        }
-        if (isVideoApi && frameControlsVisible && pageError == null) {
-            Column(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
-                    .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("LATINO · CONTROLES", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Text("Los controles se envían al reproductor integrado; algunas acciones dependen de VideoAPI.", color = Color(0xFFB9CDD6), fontSize = 11.sp)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(modifier = Modifier.focusRequester(videoApiControlsFocus), onClick = { sendVideoApiKey(AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE); frameInteraction++ }) { Text("▶ / Ⅱ Play/Pausa") }
-                    Button(onClick = { sendVideoApiKey(AndroidKeyEvent.KEYCODE_DPAD_LEFT); frameInteraction++ }) { Text("↶ Retroceder") }
-                    Button(onClick = { sendVideoApiKey(AndroidKeyEvent.KEYCODE_DPAD_RIGHT); frameInteraction++ }) { Text("Avanzar ↷") }
-                    Button(onClick = { sendVideoApiKey(AndroidKeyEvent.KEYCODE_TAB); sendVideoApiKey(AndroidKeyEvent.KEYCODE_TAB); frameInteraction++ }) { Text("CC Subtítulos") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');", null); framePaused = !framePaused }) { Text(if (framePaused) "▶ Reproducir" else "Ⅱ Pausar") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:-10});", null) }) { Text("↶ 10 s") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:10});", null) }) { Text("10 s ↷") }
+                    Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = { webViewRef?.evaluateJavascript(if (frameMuted) "window.xuperFrameCommand('setVolume',{volume:1});" else "window.xuperFrameCommand('mute');", null); frameMuted = !frameMuted }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:0});", null) }) { Text("CC Subtítulos") }
                 }
             }
         }
