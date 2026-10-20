@@ -393,8 +393,8 @@ private fun NativePlayerScreen(
                     player = exoPlayer
                     useController = false
                     keepScreenOn = true
-                    isFocusable = false
-                    isFocusableInTouchMode = false
+                    isFocusable = true
+                    isFocusableInTouchMode = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -535,6 +535,26 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var showWebControls by remember(url) { mutableStateOf(true) }
+    var remoteInteraction by remember(url) { mutableStateOf(0) }
+    val webControlsFocus = remember { FocusRequester() }
+    val webRootFocus = remember { FocusRequester() }
+
+    // Los controles aparecen al entrar y se esconden tras unos segundos sin actividad.
+    // El foco vuelve al contenedor Compose, no al WebView, porque muchos embeds no exponen
+    // sus controles HTML al D-pad del televisor.
+    LaunchedEffect(url) {
+        delay(250)
+        runCatching { webControlsFocus.requestFocus() }
+    }
+    LaunchedEffect(showWebControls, remoteInteraction, url) {
+        if (showWebControls) {
+            delay(5_000)
+            runCatching { webRootFocus.requestFocus() }
+            showWebControls = false
+        }
+    }
+
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
         delay(30_000)
@@ -548,7 +568,24 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
         if (webViewRef?.canGoBack() == true) webViewRef?.goBack() else onExit()
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black)
+            .focusRequester(webRootFocus)
+            .focusable()
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                remoteInteraction++
+                val isNavigationKey = event.key == Key.DirectionUp || event.key == Key.DirectionDown ||
+                    event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
+                    event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
+                if (!showWebControls && isNavigationKey) {
+                    showWebControls = true
+                    runCatching { webControlsFocus.requestFocus() }
+                    true
+                } else false
+            }
+    ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
@@ -569,8 +606,10 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.safeBrowsingEnabled = true
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                    isFocusable = true
-                    isFocusableInTouchMode = true
+                    // El WebView no debe secuestrar el foco D-pad: los controles nativos
+                    // de Compose reciben las flechas y el OK de Android TV.
+                    isFocusable = false
+                    isFocusableInTouchMode = false
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     webChromeClient = object : WebChromeClient() {
                         private var fullscreenView: View? = null
@@ -759,12 +798,14 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
         // Controles nativos visibles y enfocables con el D-pad: no dependemos de que el sitio
         // web exponga sus botones al foco del WebView. El click intenta reproducir el video
         // o activar un botón de play reconocible en el documento/iframe accesible.
-        Row(
+        if (showWebControls) Row(
             modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(22.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Button(onClick = {
+            Button(modifier = Modifier.focusRequester(webControlsFocus), onClick = {
+                remoteInteraction++
+                showWebControls = true
                 webViewRef?.evaluateJavascript("""(function(){
                   try {
                     var videos=Array.from(document.querySelectorAll('video'));
@@ -778,6 +819,8 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 })();""", null)
             }) { Text("▶  Reproducir") }
             Button(onClick = {
+                remoteInteraction++
+                showWebControls = true
                 webViewRef?.evaluateJavascript("""(function(){try{
                   var videos=Array.from(document.querySelectorAll('video'));
                   var tracks=[];videos.forEach(function(v){try{Array.from(v.textTracks||[]).forEach(function(t){tracks.push(t)})}catch(e){}});
@@ -788,7 +831,10 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                   if(b)b.click();return 'attempted';
                 }catch(e){return 'error'}})();""", null)
             }) { Text("CC  Subtítulos") }
-            Button(onClick = { webViewRef?.reload() }) { Text("↻  Reiniciar") }
+            Button(onClick = { remoteInteraction++; showWebControls = true; webViewRef?.reload() }) { Text("↻  Reiniciar") }
+        }
+        if (!showWebControls && pageError == null) {
+            Text("OK o una flecha: mostrar controles", Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 7.dp), color = Color.White, fontSize = 12.sp)
         }
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
