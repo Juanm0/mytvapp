@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -67,6 +68,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
+import coil.compose.AsyncImage
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.Title
@@ -176,7 +178,13 @@ fun PlayerScreen(
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
     if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/")) {
-        WebEmbedPlayer(url = streamUrl, contentKey = currentTitleId.ifBlank { streamUrl }, onExit = onExit)
+        WebEmbedPlayer(
+            url = streamUrl,
+            contentKey = currentTitleId.ifBlank { streamUrl },
+            nextEpisode = nextEpisode,
+            onPlayNextEpisode = onPlayNextEpisode,
+            onExit = onExit,
+        )
         return
     }
     var resolveAsWebPage by remember(streamUrl) { mutableStateOf(false) }
@@ -222,7 +230,8 @@ private fun NativePlayerScreen(
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl) { mutableStateOf(true) }
-    var showNextEpisode by remember { mutableStateOf(false) }
+    var showNextEpisode by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
+    var nextEpisodeTriggered by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
     var sourceIndex by remember(streamUrl, alternatePlayers) {
         mutableStateOf(alternatePlayers.indexOfFirst { it.streamUrl == streamUrl })
     }
@@ -337,7 +346,12 @@ private fun NativePlayerScreen(
                     .edit().putLong(currentTitleId, savePosition).apply()
             }
             isPlaying = exoPlayer.isPlaying
-            showNextEpisode = nextEpisode != null && duration > 0 && position >= duration - 60_000L
+            val remaining = (duration - position).coerceAtLeast(0L)
+            showNextEpisode = nextEpisode != null && duration > 0L && remaining <= 10_000L && !nextEpisodeTriggered
+            if (nextEpisode != null && duration > 0L && isPlaying && remaining <= 1_000L && !nextEpisodeTriggered) {
+                nextEpisodeTriggered = true
+                onPlayNextEpisode(nextEpisode.id)
+            }
             delay(500)
         }
     }
@@ -541,8 +555,54 @@ private fun NativePlayerScreen(
             }
         }
         if (showNextEpisode && nextEpisode != null) {
-            Button(onClick = { onPlayNextEpisode(nextEpisode.id) }, modifier = Modifier.align(Alignment.BottomEnd).padding(30.dp)) {
-                Text("▶  Episodio siguiente · ${nextEpisode.name}")
+            val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 10)
+            NextEpisodeOverlay(
+                episode = nextEpisode,
+                secondsLeft = secondsLeft,
+                onPlayNow = {
+                    if (!nextEpisodeTriggered) {
+                        nextEpisodeTriggered = true
+                        onPlayNextEpisode(nextEpisode.id)
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun NextEpisodeOverlay(
+    episode: Title,
+    secondsLeft: Int,
+    onPlayNow: () -> Unit,
+    modifier: Modifier = Modifier,
+    onDismiss: (() -> Unit)? = null,
+) {
+    val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(episode.id)
+    val episodeMeta = match?.destructured?.let { (_, season, number) -> "Temporada $season · Episodio $number" }
+        ?: "Próximo episodio"
+    Row(
+        modifier = modifier.widthIn(max = 430.dp)
+            .background(Color(0xF018222C), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        AsyncImage(
+            model = episode.posterUrl.ifBlank { episode.backdropUrl },
+            contentDescription = episode.name,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.width(124.dp).height(76.dp).background(Color(0xFF26323D), RoundedCornerShape(8.dp)),
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("EPISODIO SIGUIENTE", color = Color(0xFF65DCE8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            Text(episode.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+            Text(episodeMeta, color = Color(0xFFCFD8DE), fontSize = 12.sp)
+            Text("Episodio siguiente en $secondsLeft…", color = Color.White, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(onClick = onPlayNow) { Text("▶ Ahora") }
+                if (onDismiss != null) Button(onClick = onDismiss) { Text("Cancelar") }
             }
         }
     }
@@ -646,7 +706,13 @@ private fun webPlaybackResumeScript(resumePositionSeconds: Long, autoSelectSpani
  * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
  */
 @Composable
-private fun WebEmbedPlayer(url: String, contentKey: String = url, onExit: () -> Unit = {}) {
+private fun WebEmbedPlayer(
+    url: String,
+    contentKey: String = url,
+    nextEpisode: Title? = null,
+    onPlayNextEpisode: (String) -> Unit = {},
+    onExit: () -> Unit = {},
+) {
     val context = LocalContext.current
     val playbackPrefs = remember(context) { context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE) }
     val stableContentKey = contentKey.ifBlank { url }
@@ -664,6 +730,10 @@ private fun WebEmbedPlayer(url: String, contentKey: String = url, onExit: () -> 
     val hasCustomHub = isFrameXtv || isVideoApi
     var frameCurrentTime by remember(url) { mutableStateOf(0.0) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
+    var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
+    var nextEpisodeDismissed by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
+    val nextEpisodeRemaining = (frameDuration - frameCurrentTime).coerceAtLeast(0.0)
+    val showNextEpisodeCard = nextEpisode != null && frameDuration > 0.0 && nextEpisodeRemaining <= 10.0 && !nextEpisodeDismissed && !nextEpisodeTriggered
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
     // No conocemos los nombres reales: se recorren índices numerados y se vuelve al 1 tras el 32.
@@ -697,6 +767,15 @@ private fun WebEmbedPlayer(url: String, contentKey: String = url, onExit: () -> 
         if (hasCustomHub && frameControlsVisible) {
             delay(5_000)
             frameControlsVisible = false
+        }
+    }
+    LaunchedEffect(nextEpisode?.id, frameCurrentTime, frameDuration, framePaused, nextEpisodeDismissed, nextEpisodeTriggered) {
+        if (nextEpisode != null && frameDuration > 0.0 && !framePaused && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+            val remaining = frameDuration - frameCurrentTime
+            if (remaining <= 1.0 && remaining >= 0.0) {
+                nextEpisodeTriggered = true
+                onPlayNextEpisode(nextEpisode.id)
+            }
         }
     }
 
@@ -961,6 +1040,21 @@ private fun WebEmbedPlayer(url: String, contentKey: String = url, onExit: () -> 
                 webViewRef = null
             },
         )
+        if (showNextEpisodeCard && nextEpisode != null) {
+            val secondsLeft = kotlin.math.ceil(nextEpisodeRemaining).toInt().coerceIn(0, 10)
+            NextEpisodeOverlay(
+                episode = nextEpisode,
+                secondsLeft = secondsLeft,
+                onPlayNow = {
+                    if (!nextEpisodeTriggered) {
+                        nextEpisodeTriggered = true
+                        onPlayNextEpisode(nextEpisode.id)
+                    }
+                },
+                onDismiss = { nextEpisodeDismissed = true },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = if (frameControlsVisible) 154.dp else 22.dp),
+            )
+        }
         if (hasCustomHub && frameControlsVisible && pageError == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)

@@ -17,6 +17,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.data.Title
@@ -341,7 +342,69 @@ class MainActivity : ComponentActivity() {
                             String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
                         }.getOrDefault("")
                         if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
-                            PlayerScreen(name = streamName, streamUrl = streamUrl, currentTitleId = contentKey, onExit = { navController.popBackStack() })
+                            var nextExternalEpisode by remember(contentKey) { mutableStateOf<Title?>(null) }
+                            LaunchedEffect(contentKey, streamUrl) {
+                                nextExternalEpisode = null
+                                val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
+                                if (match != null) {
+                                    val (tmdbNumber, seasonText, episodeText) = match.destructured
+                                    val seriesId = "tmdb-tv-$tmdbNumber"
+                                    val currentSeason = seasonText.toIntOrNull() ?: 0
+                                    val currentEpisode = episodeText.toIntOrNull() ?: 0
+                                    val seasons = tmdbCatalogService.loadSeasons(seriesId).filter { it.number > 0 }.sortedBy { it.number }
+                                    val sameSeasonEpisodes = tmdbCatalogService.loadEpisodes(seriesId, currentSeason).sortedBy { it.number }
+                                    var nextSeasonNumber = currentSeason
+                                    var nextEpisodeData = sameSeasonEpisodes.firstOrNull { it.number > currentEpisode }
+                                    var nextSeasonPoster = seasons.firstOrNull { it.number == currentSeason }?.posterUrl.orEmpty()
+                                    if (nextEpisodeData == null) {
+                                        val followingSeason = seasons.firstOrNull { it.number > currentSeason }
+                                        if (followingSeason != null) {
+                                            nextSeasonNumber = followingSeason.number
+                                            nextSeasonPoster = followingSeason.posterUrl
+                                            nextEpisodeData = tmdbCatalogService.loadEpisodes(seriesId, nextSeasonNumber).minByOrNull { it.number }
+                                        }
+                                    }
+                                    if (nextEpisodeData != null) {
+                                        val nextKey = "$seriesId|s$nextSeasonNumber|e${nextEpisodeData.number}"
+                                        val nextUrl = if (runCatching { Uri.parse(streamUrl).host.equals("videoapi.la", true) }.getOrDefault(false)) {
+                                            WebSourceRegistry.videoApiUrl(nextKey)
+                                        } else {
+                                            WebSourceRegistry.frameXtvUrl(nextKey)
+                                        }
+                                        if (!nextUrl.isNullOrBlank()) {
+                                            nextExternalEpisode = Title(
+                                                id = nextKey,
+                                                name = nextEpisodeData.name,
+                                                description = nextEpisodeData.overview,
+                                                posterUrl = nextEpisodeData.stillUrl.ifBlank { nextSeasonPoster },
+                                                backdropUrl = nextEpisodeData.stillUrl.ifBlank { nextSeasonPoster },
+                                                streamUrl = nextUrl,
+                                                contentKind = ContentKind.SERIES,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            PlayerScreen(
+                                name = streamName,
+                                streamUrl = streamUrl,
+                                currentTitleId = contentKey,
+                                nextEpisode = nextExternalEpisode,
+                                onPlayNextEpisode = { nextId ->
+                                    val next = nextExternalEpisode?.takeIf { it.id == nextId }
+                                    if (next != null) {
+                                        val encodedNextUrl = Base64.encodeToString(next.streamUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                        val episodeMatch = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(next.id)
+                                        val episodeLabel = if (episodeMatch != null) {
+                                            val (_, season, episode) = episodeMatch.destructured
+                                            "${next.name} · T$season E$episode"
+                                        } else next.name
+                                        navController.popBackStack()
+                                        navController.navigate("external-player/${Uri.encode(episodeLabel)}/$encodedNextUrl/${Uri.encode(next.id)}")
+                                    }
+                                },
+                                onExit = { navController.popBackStack() },
+                            )
                         }
                     }
                     composable(
