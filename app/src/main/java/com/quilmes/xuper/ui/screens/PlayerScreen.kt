@@ -34,7 +34,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -101,14 +100,15 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
     return "$base?${params.joinToString("&")}"
 }
 
-/** Routes D-pad-down back to our own control overlay instead of letting the iframe trap focus. */
+/** Keeps D-pad navigation from getting trapped inside a cross-origin iframe. */
 private class HubAwareWebView(
     context: Context,
-    private val onDpadDown: () -> Boolean,
+    private val onDpadKey: (Int) -> Boolean,
 ) : WebView(context) {
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
         if (event.action == AndroidKeyEvent.ACTION_DOWN &&
-            event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN && onDpadDown()
+            (event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN ||
+             event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP) && onDpadKey(event.keyCode)
         ) return true
         return super.dispatchKeyEvent(event)
     }
@@ -686,9 +686,9 @@ private fun WebEmbedPlayer(
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
-    val isVideoApi = remember(url) { runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false) }
-    val isOkRu = remember(url) { runCatching { URI(url).host.equals("ok.ru", true) }.getOrDefault(false) }
+    val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") } == true }.getOrDefault(false) }
+    val isVideoApi = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "videoapi.la" || it.endsWith(".videoapi.la") } == true }.getOrDefault(false) }
+    val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isVideoApi || isOkRu
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
@@ -800,8 +800,17 @@ private fun WebEmbedPlayer(
                     else -> return@evaluateJavascript
                 }
                 dispatchWebKey(webView, keyCode)
-                if (isOkRu && action == "playPause") dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
-                commandStatus = "El sitio no expuso el control directamente; se envió una tecla alternativa."
+                when (action) {
+                    "playPause" -> {
+                        // Some Latino/VideoAPI embeds listen to Space/Enter rather than media keys.
+                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_SPACE)
+                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
+                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_ENTER)
+                    }
+                    "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
+                    "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
+                }
+                commandStatus = "El reproductor no confirmó el control directo; probé teclas alternativas."
             }
         }
     }
@@ -822,28 +831,26 @@ private fun WebEmbedPlayer(
     Box(Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
         if (!hasCustomHub || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (event.nativeKeyEvent.keyCode) {
-            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+            AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
                 if (!frameControlsVisible) frameControlsVisible = true
                 frameInteraction++
+                runCatching { frameControlsFocus.requestFocus() }
                 true
-            }
-            AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                if (!frameControlsVisible) {
-                    frameControlsVisible = true
-                    frameInteraction++
-                    true
-                } else false
             }
             AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 runWebCommand("playPause", 0, 0)
                 true
             }
             AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
-                runWebCommand("seekBack", 0, 10)
+                val repeat = event.nativeKeyEvent.repeatCount
+                val jump = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                runWebCommand("seekBack", frameSubtitleIndex, jump)
                 true
             }
             AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                runWebCommand("seekForward", 0, 10)
+                val repeat = event.nativeKeyEvent.repeatCount
+                val jump = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                runWebCommand("seekForward", frameSubtitleIndex, jump)
                 true
             }
             else -> {
@@ -856,10 +863,10 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext) {
+                val webView = HubAwareWebView(viewContext) { keyCode ->
                     if (hasCustomHub) {
                         if (!frameControlsVisible) frameControlsVisible = true
-                        else runCatching { frameControlsFocus.requestFocus() }
+                        runCatching { frameControlsFocus.requestFocus() }
                         frameInteraction++
                         true
                     } else false
