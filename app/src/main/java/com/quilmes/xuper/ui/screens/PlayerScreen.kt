@@ -664,6 +664,42 @@ private fun webPlaybackResumeScript(resumePositionSeconds: Long, autoSelectSpani
   visit(window); setInterval(function(){visit(window);},2000);
 })();"""
 
+private fun simuladoresAutoplayUrl(rawUrl: String): String {
+    val beforeHash = rawUrl.substringBefore('#')
+    val hash = rawUrl.substringAfter('#', "").let { if (rawUrl.contains('#')) "#$it" else "" }
+    val existing = Regex("([?&])autoplay=[^&]*", RegexOption.IGNORE_CASE)
+    if (existing.containsMatchIn(beforeHash)) return existing.replace(beforeHash) { "${it.groupValues[1]}autoplay=1" } + hash
+    return beforeHash + if (beforeHash.contains('?')) "&autoplay=1" + hash else "?autoplay=1" + hash
+}
+
+/** Best-effort autoplay kick for the Simuladores web player, including dynamically inserted HTML5 videos. */
+private fun simuladoresAutoplayScript(): String = """(function(){
+  if(window.__xuperSimuladoresAutoplayInstalled) return;
+  window.__xuperSimuladoresAutoplayInstalled=true;
+  var attempts=0, maxAttempts=24;
+  function tryPlay(){
+    attempts++;
+    try{
+      document.querySelectorAll('iframe').forEach(function(f){
+        try{var allow=(f.getAttribute('allow')||'');if(!/autoplay/i.test(allow))f.setAttribute('allow',(allow?allow+'; ':'')+'autoplay; fullscreen; encrypted-media; picture-in-picture');}catch(e){}
+      });
+      document.querySelectorAll('video').forEach(function(v){
+        try{
+          v.setAttribute('playsinline','');
+          if(v.readyState>=1 && v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){try{v.muted=true;var q=v.play();if(q&&q.catch)q.catch(function(){});setTimeout(function(){try{v.muted=false;}catch(e){}},1200);}catch(e){}});}
+        }catch(e){}
+      });
+      if(attempts===1){
+        var buttons=Array.from(document.querySelectorAll('button,[role=button],a[role=button]'));
+        var play=buttons.find(function(b){return /play|reproducir|ver ahora|iniciar/i.test(((b.getAttribute('aria-label')||'')+' '+(b.getAttribute('title')||'')+' '+(b.innerText||'')).toLowerCase());});
+        if(play)try{play.click();}catch(e){}
+      }
+    }catch(e){}
+    if(attempts<maxAttempts)setTimeout(tryPlay,750);
+  }
+  tryPlay();
+})();"""
+
 @Composable
 private fun WebEmbedPlayer(
     url: String,
@@ -689,6 +725,7 @@ private fun WebEmbedPlayer(
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "videoapi.la" || it.endsWith(".videoapi.la") } == true }.getOrDefault(false) }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
+    val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isVideoApi || isOkRu
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
@@ -964,6 +1001,9 @@ private fun WebEmbedPlayer(
                               }catch(e){}
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
+                            if (isSimuladores) {
+                                view?.evaluateJavascript(simuladoresAutoplayScript(), null)
+                            }
                             if (isVideoApi) view?.evaluateJavascript("""(function(){
                               try{
                                 var css='html,body{margin:0!important;padding:0!important;border:0!important;outline:0!important;box-shadow:none!important;background:#000!important} iframe,video,html:focus,body:focus,iframe:focus,video:focus{border:0!important;outline:0!important;box-shadow:none!important}';
@@ -1041,7 +1081,7 @@ private fun WebEmbedPlayer(
                         loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (isVideoApi) {
                         loadUrl(videoApiEmbedUrl(url, savedResumePosition))
-                    } else loadUrl(url)
+                    } else if (isSimuladores) loadUrl(simuladoresAutoplayUrl(url)) else loadUrl(url)
                     requestFocus()
                 }
                 webViewRef = webView
@@ -1056,7 +1096,7 @@ private fun WebEmbedPlayer(
                         webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (isVideoApi) {
                         webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
-                    } else webView.loadUrl(url)
+                    } else if (isSimuladores) webView.loadUrl(simuladoresAutoplayUrl(url)) else webView.loadUrl(url)
                 }
             },
             onRelease = { container ->
