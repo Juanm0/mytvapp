@@ -96,11 +96,12 @@ private fun isWebPageUrl(raw: String): Boolean {
 }
 
 /** Mantiene los parámetros del embed y fuerza controles/subtítulos visibles en VideoAPI. */
-private fun videoApiEmbedUrl(raw: String): String {
+private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): String {
     val base = raw.substringBefore('?').trimEnd('/')
     val existing = raw.substringAfter('?', "").split('&').filter { it.isNotBlank() }
-        .filterNot { it.substringBefore('=').lowercase() in setOf("autoplay", "subtitles", "hide_controls", "skin") }
-    return (listOf("autoplay=1", "subtitles=1", "hide_controls=0", "skin=netflix") + existing).joinToString(
+        .filterNot { it.substringBefore('=').lowercase() in setOf("autoplay", "subtitles", "hide_controls", "skin", "start_at") }
+    val resumeParam = if (resumePositionSeconds > 0L) listOf("start_at=$resumePositionSeconds") else emptyList()
+    return (listOf("autoplay=1", "subtitles=1", "hide_controls=0", "skin=netflix") + resumeParam + existing).joinToString(
         separator = "&", prefix = "$base?"
     )
 }
@@ -348,7 +349,7 @@ private fun NativePlayerScreen(
             }
             isPlaying = exoPlayer.isPlaying
             val remaining = (duration - position).coerceAtLeast(0L)
-            showNextEpisode = nextEpisode != null && duration > 0L && remaining <= 10_000L && !nextEpisodeTriggered
+            showNextEpisode = nextEpisode != null && duration > 0L && remaining <= 20_000L && !nextEpisodeTriggered
             if (nextEpisode != null && duration > 0L && isPlaying && remaining <= 1_000L && !nextEpisodeTriggered) {
                 nextEpisodeTriggered = true
                 onPlayNextEpisode(nextEpisode.id)
@@ -655,7 +656,7 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
 }
 
 /** Construye la página contenedora de FrameXTV y conserva el canal postMessage documentado. */
-private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, subtitleIndex: Int = 0): String {
+private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, subtitleIndex: Int = 0, serverIndex: Int = 0): String {
     var embedUrl = rawUrl
     if (!Regex("(?:[?&])autoplay=").containsMatchIn(embedUrl)) embedUrl += if (embedUrl.contains('?')) "&autoplay=1" else "?autoplay=1"
     if (!Regex("(?:[?&])muted=").containsMatchIn(embedUrl)) embedUrl += "&muted=0"
@@ -665,6 +666,7 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
       (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};
       f.addEventListener('load',function(){
         setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex})},2200);
+        if($serverIndex>0) setTimeout(function(){window.xuperFrameCommand('setServer',{index:$serverIndex});window.xuperFrameCommand('changeServer',{index:$serverIndex});},2600);
         if($resumePositionSeconds>5) setTimeout(function(){window.xuperFrameCommand('seekBy',{seconds:$resumePositionSeconds})},3200);
       });
       window.addEventListener('message',function(e){var d=e.data;if(d&&typeof d==='object'&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
@@ -718,9 +720,11 @@ private fun WebEmbedPlayer(
     val playbackPrefs = remember(context) { context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE) }
     val stableContentKey = contentKey.ifBlank { url }
     val subtitlePreferenceKey = "web-subtitle:$stableContentKey"
+    val serverPreferenceKey = "web-server:$stableContentKey"
     val positionPreferenceKey = "web-position:$stableContentKey"
     val savedSubtitleIndex = remember(url, stableContentKey) { playbackPrefs.getInt(subtitlePreferenceKey, -1) }
     val savedResumePosition = remember(url, stableContentKey) { playbackPrefs.getLong(positionPreferenceKey, 0L).coerceAtLeast(0L) }
+    val savedServerIndex = remember(url, stableContentKey) { playbackPrefs.getInt(serverPreferenceKey, 0).coerceAtLeast(0) }
     var saveSubtitleForContent by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex >= 0) }
     var progress by remember(url) { mutableStateOf(0) }
     var pageError by remember(url) { mutableStateOf<String?>(null) }
@@ -729,19 +733,33 @@ private fun WebEmbedPlayer(
     val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isVideoApi
-    var frameCurrentTime by remember(url) { mutableStateOf(0.0) }
+    var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
     var nextEpisodeDismissed by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
     val nextEpisodeRemaining = (frameDuration - frameCurrentTime).coerceAtLeast(0.0)
-    val showNextEpisodeCard = nextEpisode != null && frameDuration > 0.0 && nextEpisodeRemaining <= 10.0 && !nextEpisodeDismissed && !nextEpisodeTriggered
+    val showNextEpisodeCard = nextEpisode != null && frameDuration > 0.0 && nextEpisodeRemaining <= 20.0 && !nextEpisodeDismissed && !nextEpisodeTriggered
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
     // No conocemos los nombres reales: se recorren índices numerados y se vuelve al 1 tras el 32.
     var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
+    var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
+
+    // VideoAPI no expone en su contrato público el tiempo actual: estimamos el avance
+    // mientras la pantalla está reproduciendo y guardamos start_at para la próxima apertura.
+    // Es aproximado: no detecta pausas hechas dentro del reproductor nativo del proveedor.
+    LaunchedEffect(url, isVideoApi, framePaused) {
+        if (isVideoApi && !framePaused) {
+            while (true) {
+                delay(1_000)
+                frameCurrentTime += 1.0
+                playbackPrefs.edit().putLong(positionPreferenceKey, frameCurrentTime.toLong()).apply()
+            }
+        }
+    }
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
@@ -1007,11 +1025,11 @@ private fun WebEmbedPlayer(
                         }, "XuperBridge")
                     }
                     if (isFrameXtv) {
-                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex), "text/html", "UTF-8", null)
+                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         // En VideoAPI se activan los controles/subtítulos documentados y se carga su página real,
                         // sin simular un origen ni crear una capa externa que no puede controlar el iframe.
-                        loadUrl(videoApiEmbedUrl(url))
+                        loadUrl(videoApiEmbedUrl(url, savedResumePosition))
                     } else loadUrl(url)
                     requestFocus()
                 }
@@ -1024,9 +1042,9 @@ private fun WebEmbedPlayer(
                 if (webView != null && webView.tag != url) {
                     webView.tag = url
                     if (isFrameXtv) {
-                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex), "text/html", "UTF-8", null)
+                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
-                        webView.loadUrl(videoApiEmbedUrl(url))
+                        webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else webView.loadUrl(url)
                 }
             },
@@ -1042,7 +1060,7 @@ private fun WebEmbedPlayer(
             },
         )
         if (showNextEpisodeCard && nextEpisode != null) {
-            val secondsLeft = kotlin.math.ceil(nextEpisodeRemaining).toInt().coerceIn(0, 10)
+            val secondsLeft = kotlin.math.ceil(nextEpisodeRemaining).toInt().coerceIn(0, 20)
             NextEpisodeOverlay(
                 episode = nextEpisode,
                 secondsLeft = secondsLeft,
@@ -1111,6 +1129,16 @@ private fun WebEmbedPlayer(
                             webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:$frameSubtitleIndex});", null)
                             frameInteraction++
                         }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
+                        Button(onClick = {
+                            frameServerIndex = (frameServerIndex + 1) % 8
+                            playbackPrefs.edit().putInt(serverPreferenceKey, frameServerIndex).apply()
+                            // FrameXTV's server-switch message is best-effort: unsupported versions may ignore it.
+                            webViewRef?.evaluateJavascript(
+                                "window.xuperFrameCommand('setServer',{index:$frameServerIndex});window.xuperFrameCommand('changeServer',{index:$frameServerIndex});",
+                                null
+                            )
+                            frameInteraction++
+                        }) { Text(if (frameServerIndex == 0) "Pista servidor · Auto" else "Pista servidor · ${frameServerIndex + 1}") }
                         Button(onClick = {
                             saveSubtitleForContent = !saveSubtitleForContent
                             if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, frameSubtitleIndex).apply()
