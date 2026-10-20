@@ -13,16 +13,16 @@ object WebSourceRegistry {
     }
 
 
-    /** Segundo reproductor: VideoApp, el host que LaMovie devuelve en player_url. */
+    /** Segundo reproductor: VideoAPI, usando las rutas públicas documentadas. */
     fun videoAppUrl(catalogId: String): String? {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         if (episode != null) {
             val (id, season, number) = episode.destructured
-            return "https://videoapp.mov/e/tv/$id/$season/$number"
+            return "https://videoapi.la/e/tv/$id/$season/$number"
         }
         val title = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(catalogId) ?: return null
         val type = if (catalogId.startsWith("tmdb-tv-")) "tv" else "movie"
-        return "https://videoapp.mov/e/$type/${title.groupValues[1]}"
+        return "https://videoapi.la/e/$type/${title.groupValues[1]}"
     }
 
     /** PLAYLATINSRC requires IMDb IDs; callers must resolve the ID through TMDB first. */
