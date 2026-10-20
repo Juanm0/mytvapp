@@ -1,13 +1,15 @@
-XuperQuilmesTV — correcciones incrementales
+# XuperQuilmesTV — correcciones incrementales
 
-Reemplazar únicamente:
-- app/src/main/java/com/quilmes/xuper/MainActivity.kt
-- app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt
+Reemplazar únicamente estos dos archivos en sus rutas correspondientes:
+- `app/src/main/java/com/quilmes/xuper/MainActivity.kt`
+- `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`
 
 Cambios:
-- Se importa setValue para la variable delegada nextExternalEpisode (error de compilación en MainActivity.kt).
-- Se importa Modifier.width (error de compilación en PlayerScreen.kt).
-- Las reproducciones embebidas/Latino se registran en xuper-library (recent y recent_items), usando una clave estable de episodio o URL.
-- Se refuerzan los estilos del contenedor externo para quitar contornos, bordes y sombras. Un borde dibujado dentro de un iframe cross-origin puede no ser modificable desde la app.
+- Importa `setValue` para el estado delegado del mini-hub.
+- Importa `width` para el modificador del mini-hub.
+- Registra reproducciones embebidas en `xuper-library` / `recent_items` para que puedan aparecer en Continuar viendo.
+- Configura el embed público de VideoAPI con `skin=netflix` y conserva los parámetros de autoplay, subtítulos y controles.
 
-No se pudo ejecutar assembleRelease aquí; validar con GitHub Actions.
+Limitaciones verificadas contra la documentación pública de VideoAPI: `start_at` permite iniciar desde un segundo conocido, pero la API pública documenta que `post_message/communication` está bloqueado. No hay callback público documentado para leer `currentTime`/`duration` desde la app. Por eso esta entrega no puede prometer progreso exacto, reanudar en el minuto guardado ni activar la cuenta regresiva del mini-hub de forma fiable en VideoAPI. Para eso VideoAPI tendría que exponer un callback/protocolo autorizado o un endpoint de progreso.
+
+La selección de skin puede cambiar el marco visual, pero no garantiza eliminar un borde dibujado dentro del reproductor. Validar en la TV y ejecutar GitHub Actions antes de instalar.
