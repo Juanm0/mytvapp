@@ -1,5 +1,3 @@
-package com.quilmes.xuper.ui.screens
-
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
@@ -831,26 +829,24 @@ private fun WebEmbedPlayer(
     // All web commands pass through this function so the UI only reflects commands that
     // were handled in an accessible HTML5 player. Cross-origin embeds may still reject them.
     fun runWebCommand(action: String, subtitleIndex: Int, seconds: Int) {
-        val webView = webViewRef ?: return
+        val webView = webViewRef
+        if (webView == null) {
+            return
+        }
         frameInteraction++
-
         if (isFrameXtv) {
             val js = when (action) {
                 "playPause" -> "window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');"
                 "seekBack" -> "window.xuperFrameCommand('seekBy',{seconds:-${kotlin.math.abs(seconds)}});"
                 "seekForward" -> "window.xuperFrameCommand('seekBy',{seconds:${kotlin.math.abs(seconds)}});"
-                "mute" -> if (frameMuted) {
-                    "window.xuperFrameCommand('setVolume',{volume:1});"
-                } else {
-                    "window.xuperFrameCommand('mute');"
-                }
+                "mute" -> if (frameMuted) "window.xuperFrameCommand('setVolume',{volume:1});" else "window.xuperFrameCommand('mute');"
                 "subtitle" -> "window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex});"
                 else -> return
             }
             webView.evaluateJavascript(js, null)
             when (action) {
-                "playPause" -> framePaused = !framePaused
-                "mute" -> frameMuted = !frameMuted
+                "playPause" -> { framePaused = !framePaused }
+                "mute" -> { frameMuted = !frameMuted }
             }
             return
         }
@@ -862,38 +858,42 @@ private fun WebEmbedPlayer(
                     "playPause" -> framePaused = !framePaused
                     "mute" -> frameMuted = !frameMuted
                 }
-                return@evaluateJavascript
-            }
-
-            val fallbackKey = when {
-                isSimuladores || isOkRu -> when (action) {
-                    "playPause" -> AndroidKeyEvent.KEYCODE_DPAD_CENTER
-                    "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
-                    "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
-                    "mute" -> AndroidKeyEvent.KEYCODE_M
-                    "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
-                    else -> return@evaluateJavascript
+            } else {
+                if (isSimuladores || isOkRu) {
+                    // The actual OK.ru video may live in a cross-origin iframe, so JS cannot
+                    // reach its <video>. Focus the iframe and try its native TV/media keys.
+                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
+                        when (action) {
+                            "playPause" -> {
+                                // One toggle event only: sending several alternatives can
+                                // immediately undo the first toggle on some embedded players.
+                                dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
+                                framePaused = !framePaused
+                            }
+                            "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
+                            "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
+                            "mute" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_M)
+                            "subtitle" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_CAPTIONS)
+                        }
+                    })
+                } else {
+                    // Send exactly one fallback event per user action. Sending media, Space,
+                    // Center and Enter in sequence can toggle play/pause several times and
+                    // leave Latino stuck in a rapid pause/play loop.
+                    val keyCode = when (action) {
+                        "playPause" -> AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                        "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
+                        "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
+                        "mute" -> AndroidKeyEvent.KEYCODE_M
+                        "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
+                        else -> return@evaluateJavascript
+                    }
+                    // Focus the embedded player first. This is especially important for Latino,
+                    // whose media controls often live in a cross-origin iframe.
+                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
+                        dispatchWebKey(webView, keyCode)
+                    })
                 }
-                else -> when (action) {
-                    // VideoAPI/Latino: use a single Space key for toggle; do not send
-                    // MEDIA_PLAY_PAUSE + Space + Center in sequence.
-                    "playPause" -> AndroidKeyEvent.KEYCODE_SPACE
-                    "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
-                    "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
-                    "mute" -> AndroidKeyEvent.KEYCODE_M
-                    "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
-                    else -> return@evaluateJavascript
-                }
-            }
-
-            // Focus the iframe first. Cross-origin policy still means this is best-effort:
-            // Android/WebView may not route the key into every embedded player.
-            webView.evaluateJavascript(
-                "Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});"
-            ) {
-                dispatchWebKey(webView, fallbackKey)
-                // The event is only a request to the embedded player. We deliberately
-                // don't toggle framePaused here because we cannot confirm that it worked.
             }
         }
     }
