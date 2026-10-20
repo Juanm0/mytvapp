@@ -21,7 +21,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -250,8 +249,6 @@ private fun NativePlayerScreen(
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
     var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
-    var seekFlash by remember { mutableStateOf<String?>(null) }
-    var seekFlashToken by remember { mutableStateOf(0) }
 
     val buttonCount = 4
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
@@ -297,20 +294,10 @@ private fun NativePlayerScreen(
         isPlaying = true
     }
 
-    fun flashSeek(label: String) {
-        seekFlash = label
-        seekFlashToken++
-    }
-    LaunchedEffect(seekFlashToken) {
-        if (seekFlashToken > 0) {
-            delay(650)
-            seekFlash = null
-        }
-    }
     fun seekBy(deltaMs: Long) {
         val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L)
-        exoPlayer.seekTo(target)
-        flashSeek(if (deltaMs < 0) "⏪  10 s" else "10 s  ⏩")
+        val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost(exoPlayer.duration) else target
+        exoPlayer.seekTo(boundedTarget)
         showControls = true
     }
 
@@ -343,7 +330,7 @@ private fun NativePlayerScreen(
             }
             isPlaying = exoPlayer.isPlaying
             val remaining = (duration - position).coerceAtLeast(0L)
-            showNextEpisode = nextEpisode != null && duration > 0L && remaining <= 20_000L && !nextEpisodeTriggered
+            showNextEpisode = nextEpisode != null && duration > 0L && remaining <= 30_000L && !nextEpisodeTriggered
             if (nextEpisode != null && duration > 0L && isPlaying && remaining <= 1_000L && !nextEpisodeTriggered) {
                 nextEpisodeTriggered = true
                 onPlayNextEpisode(nextEpisode.id)
@@ -427,15 +414,27 @@ private fun NativePlayerScreen(
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> { seekBy(-10_000); return@onPreviewKeyEvent true }
-                    AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> { seekBy(10_000); return@onPreviewKeyEvent true }
+                    AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
+                        val repeat = event.nativeKeyEvent.repeatCount
+                        val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                        seekBy(-jumpSeconds * 1_000L)
+                        return@onPreviewKeyEvent true
+                    }
+                    AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                        val repeat = event.nativeKeyEvent.repeatCount
+                        val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                        seekBy(jumpSeconds * 1_000L)
+                        return@onPreviewKeyEvent true
+                    }
                     AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer.play(); isPlaying = true; return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; return@onPreviewKeyEvent true }
                 }
+                val repeat = event.nativeKeyEvent.repeatCount
+                val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
                 when (event.key) {
-                    Key.DirectionLeft -> { seekBy(-10_000); true }
-                    Key.DirectionRight -> { seekBy(10_000); true }
+                    Key.DirectionLeft -> { seekBy(-jumpSeconds * 1_000L); true }
+                    Key.DirectionRight -> { seekBy(jumpSeconds * 1_000L); true }
                     Key.DirectionCenter, Key.Enter -> {
                         if (!showControls) { showControls = true; true } else false
                     }
@@ -467,14 +466,6 @@ private fun NativePlayerScreen(
             },
             update = { it.player = exoPlayer },
         )
-        val seekFlashAlpha by animateFloatAsState(if (seekFlash != null) 1f else 0f, label = "seekFlashAlpha")
-        if (seekFlashAlpha > 0f) {
-            Box(
-                Modifier.align(Alignment.Center).alpha(seekFlashAlpha)
-                    .background(Color(0xB0000000), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 28.dp, vertical = 16.dp)
-            ) { Text(seekFlash.orEmpty(), color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold) }
-        }
         if (showControls) {
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xB8000000), Color.Transparent, Color(0xE6000000)))))
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(horizontal = 38.dp, vertical = 26.dp)) {
@@ -519,7 +510,7 @@ private fun NativePlayerScreen(
             }
         }
         if (showNextEpisode && nextEpisode != null) {
-            val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 10)
+            val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 30)
             NextEpisodeOverlay(
                 episode = nextEpisode,
                 secondsLeft = secondsLeft,
@@ -726,7 +717,7 @@ private fun WebEmbedPlayer(
     val isVideoApi = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "videoapi.la" || it.endsWith(".videoapi.la") } == true }.getOrDefault(false) }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
-    val hasCustomHub = isFrameXtv || isVideoApi || isOkRu
+    val hasCustomHub = isFrameXtv || isVideoApi || isOkRu || isSimuladores
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
@@ -739,7 +730,6 @@ private fun WebEmbedPlayer(
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
-    var commandStatus by remember(url) { mutableStateOf<String?>(null) }
     val frameControlsFocus = remember(url) { FocusRequester() }
     val hiddenHubFocus = remember(url) { FocusRequester() }
 
@@ -776,21 +766,17 @@ private fun WebEmbedPlayer(
             }
         }
     }
-    LaunchedEffect(commandStatus) {
-        if (commandStatus != null) {
-            delay(2_500)
-            commandStatus = null
-        }
-    }
-
-    val showNextEpisodeCard = nextEpisode != null && videoEnded && !nextEpisodeDismissed && !nextEpisodeTriggered
+    val frameRemainingSeconds = (frameDuration - frameCurrentTime).coerceAtLeast(0.0)
+    // FrameXTV emits timeupdate events, so its mini-hub can start 30 seconds before the end.
+    // Latino/VideoAPI and OK.ru keep event-based end detection instead of guessing duration.
+    val showFrameCountdown = isFrameXtv && frameDuration > 0.0 && frameRemainingSeconds <= 30.0
+    val showNextEpisodeCard = nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
 
     // All web commands pass through this function so the UI only reflects commands that
     // were handled in an accessible HTML5 player. Cross-origin embeds may still reject them.
     fun runWebCommand(action: String, subtitleIndex: Int, seconds: Int) {
         val webView = webViewRef
         if (webView == null) {
-            commandStatus = "El reproductor todavía se está cargando."
             return
         }
         frameInteraction++
@@ -805,9 +791,8 @@ private fun WebEmbedPlayer(
             }
             webView.evaluateJavascript(js, null)
             when (action) {
-                "playPause" -> { framePaused = !framePaused; commandStatus = "Orden enviada al reproductor." }
-                "mute" -> { frameMuted = !frameMuted; commandStatus = "Orden de audio enviada." }
-                "seekBack", "seekForward" -> commandStatus = "Salto solicitado."
+                "playPause" -> { framePaused = !framePaused }
+                "mute" -> { frameMuted = !frameMuted }
             }
             return
         }
@@ -818,14 +803,6 @@ private fun WebEmbedPlayer(
                 when (action) {
                     "playPause" -> framePaused = !framePaused
                     "mute" -> frameMuted = !frameMuted
-                }
-                commandStatus = when (action) {
-                    "playPause" -> if (framePaused) "Pausa enviada." else "Reproducción enviada."
-                    "mute" -> if (frameMuted) "Silencio activado." else "Sonido activado."
-                    "seekBack" -> "Retroceso solicitado."
-                    "seekForward" -> "Adelanto solicitado."
-                    "subtitle" -> "Subtítulos solicitados."
-                    else -> null
                 }
             } else {
                 val keyCode = when (action) {
@@ -847,7 +824,6 @@ private fun WebEmbedPlayer(
                     "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
                     "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
                 }
-                commandStatus = "El reproductor no confirmó el control directo; probé teclas alternativas."
             }
         }
     }
@@ -1064,6 +1040,9 @@ private fun WebEmbedPlayer(
                                     val safeDuration = duration.coerceAtLeast(0.0)
                                     frameCurrentTime = safeCurrent
                                     frameDuration = safeDuration
+                                    if (isFrameXtv && safeDuration > 0.0 && safeDuration - safeCurrent <= 1.0) {
+                                        videoEnded = true
+                                    }
                                     val savePosition = if (safeDuration > 0 && safeCurrent >= safeDuration - 15.0) 0L else safeCurrent.toLong()
                                     if ((savePosition == 0L && lastPersistedPosition != 0L) ||
                                         lastPersistedPosition < 0L ||
@@ -1114,7 +1093,7 @@ private fun WebEmbedPlayer(
         if (showNextEpisodeCard && nextEpisode != null) {
             NextEpisodeOverlay(
                 episode = nextEpisode,
-                secondsLeft = 0,
+                secondsLeft = if (isFrameXtv && frameDuration > 0.0) kotlin.math.ceil(frameRemainingSeconds).toInt().coerceIn(0, 30) else 0,
                 onPlayNow = {
                     if (!nextEpisodeTriggered) {
                         nextEpisodeTriggered = true
@@ -1143,7 +1122,14 @@ private fun WebEmbedPlayer(
                             Box(Modifier.fillMaxWidth(if (frameDuration > 0) (frameCurrentTime / frameDuration).toFloat().coerceIn(0f, 1f) else 0f).height(4.dp).background(Color(0xFF65DCE8), RoundedCornerShape(4.dp)))
                         }
                     }
-                } else Text(if (isOkRu) "OK.RU · controles" else "LATINO · controles", color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                } else Text(
+                    when {
+                        isOkRu -> "OK.RU · controles"
+                        isSimuladores -> "SIMULADORES · controles"
+                        else -> "LATINO · controles"
+                    },
+                    color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold
+                )
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = {
@@ -1188,7 +1174,6 @@ private fun WebEmbedPlayer(
                         }) { Text(if (saveSubtitleForContent) "✓ Guardar pista" else "□ Guardar pista") }
                     }
                 }
-                if (commandStatus != null) Text(commandStatus!!, color = Color(0xFFCFD8DE), fontSize = 11.sp)
             }
         }
         if (progress < 100 && pageError == null) {
