@@ -1,14 +1,17 @@
-# XuperQuilmesTV — Los Simuladores por OK.ru y siguiente episodio
+# XuperQuilmesTV — Los Simuladores, foco y mini-hub
 
-Reemplazá estos tres archivos en el proyecto Android, conservando las rutas:
-- `app/src/main/java/com/quilmes/xuper/MainActivity.kt`
+## Archivos
+Reemplazá estos archivos en el proyecto Android, conservando las rutas:
 - `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`
+- `app/src/main/java/com/quilmes/xuper/MainActivity.kt`
 
-Cambios:
-- Los 24 IDs aportados para Los Simuladores se usan como `https://ok.ru/videoembed/ID`.
-- La ficha mantiene el selector de temporada y episodio.
-- Para Los Simuladores se calcula el siguiente episodio con el catálogo local de IDs, sin depender de TMDb para resolver el video siguiente.
-- El mini-hub ya no se dispara por una estimación del tiempo restante: espera una señal de finalización del video accesible en la página o un evento de finalización enviado por el reproductor. Si el proveedor mantiene el video dentro de un iframe de otro origen y no comunica el final, la página puede no exponer ese evento.
+## Cambios
+- Los Simuladores carga temporadas, nombres, sinopsis, imágenes y duración de episodios desde TMDb (`tmdb-tv-332`). Los IDs de OK.ru siguen siendo los usados para reproducir cada episodio.
+- Si TMDb no devuelve temporadas/episodios, conserva un fallback básico con los números de capítulo.
+- Al ocultar el hub de Latino/FrameXTV/OK.ru se intenta transferir el foco a un elemento invisible y desenfocar el iframe para evitar que quede el borde amarillo.
+- El hub también aparece en OK.ru e intenta usar pausa/seek mediante el elemento de vídeo accesible o teclas estándar. Al ser un iframe de otro origen, el proveedor puede bloquear el control externo.
+- El mini-hub ya no usa un contador estimado para declarar que terminó el video. Se basa en el evento `ended` del vídeo accesible o mensajes del reproductor; si Latino no emite una señal de finalización, todavía puede no detectarlo.
 
-No se pudo ejecutar una compilación Android en este entorno; probar en Android Studio. La reproducción de OK.ru y la detección del evento final quedan pendientes de prueba real en el dispositivo.
+## Importante
+No pude compilar en este entorno porque no hay ejecutable de Gradle disponible. Probar en el dispositivo/Android Studio. No se garantiza que el foco invisible elimine el contorno que el propio reproductor de terceros dibuja dentro de su iframe.

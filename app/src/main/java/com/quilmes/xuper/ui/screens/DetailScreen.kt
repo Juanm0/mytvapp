@@ -61,11 +61,14 @@ fun DetailScreen(
 
     LaunchedEffect(title.id) {
         if (isLosSimuladores) {
-            seasons = listOf(
+            // TMDb aporta pósters, nombres y sinopsis; los IDs de OK.ru solo se usan al reproducir.
+            loadingSeasons = true
+            val loaded = catalogService.loadSeasons("tmdb-tv-332").filter { it.number > 0 }.sortedBy { it.number }
+            seasons = if (loaded.isNotEmpty()) loaded else listOf(
                 TmdbSeason(1, "Temporada 1", 13, "13 episodios", ""),
                 TmdbSeason(2, "Temporada 2", 11, "11 episodios", ""),
             )
-            selectedSeason = 1
+            selectedSeason = seasons.firstOrNull { it.number == 1 }?.number ?: seasons.firstOrNull()?.number ?: 1
             selectedEpisode = 1
             loadingSeasons = false
         } else if (hasTmdbSeasons) {
@@ -83,9 +86,13 @@ fun DetailScreen(
     LaunchedEffect(title.id, selectedSeason) {
         val season = selectedSeason
         if (isLosSimuladores && season != null) {
-            val count = if (season == 1) 13 else 11
-            episodes = (1..count).map { TmdbEpisode(it, "Episodio $it", "", "", null) }
-            selectedEpisode = 1
+            loadingEpisodes = true
+            val loaded = catalogService.loadEpisodes("tmdb-tv-332", season).sortedBy { it.number }
+            val expectedCount = if (season == 1) 13 else 11
+            episodes = if (loaded.isNotEmpty()) loaded else (1..expectedCount).map {
+                TmdbEpisode(it, "Episodio $it", "", "", null)
+            }
+            selectedEpisode = episodes.firstOrNull()?.number
             loadingEpisodes = false
         } else if (hasTmdbSeasons && season != null) {
             loadingEpisodes = true

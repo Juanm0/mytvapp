@@ -750,8 +750,9 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false) }
-    // El hub solo se dibuja sobre FrameXTV y VideoAPI. Los Simuladores usa su propio player.
-    val hasCustomHub = isFrameXtv || isVideoApi
+    val isOkRu = remember(url) { runCatching { URI(url).host.equals("ok.ru", true) }.getOrDefault(false) }
+    // Hub también para OK.ru: sus controles pueden depender de teclas estándar del reproductor.
+    val hasCustomHub = isFrameXtv || isVideoApi || isOkRu
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
@@ -768,19 +769,10 @@ private fun WebEmbedPlayer(
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
+    val hiddenHubFocus = remember(url) { FocusRequester() }
 
-    // VideoAPI no expone en su contrato público el tiempo actual: estimamos el avance
-    // mientras la pantalla está reproduciendo y guardamos start_at para la próxima apertura.
-    // Es aproximado: no detecta pausas hechas dentro del reproductor nativo del proveedor.
-    LaunchedEffect(url, isVideoApi, framePaused) {
-        if (isVideoApi && !framePaused) {
-            while (true) {
-                delay(1_000)
-                frameCurrentTime += 1.0
-                playbackPrefs.edit().putLong(positionPreferenceKey, frameCurrentTime.toLong()).apply()
-            }
-        }
-    }
+    // No inventamos el progreso del reproductor Latino con un contador: el mini-hub
+    // depende de una señal real de finalización (evento HTML5 o mensaje del proveedor).
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
@@ -795,12 +787,12 @@ private fun WebEmbedPlayer(
             delay(180)
             runCatching { frameControlsFocus.requestFocus() }
         } else if (hasCustomHub) {
-            // Al ocultar el hub, quitar el foco del iframe exterior y devolverlo al WebView.
-            // No llamamos focus() sobre el reproductor: era la causa más probable del borde persistente.
-            delay(80)
+            // Chapuza deliberada para Android TV: mover el foco a un destino invisible
+            // fuera del reproductor, además de desenfocar el iframe accesible.
+            delay(100)
             runCatching {
                 webViewRef?.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.blur()}catch(e){}}); if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();", null)
-                webViewRef?.requestFocus()
+                hiddenHubFocus.requestFocus()
             }
         } else {
             Unit
@@ -1135,7 +1127,7 @@ private fun WebEmbedPlayer(
                         }
                     }
                 } else {
-                    Text("LATINO · controles", color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(if (isOkRu) "OK.RU · controles" else "LATINO · controles", color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = {
@@ -1145,6 +1137,7 @@ private fun WebEmbedPlayer(
                             webViewRef?.evaluateJavascript(videoApiCommandScript("playPause", frameSubtitleIndex, 0)) { result ->
                                 if (result != "true" && result != "\"true\"") {
                                     dispatchWebKey(webViewRef, AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                                    if (isOkRu) dispatchWebKey(webViewRef, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
                                 }
                             }
                         }
@@ -1226,6 +1219,12 @@ private fun WebEmbedPlayer(
                     Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }
                 }
             }
+        }
+        if (hasCustomHub && !frameControlsVisible) {
+            Box(
+                Modifier.align(Alignment.TopStart).width(1.dp).height(1.dp)
+                    .alpha(0f).focusRequester(hiddenHubFocus).focusable()
+            )
         }
         // Se quitó la banda permanente de ayuda: tapaba parte del contenido web.
     }
