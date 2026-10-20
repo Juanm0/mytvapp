@@ -666,7 +666,19 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
       (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};
       f.addEventListener('load',function(){
         setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex})},2200);
-        if($serverIndex>0) setTimeout(function(){window.xuperFrameCommand('setServer',{index:$serverIndex});window.xuperFrameCommand('changeServer',{index:$serverIndex});},2600);
+        if($serverIndex>0) setTimeout(function(){
+          var payloads=[
+            {action:'setServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {action:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {action:'switchServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {action:'selectServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {type:'setServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {type:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {event:'changeServer',index:$serverIndex,serverIndex:$serverIndex,server:$serverIndex},
+            {action:'nextServer'}
+          ];
+          payloads.forEach(function(p){try{f.contentWindow.postMessage(p,'*')}catch(e){}});
+        },2600);
         if($resumePositionSeconds>5) setTimeout(function(){window.xuperFrameCommand('seekBy',{seconds:$resumePositionSeconds})},3200);
       });
       window.addEventListener('message',function(e){var d=e.data;if(d&&typeof d==='object'&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
@@ -1130,11 +1142,16 @@ private fun WebEmbedPlayer(
                             frameInteraction++
                         }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
                         Button(onClick = {
+                            // Al cambiar de fuente, los índices de subtítulos anteriores ya no son fiables.
                             frameServerIndex = (frameServerIndex + 1) % 8
-                            playbackPrefs.edit().putInt(serverPreferenceKey, frameServerIndex).apply()
-                            // FrameXTV's server-switch message is best-effort: unsupported versions may ignore it.
+                            frameSubtitleIndex = 0
+                            saveSubtitleForContent = false
+                            playbackPrefs.edit()
+                                .putInt(serverPreferenceKey, frameServerIndex)
+                                .remove(subtitlePreferenceKey)
+                                .apply()
                             webViewRef?.evaluateJavascript(
-                                "window.xuperFrameCommand('setServer',{index:$frameServerIndex});window.xuperFrameCommand('changeServer',{index:$frameServerIndex});",
+                                "(function(){var f=document.getElementById('framextv-player');if(!f)return;var n=$frameServerIndex;var ps=[{action:'setServer',index:n,serverIndex:n,server:n},{action:'changeServer',index:n,serverIndex:n,server:n},{action:'switchServer',index:n,serverIndex:n,server:n},{action:'selectServer',index:n,serverIndex:n,server:n},{type:'setServer',index:n,serverIndex:n,server:n},{type:'changeServer',index:n,serverIndex:n,server:n},{event:'changeServer',index:n,serverIndex:n,server:n},{action:'nextServer'}];ps.forEach(function(p){try{f.contentWindow.postMessage(p,'*')}catch(e){}})})();",
                                 null
                             )
                             frameInteraction++
