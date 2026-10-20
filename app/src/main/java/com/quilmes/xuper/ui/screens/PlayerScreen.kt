@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.BackHandler
@@ -660,7 +661,7 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
     if (!Regex("(?:[?&])muted=").containsMatchIn(embedUrl)) embedUrl += "&muted=0"
     if (!Regex("(?:[?&])controls=").containsMatchIn(embedUrl)) embedUrl += "&controls=1"
     val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;")
-    return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
+    return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0!important;padding:0!important;width:100%!important;height:100%!important;overflow:hidden!important;background:#000!important;border:0!important;outline:0!important;box-shadow:none!important}body:focus,iframe:focus{outline:0!important;border:0!important;box-shadow:none!important}iframe{position:absolute;inset:0;width:100%!important;height:100%!important;border:0!important;outline:0!important;box-shadow:none!important;display:block;background:#000}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
       (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};
       f.addEventListener('load',function(){
         setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex})},2200);

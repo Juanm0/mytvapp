@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavType
@@ -342,6 +343,32 @@ class MainActivity : ComponentActivity() {
                             String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
                         }.getOrDefault("")
                         if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
+                            // Registra también las reproducciones Latino/embebidas en la misma biblioteca.
+                            LaunchedEffect(contentKey, streamUrl) {
+                                val prefs = getSharedPreferences("xuper-library", MODE_PRIVATE)
+                                val stableId = contentKey.takeIf { it.isNotBlank() } ?: "external:${streamUrl.hashCode()}"
+                                val recent = prefs.getString("recent", "").orEmpty().split("|")
+                                    .filter { it.isNotBlank() && it != stableId }.toMutableList()
+                                recent.add(stableId)
+                                val isEpisode = Regex("^tmdb-tv-\\d+\\|s\\d+\\|e\\d+$").matches(contentKey)
+                                val recentJson = org.json.JSONObject().apply {
+                                    put("id", stableId); put("name", streamName); put("description", "")
+                                    put("posterUrl", ""); put("backdropUrl", "")
+                                    put("streamUrl", streamUrl); put("isLive", false)
+                                    put("year", ""); put("rating", "")
+                                    put("contentKind", if (isEpisode) ContentKind.SERIES.name else ContentKind.OTHER_VOD.name)
+                                }
+                                val items = runCatching { org.json.JSONArray(prefs.getString("recent_items", "[]")) }.getOrDefault(org.json.JSONArray())
+                                val rebuilt = org.json.JSONArray().apply {
+                                    put(recentJson)
+                                    for (i in 0 until items.length()) {
+                                        val obj = items.optJSONObject(i) ?: continue
+                                        if (obj.optString("id") != stableId && length() < 29) put(obj)
+                                    }
+                                }
+                                prefs.edit().putString("recent", recent.takeLast(30).joinToString("|"))
+                                    .putString("recent_items", rebuilt.toString()).apply()
+                            }
                             var nextExternalEpisode by remember(contentKey) { mutableStateOf<Title?>(null) }
                             LaunchedEffect(contentKey, streamUrl) {
                                 nextExternalEpisode = null
