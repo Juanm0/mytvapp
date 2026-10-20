@@ -848,8 +848,8 @@ private fun WebEmbedPlayer(
                     "mute" -> frameMuted = !frameMuted
                 }
             } else {
-                if (isSimuladores) {
-                    // The actual OK.ru video lives in a cross-origin iframe, so JS cannot
+                if (isSimuladores || isOkRu) {
+                    // The actual OK.ru video may live in a cross-origin iframe, so JS cannot
                     // reach its <video>. Focus the iframe and try its native TV/media keys.
                     webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
                         when (action) {
@@ -866,6 +866,9 @@ private fun WebEmbedPlayer(
                         }
                     })
                 } else {
+                    // Send exactly one fallback event per user action. Sending media, Space,
+                    // Center and Enter in sequence can toggle play/pause several times and
+                    // leave Latino stuck in a rapid pause/play loop.
                     val keyCode = when (action) {
                         "playPause" -> AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
                         "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
@@ -875,12 +878,6 @@ private fun WebEmbedPlayer(
                         else -> return@evaluateJavascript
                     }
                     dispatchWebKey(webView, keyCode)
-                    if (action == "playPause") {
-                        // Some Latino/VideoAPI embeds listen to Space/Enter rather than media keys.
-                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_SPACE)
-                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
-                        dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_ENTER)
-                    }
                 }
             }
         }
@@ -1093,7 +1090,7 @@ private fun WebEmbedPlayer(
                               }catch(e){}
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
-                            if (isSimuladores) {
+                            if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
                             if (isVideoApi) view?.evaluateJavascript("""(function(){
@@ -1176,7 +1173,7 @@ private fun WebEmbedPlayer(
                         loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (isVideoApi) {
                         loadUrl(videoApiEmbedUrl(url, savedResumePosition))
-                    } else if (isSimuladores) loadUrl(simuladoresAutoplayUrl(url)) else loadUrl(url)
+                    } else if (isSimuladores || isOkRu) loadUrl(simuladoresAutoplayUrl(url)) else loadUrl(url)
                     requestFocus()
                 }
                 webViewRef = webView
@@ -1191,7 +1188,7 @@ private fun WebEmbedPlayer(
                         webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (isVideoApi) {
                         webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
-                    } else if (isSimuladores) webView.loadUrl(simuladoresAutoplayUrl(url)) else webView.loadUrl(url)
+                    } else if (isSimuladores || isOkRu) webView.loadUrl(simuladoresAutoplayUrl(url)) else webView.loadUrl(url)
                 }
             },
             onRelease = { container ->
