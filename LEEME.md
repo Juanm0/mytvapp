@@ -1,13 +1,15 @@
-# XuperQuilmesTV — prueba 3 de cambio de servidor
+# XuperQuilmesTV — prueba 4: persistencia del servidor
 
 Reemplazar únicamente:
 - `app/src/main/java/com/quilmes/xuper/MainActivity.kt`
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`
 
-## Qué cambia
-- El botón `Pista servidor` ahora cicla servidores 1 a 5.
-- En cada cambio reinicia la selección de subtítulos y elimina la preferencia guardada de subtítulos para ese contenido.
-- Además de enviar mensajes `postMessage` alternativos, recarga el iframe probando parámetros URL `server`, `source` y `line`.
+## Cambios
+- El índice elegido de servidor ahora se aplica también al abrir/recrear el WebView, no solo al tocar el botón.
+- El botón `Guardar servidor` es independiente de `Guardar pista` (subtítulos).
+- `Guardar servidor` guarda la selección por contenido; al desactivarlo, elimina la preferencia guardada.
+- Al cambiar servidor, se reinicia el índice de subtítulos y se borra su preferencia, porque las pistas pueden ser distintas.
+- La etiqueta muestra el índice que se está probando (`Pista servidor · 2`, etc.), acorde al mensaje `Connecting to 2` que se observó.
 
-## Importante
-Es una prueba exploratoria, no una integración confirmada: no hay una especificación pública verificada de FrameXTV que confirme esos nombres de parámetros o mensajes. El servidor puede ignorarlos. Si el video vuelve a cargar pero el servidor no cambia, necesitaremos conocer la URL real de los servidores o inspeccionar el selector del sitio. No se ejecutó Gradle/Android build en este entorno.
+## Limitación
+Los parámetros `server`, `source` y `line` siguen siendo intentos exploratorios, no una API confirmada de FrameXTV. Esta versión corrige el guardado/aplicación del índice, pero no puede garantizar que el sitio acepte ese índice como servidor real. No se ejecutó compilación Gradle en este entorno.

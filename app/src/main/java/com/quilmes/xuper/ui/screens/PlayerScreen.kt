@@ -773,6 +773,7 @@ private fun WebEmbedPlayer(
     // No conocemos los nombres reales: se recorren índices numerados y se vuelve al 1 tras el 32.
     var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
     var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
+    var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
@@ -1054,7 +1055,7 @@ private fun WebEmbedPlayer(
                         }, "XuperBridge")
                     }
                     if (isFrameXtv) {
-                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
+                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(frameXtvServerUrl(url, frameServerIndex), savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         // En VideoAPI se activan los controles/subtítulos documentados y se carga su página real,
                         // sin simular un origen ni crear una capa externa que no puede controlar el iframe.
@@ -1071,7 +1072,7 @@ private fun WebEmbedPlayer(
                 if (webView != null && webView.tag != url) {
                     webView.tag = url
                     if (isFrameXtv) {
-                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
+                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(frameXtvServerUrl(url, frameServerIndex), savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else webView.loadUrl(url)
@@ -1166,8 +1167,11 @@ private fun WebEmbedPlayer(
                             frameSubtitleIndex = 0
                             saveSubtitleForContent = false
                             playbackPrefs.edit()
-                                .putInt(serverPreferenceKey, frameServerIndex)
-                                .remove(subtitlePreferenceKey)
+                                .apply {
+                                    if (saveServerForContent) putInt(serverPreferenceKey, frameServerIndex)
+                                    else remove(serverPreferenceKey)
+                                    remove(subtitlePreferenceKey)
+                                }
                                 .apply()
                             val candidateUrl = frameXtvServerUrl(url, frameServerIndex)
                             webViewRef?.loadDataWithBaseURL(
@@ -1176,7 +1180,16 @@ private fun WebEmbedPlayer(
                                 "text/html", "UTF-8", null
                             )
                             frameInteraction++
-                        }) { Text(if (frameServerIndex == 0) "Pista servidor · Auto" else "Pista servidor · ${frameServerIndex + 1}") }
+                        }) { Text(if (frameServerIndex == 0) "Pista servidor · Auto" else "Pista servidor · $frameServerIndex") }
+                        Button(onClick = {
+                            saveServerForContent = !saveServerForContent
+                            playbackPrefs.edit().apply {
+                                putBoolean("web-save-server:$stableContentKey", saveServerForContent)
+                                if (saveServerForContent) putInt(serverPreferenceKey, frameServerIndex)
+                                else remove(serverPreferenceKey)
+                            }.apply()
+                            frameInteraction++
+                        }) { Text(if (saveServerForContent) "✓ Guardar servidor" else "□ Guardar servidor") }
                         Button(onClick = {
                             saveSubtitleForContent = !saveSubtitleForContent
                             if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, frameSubtitleIndex).apply()
