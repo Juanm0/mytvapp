@@ -104,8 +104,11 @@ private class HubAwareWebView(
     context: Context,
     private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
 ) : WebView(context) {
+    /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
+    fun dispatchInjectedKeyEvent(event: AndroidKeyEvent): Boolean = super.dispatchKeyEvent(event)
+
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        if (event.action == AndroidKeyEvent.ACTION_DOWN && onRemoteKey(event)) return true
+        if ((event.action == AndroidKeyEvent.ACTION_DOWN || event.action == AndroidKeyEvent.ACTION_UP) && onRemoteKey(event)) return true
         return super.dispatchKeyEvent(event)
     }
 }
@@ -637,9 +640,17 @@ private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, su
 private fun dispatchWebKey(webView: WebView?, keyCode: Int) {
     if (webView == null) return
     runCatching {
-        webView.requestFocus()
-        webView.dispatchKeyEvent(AndroidKeyEvent(AndroidKeyEvent.ACTION_DOWN, keyCode))
-        webView.dispatchKeyEvent(AndroidKeyEvent(AndroidKeyEvent.ACTION_UP, keyCode))
+        val down = AndroidKeyEvent(AndroidKeyEvent.ACTION_DOWN, keyCode)
+        val up = AndroidKeyEvent(AndroidKeyEvent.ACTION_UP, keyCode)
+        if (webView is HubAwareWebView) {
+            // Do not call requestFocus(): OK.ru/Latino may need the iframe's current focus.
+            // Bypass the interceptor to avoid recursively re-running the same fallback command.
+            webView.dispatchInjectedKeyEvent(down)
+            webView.dispatchInjectedKeyEvent(up)
+        } else {
+            webView.dispatchKeyEvent(down)
+            webView.dispatchKeyEvent(up)
+        }
     }
 }
 
@@ -745,6 +756,8 @@ private fun WebEmbedPlayer(
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
+    // A TV remote often sends only one key-down on long press. Keep seeking while held.
+    var heldSeekAction by remember(url) { mutableStateOf<String?>(null) }
     val frameControlsFocus = remember(url) { FocusRequester() }
     val hiddenHubFocus = remember(url) { FocusRequester() }
     val nextEpisodePlayFocus = remember(url, nextEpisode?.id) { FocusRequester() }
@@ -877,10 +890,28 @@ private fun WebEmbedPlayer(
                         "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
                         else -> return@evaluateJavascript
                     }
-                    dispatchWebKey(webView, keyCode)
+                    // Focus the embedded player first. This is especially important for Latino,
+                    // whose media controls often live in a cross-origin iframe.
+                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
+                        dispatchWebKey(webView, keyCode)
+                    })
                 }
             }
         }
+    }
+
+    // Implement long-press seeking ourselves instead of relying on repeatCount, which many
+    // Android TV remotes never increment. Each repeat is a small real seek; release stops it.
+    LaunchedEffect(heldSeekAction) {
+        val action = heldSeekAction ?: return@LaunchedEffect
+        delay(450L)
+        var elapsedMs = 0L
+        while (heldSeekAction == action && elapsedMs < 15_000L) {
+            runWebCommand(action, frameSubtitleIndex, 10)
+            delay(300L)
+            elapsedMs += 300L
+        }
+        if (heldSeekAction == action) heldSeekAction = null
     }
 
     BackHandler(enabled = true) {
@@ -897,14 +928,49 @@ private fun WebEmbedPlayer(
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
-        if (!hasCustomHub || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-        val keyCode = event.nativeKeyEvent.keyCode
+        if (!hasCustomHub) return@onPreviewKeyEvent false
+        val native = event.nativeKeyEvent
+        val keyCode = native.keyCode
+
+        // Stop the repeat loop on key-up, including remotes that send no repeated key-downs.
+        if (event.type == KeyEventType.KeyUp) {
+            val releasedAction = when (keyCode) {
+                AndroidKeyEvent.KEYCODE_MEDIA_REWIND, AndroidKeyEvent.KEYCODE_DPAD_LEFT -> "seekBack"
+                AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD, AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> "seekForward"
+                else -> null
+            }
+            if (releasedAction != null && heldSeekAction == releasedAction) {
+                heldSeekAction = null
+                return@onPreviewKeyEvent true
+            }
+            return@onPreviewKeyEvent false
+        }
+        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+
         // Do not steal arrows/OK from the mini-hub buttons once its card is visible.
         if (showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
                 AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
                 AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
                 AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
             )) return@onPreviewKeyEvent false
+
+        val seekAction = when (keyCode) {
+            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> "seekBack"
+            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "seekForward"
+            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) "seekBack" else null
+            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) "seekForward" else null
+            else -> null
+        }
+        if (seekAction != null) {
+            // Only issue the initial seek on the first key-down. LaunchedEffect repeats it
+            // until key-up, so devices with repeatCount=0 still fast-seek reliably.
+            if (native.repeatCount == 0 && heldSeekAction == null) {
+                heldSeekAction = seekAction
+                runWebCommand(seekAction, frameSubtitleIndex, 10)
+            }
+            return@onPreviewKeyEvent true
+        }
+
         when (keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
                 if (!frameControlsVisible) frameControlsVisible = true
@@ -916,28 +982,6 @@ private fun WebEmbedPlayer(
                 runWebCommand("playPause", 0, 0)
                 true
             }
-            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
-                val repeat = event.nativeKeyEvent.repeatCount
-                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
-                runWebCommand("seekBack", frameSubtitleIndex, jump)
-                true
-            }
-            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                val repeat = event.nativeKeyEvent.repeatCount
-                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
-                runWebCommand("seekForward", frameSubtitleIndex, jump)
-                true
-            }
-            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) {
-                val repeat = event.nativeKeyEvent.repeatCount
-                runWebCommand("seekBack", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
-                true
-            } else false
-            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) {
-                val repeat = event.nativeKeyEvent.repeatCount
-                runWebCommand("seekForward", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
-                true
-            } else false
             else -> {
                 if (frameControlsVisible) frameInteraction++
                 false
@@ -953,47 +997,47 @@ private fun WebEmbedPlayer(
                         false
                     } else {
                         val keyCode = keyEvent.keyCode
-                        val overlayOwnsArrows = showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
-                            AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                            AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                            AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
-                        )
-                        if (overlayOwnsArrows) {
+                        val seekAction = when (keyCode) {
+                            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> "seekBack"
+                            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "seekForward"
+                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) "seekBack" else null
+                            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) "seekForward" else null
+                            else -> null
+                        }
+                        if (keyEvent.action == AndroidKeyEvent.ACTION_UP) {
+                            if (seekAction != null && heldSeekAction == seekAction) {
+                                heldSeekAction = null
+                                true
+                            } else false
+                        } else if (keyEvent.action != AndroidKeyEvent.ACTION_DOWN) {
                             false
-                        } else when (keyCode) {
-                            AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
-                                if (!frameControlsVisible) frameControlsVisible = true
-                                runCatching { frameControlsFocus.requestFocus() }
-                                frameInteraction++
+                        } else {
+                            val overlayOwnsArrows = showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
+                                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
+                            )
+                            if (overlayOwnsArrows) {
+                                false
+                            } else if (seekAction != null) {
+                                if (keyEvent.repeatCount == 0 && heldSeekAction == null) {
+                                    heldSeekAction = seekAction
+                                    runWebCommand(seekAction, frameSubtitleIndex, 10)
+                                }
                                 true
+                            } else when (keyCode) {
+                                AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                                    if (!frameControlsVisible) frameControlsVisible = true
+                                    runCatching { frameControlsFocus.requestFocus() }
+                                    frameInteraction++
+                                    true
+                                }
+                                AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                                    runWebCommand("playPause", frameSubtitleIndex, 0)
+                                    true
+                                }
+                                else -> false
                             }
-                            AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                                runWebCommand("playPause", frameSubtitleIndex, 0)
-                                true
-                            }
-                            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
-                                val repeat = keyEvent.repeatCount
-                                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
-                                runWebCommand("seekBack", frameSubtitleIndex, jump)
-                                true
-                            }
-                            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                                val repeat = keyEvent.repeatCount
-                                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
-                                runWebCommand("seekForward", frameSubtitleIndex, jump)
-                                true
-                            }
-                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) {
-                                val repeat = keyEvent.repeatCount
-                                runWebCommand("seekBack", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
-                                true
-                            } else false
-                            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) {
-                                val repeat = keyEvent.repeatCount
-                                runWebCommand("seekForward", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
-                                true
-                            } else false
-                            else -> false
                         }
                     }
                 }.apply {
