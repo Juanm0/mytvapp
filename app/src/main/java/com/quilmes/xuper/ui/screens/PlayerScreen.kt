@@ -666,7 +666,12 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     }
 
     BackHandler(enabled = true) {
-        if (webViewRef?.canGoBack() == true) webViewRef?.goBack() else onExit()
+        when {
+            // Atrás con el hub abierto solo lo cierra; recién con el hub cerrado sale del reproductor.
+            hasCustomHub && frameControlsVisible -> frameControlsVisible = false
+            webViewRef?.canGoBack() == true -> webViewRef?.goBack()
+            else -> onExit()
+        }
     }
 
     Box(
@@ -690,13 +695,15 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 val webView = HubAwareWebView(viewContext) {
                     if (hasCustomHub) {
                         if (!frameControlsVisible) {
+                            // Los botones todavía no están compuestos: pedirles foco acá tiraba
+                            // IllegalStateException (FocusRequester not initialized) y cerraba la app.
+                            // El LaunchedEffect(frameControlsVisible) les da foco cuando ya existen.
                             frameControlsVisible = true
-                            frameInteraction++
                         } else {
-                            frameInteraction++
+                            // Hub ya visible pero con el foco en el WebView: se lo devolvemos al hub.
+                            runCatching { frameControlsFocus.requestFocus() }
                         }
-                        // Incluso si el hub ya está abierto, recuperar foco evita que DPAD abajo cambie volumen.
-                        frameControlsFocus.requestFocus()
+                        frameInteraction++
                         true
                     } else false
                 }.apply {
