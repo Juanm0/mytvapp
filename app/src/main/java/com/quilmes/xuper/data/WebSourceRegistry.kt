@@ -12,6 +12,19 @@ object WebSourceRegistry {
         return "https://framextv.xyz/embed/${title.groupValues[1]}?autoplay=1&muted=0"
     }
 
+
+    /** Segundo reproductor: VideoApp, el host que LaMovie devuelve en player_url. */
+    fun videoAppUrl(catalogId: String): String? {
+        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        if (episode != null) {
+            val (id, season, number) = episode.destructured
+            return "https://videoapp.mov/e/tv/$id/$season/$number"
+        }
+        val title = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(catalogId) ?: return null
+        val type = if (catalogId.startsWith("tmdb-tv-")) "tv" else "movie"
+        return "https://videoapp.mov/e/$type/${title.groupValues[1]}"
+    }
+
     /** PLAYLATINSRC requires IMDb IDs; callers must resolve the ID through TMDB first. */
     fun playLatinsrcUrl(imdbId: String, catalogId: String, language: String = "castellano"): String? {
         if (!Regex("^tt\\d{5,12}$").matches(imdbId)) return null

@@ -106,7 +106,7 @@ fun PlayerScreen(
 ) {
     // Los embeds FrameXTV son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://playlatinsrc.co/")) {
+    if (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://playlatinsrc.co/") || streamUrl.startsWith("https://videoapp.mov/e/")) {
         WebEmbedPlayer(url = streamUrl, onExit = onExit)
         return
     }

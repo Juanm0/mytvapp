@@ -304,9 +304,16 @@ class MainActivity : ComponentActivity() {
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { requestedId ->
+                                val useVideoApp = requestedId.startsWith("videoapp::")
                                 val usePlayLatinsrc = requestedId.startsWith("playlatinsrc::")
-                                val playableId = requestedId.removePrefix("playlatinsrc::")
-                                if (usePlayLatinsrc) {
+                                val playableId = requestedId.removePrefix("videoapp::").removePrefix("playlatinsrc::")
+                                if (useVideoApp) {
+                                    val url = WebSourceRegistry.videoAppUrl(playableId)
+                                    if (url != null) {
+                                        val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                        navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
+                                    }
+                                } else if (usePlayLatinsrc) {
                                     lifecycleScope.launch {
                                         val imdbId = TmdbExternalIdResolver(cacheDir).resolve(playableId)
                                         val url = imdbId?.let { WebSourceRegistry.playLatinsrcUrl(it, playableId, "castellano") }
