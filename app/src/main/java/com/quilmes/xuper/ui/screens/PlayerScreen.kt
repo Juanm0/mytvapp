@@ -102,13 +102,10 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
 /** Keeps D-pad navigation from getting trapped inside a cross-origin iframe. */
 private class HubAwareWebView(
     context: Context,
-    private val onDpadKey: (Int) -> Boolean,
+    private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
 ) : WebView(context) {
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        if (event.action == AndroidKeyEvent.ACTION_DOWN &&
-            (event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN ||
-             event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP) && onDpadKey(event.keyCode)
-        ) return true
+        if (event.action == AndroidKeyEvent.ACTION_DOWN && onRemoteKey(event)) return true
         return super.dispatchKeyEvent(event)
     }
 }
@@ -533,6 +530,8 @@ private fun NextEpisodeOverlay(
     onPlayNow: () -> Unit,
     modifier: Modifier = Modifier,
     onDismiss: (() -> Unit)? = null,
+    playFocusRequester: FocusRequester? = null,
+    dismissFocusRequester: FocusRequester? = null,
 ) {
     val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(episode.id)
     val episodeMeta = match?.destructured?.let { (_, season, number) -> "Temporada $season · Episodio $number" } ?: "Próximo episodio"
@@ -553,8 +552,16 @@ private fun NextEpisodeOverlay(
             Text(episodeMeta, color = Color(0xFFCFD8DE), fontSize = 12.sp)
             Text(if (secondsLeft > 0) "Episodio siguiente en $secondsLeft…" else "Se reproducirá automáticamente", color = Color.White, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(onClick = onPlayNow) { Text("▶ Ahora") }
-                if (onDismiss != null) Button(onClick = onDismiss) { Text("Cancelar") }
+                Button(
+                    modifier = playFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier,
+                    onClick = onPlayNow,
+                ) { Text("▶ Ahora") }
+                if (onDismiss != null) {
+                    Button(
+                        modifier = dismissFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier,
+                        onClick = onDismiss,
+                    ) { Text("Cancelar") }
+                }
             }
         }
     }
@@ -672,7 +679,15 @@ private fun simuladoresAutoplayScript(): String = """(function(){
     attempts++;
     try{
       document.querySelectorAll('iframe').forEach(function(f){
-        try{var allow=(f.getAttribute('allow')||'');if(!/autoplay/i.test(allow))f.setAttribute('allow',(allow?allow+'; ':'')+'autoplay; fullscreen; encrypted-media; picture-in-picture');}catch(e){}
+        try{
+          var allow=(f.getAttribute('allow')||'');
+          if(!/autoplay/i.test(allow))f.setAttribute('allow',(allow?allow+'; ':'')+'autoplay; fullscreen; encrypted-media; picture-in-picture');
+          var src=f.getAttribute('src')||'';
+          if(/(^|\.)ok\.ru\//i.test(src.replace(/^https?:\/\//i,'')) && !f.dataset.xuperAutoplayUrl){
+            f.dataset.xuperAutoplayUrl='1';
+            if(!/[?&]autoplay=/i.test(src)) f.setAttribute('src',src+(src.indexOf('?')>=0?'&':'?')+'autoplay=1');
+          }
+        }catch(e){}
       });
       document.querySelectorAll('video').forEach(function(v){
         try{
@@ -732,6 +747,8 @@ private fun WebEmbedPlayer(
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
     val hiddenHubFocus = remember(url) { FocusRequester() }
+    val nextEpisodePlayFocus = remember(url, nextEpisode?.id) { FocusRequester() }
+    val nextEpisodeDismissFocus = remember(url, nextEpisode?.id) { FocusRequester() }
 
     LaunchedEffect(url) {
         delay(30_000)
@@ -772,6 +789,32 @@ private fun WebEmbedPlayer(
     val showFrameCountdown = isFrameXtv && frameDuration > 0.0 && frameRemainingSeconds <= 30.0
     val showNextEpisodeCard = nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
 
+    // Give the mini-hub real TV focus; otherwise the WebView keeps consuming remote input.
+    LaunchedEffect(showNextEpisodeCard, nextEpisode?.id) {
+        if (showNextEpisodeCard) {
+            delay(250)
+            runCatching { nextEpisodePlayFocus.requestFocus() }
+        }
+    }
+
+    // FrameXTV sometimes stops sending timeupdate before the final frame. Start a real
+    // fallback timer when the displayed remaining time first reaches 30 seconds.
+    LaunchedEffect(showFrameCountdown, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered, framePaused) {
+        if (showFrameCountdown && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+            val waitMs = (frameRemainingSeconds * 1_000.0).toLong().coerceIn(0L, 30_000L)
+            var elapsedMs = 0L
+            while (elapsedMs < waitMs) {
+                delay(250L)
+                // Don't switch episodes while the user has explicitly paused playback.
+                if (!framePaused) elapsedMs = (elapsedMs + 250L).coerceAtMost(waitMs)
+            }
+            if (!nextEpisodeDismissed && !nextEpisodeTriggered) {
+                nextEpisodeTriggered = true
+                onPlayNextEpisode(nextEpisode.id)
+            }
+        }
+    }
+
     // All web commands pass through this function so the UI only reflects commands that
     // were handled in an accessible HTML5 player. Cross-origin embeds may still reject them.
     fun runWebCommand(action: String, subtitleIndex: Int, seconds: Int) {
@@ -805,24 +848,39 @@ private fun WebEmbedPlayer(
                     "mute" -> frameMuted = !frameMuted
                 }
             } else {
-                val keyCode = when (action) {
-                    "playPause" -> AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                    "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
-                    "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
-                    "mute" -> AndroidKeyEvent.KEYCODE_M
-                    "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
-                    else -> return@evaluateJavascript
-                }
-                dispatchWebKey(webView, keyCode)
-                when (action) {
-                    "playPause" -> {
+                if (isSimuladores) {
+                    // The actual OK.ru video lives in a cross-origin iframe, so JS cannot
+                    // reach its <video>. Focus the iframe and try its native TV/media keys.
+                    webView.evaluateJavascript("Array.from(document.querySelectorAll('iframe')).forEach(function(f){try{f.focus()}catch(e){}});", {
+                        when (action) {
+                            "playPause" -> {
+                                // One toggle event only: sending several alternatives can
+                                // immediately undo the first toggle on some embedded players.
+                                dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
+                                framePaused = !framePaused
+                            }
+                            "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
+                            "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
+                            "mute" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_M)
+                            "subtitle" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_CAPTIONS)
+                        }
+                    })
+                } else {
+                    val keyCode = when (action) {
+                        "playPause" -> AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                        "seekBack" -> AndroidKeyEvent.KEYCODE_DPAD_LEFT
+                        "seekForward" -> AndroidKeyEvent.KEYCODE_DPAD_RIGHT
+                        "mute" -> AndroidKeyEvent.KEYCODE_M
+                        "subtitle" -> AndroidKeyEvent.KEYCODE_CAPTIONS
+                        else -> return@evaluateJavascript
+                    }
+                    dispatchWebKey(webView, keyCode)
+                    if (action == "playPause") {
                         // Some Latino/VideoAPI embeds listen to Space/Enter rather than media keys.
                         dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_SPACE)
                         dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_CENTER)
                         dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_ENTER)
                     }
-                    "seekBack" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_LEFT)
-                    "seekForward" -> dispatchWebKey(webView, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
                 }
             }
         }
@@ -843,7 +901,14 @@ private fun WebEmbedPlayer(
 
     Box(Modifier.fillMaxSize().background(Color.Black).onPreviewKeyEvent { event ->
         if (!hasCustomHub || event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-        when (event.nativeKeyEvent.keyCode) {
+        val keyCode = event.nativeKeyEvent.keyCode
+        // Do not steal arrows/OK from the mini-hub buttons once its card is visible.
+        if (showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
+                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
+            )) return@onPreviewKeyEvent false
+        when (keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
                 if (!frameControlsVisible) frameControlsVisible = true
                 frameInteraction++
@@ -856,16 +921,26 @@ private fun WebEmbedPlayer(
             }
             AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
                 val repeat = event.nativeKeyEvent.repeatCount
-                val jump = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
                 runWebCommand("seekBack", frameSubtitleIndex, jump)
                 true
             }
             AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                 val repeat = event.nativeKeyEvent.repeatCount
-                val jump = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
                 runWebCommand("seekForward", frameSubtitleIndex, jump)
                 true
             }
+            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) {
+                val repeat = event.nativeKeyEvent.repeatCount
+                runWebCommand("seekBack", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
+                true
+            } else false
+            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) {
+                val repeat = event.nativeKeyEvent.repeatCount
+                runWebCommand("seekForward", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
+                true
+            } else false
             else -> {
                 if (frameControlsVisible) frameInteraction++
                 false
@@ -876,13 +951,54 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext) { keyCode ->
-                    if (hasCustomHub) {
-                        if (!frameControlsVisible) frameControlsVisible = true
-                        runCatching { frameControlsFocus.requestFocus() }
-                        frameInteraction++
-                        true
-                    } else false
+                val webView = HubAwareWebView(viewContext) { keyEvent ->
+                    if (!hasCustomHub) {
+                        false
+                    } else {
+                        val keyCode = keyEvent.keyCode
+                        val overlayOwnsArrows = showNextEpisodeCard && nextEpisode != null && keyCode in setOf(
+                            AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                            AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                            AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER
+                        )
+                        if (overlayOwnsArrows) {
+                            false
+                        } else when (keyCode) {
+                            AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                                if (!frameControlsVisible) frameControlsVisible = true
+                                runCatching { frameControlsFocus.requestFocus() }
+                                frameInteraction++
+                                true
+                            }
+                            AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                                runWebCommand("playPause", frameSubtitleIndex, 0)
+                                true
+                            }
+                            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
+                                val repeat = keyEvent.repeatCount
+                                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
+                                runWebCommand("seekBack", frameSubtitleIndex, jump)
+                                true
+                            }
+                            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
+                                val repeat = keyEvent.repeatCount
+                                val jump = when { repeat >= 4 -> 60; repeat >= 1 -> 30; else -> 10 }
+                                runWebCommand("seekForward", frameSubtitleIndex, jump)
+                                true
+                            }
+                            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> if (!frameControlsVisible) {
+                                val repeat = keyEvent.repeatCount
+                                runWebCommand("seekBack", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
+                                true
+                            } else false
+                            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> if (!frameControlsVisible) {
+                                val repeat = keyEvent.repeatCount
+                                runWebCommand("seekForward", frameSubtitleIndex, if (repeat >= 4) 60 else if (repeat > 0) 30 else 10)
+                                true
+                            } else false
+                            else -> false
+                        }
+                    }
                 }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -1102,6 +1218,8 @@ private fun WebEmbedPlayer(
                 },
                 onDismiss = { nextEpisodeDismissed = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 22.dp, bottom = if (frameControlsVisible) 154.dp else 22.dp),
+                playFocusRequester = nextEpisodePlayFocus,
+                dismissFocusRequester = nextEpisodeDismissFocus,
             )
         }
 
