@@ -554,6 +554,9 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
+    // Solo FrameXTV tiene una API documentada para controlar el reproductor desde el hub.
+    // VideoAPI no documenta comandos externos; sus controles nativos deben quedar accesibles.
+    val hasCustomHub = isFrameXtv
     var frameCurrentTime by remember(url) { mutableStateOf(0.0) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var framePaused by remember(url) { mutableStateOf(false) }
@@ -564,6 +567,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
+    val frameSubtitleLabels = listOf("Pista 1 — Spanish", "Pista 2 — Spanish (2)")
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
@@ -820,7 +824,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         val embedUrl = if (url.contains("?")) "$url&autoplay=1&muted=0&controls=1" else "$url?autoplay=1&muted=0&controls=1"
                         val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;")
                         val wrapper = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
-                          (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{var m=Object.assign({action:action},extra||{});f.contentWindow.postMessage(m,'*');}catch(e){}};
+                          (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{var m=Object.assign({action:action},extra||{});f.contentWindow.postMessage(m,'*');}catch(e){}};f.addEventListener('load',function(){setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:0});},2200);setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:0});},4200);});
                           window.addEventListener('message',function(e){var d=e.data;if(!d||typeof d!=='object')return;if(d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0);}catch(x){}}});
                           window.addEventListener('keydown',function(e){if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Enter',' '].indexOf(e.key)>=0){e.stopPropagation();}},true);
                           })();</script></body></html>"""
@@ -843,7 +847,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     if (isFrameXtv) {
                         val embedUrl = if (url.contains("?")) "$url&autoplay=1&muted=0&controls=1" else "$url?autoplay=1&muted=0&controls=1"
                         val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;")
-                        val wrapper = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>(function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};window.addEventListener('message',function(e){var d=e.data;if(d&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
+                        val wrapper = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>(function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};f.addEventListener('load',function(){setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:0})},2200);setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:0})},4200)});window.addEventListener('message',function(e){var d=e.data;if(d&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
                         webView.loadDataWithBaseURL("https://xuper.local/", wrapper, "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         webView.loadUrl(videoApiEmbedUrl(url))
@@ -861,7 +865,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 webViewRef = null
             },
         )
-        if (hasCustomHub && frameControlsVisible && pageError == null && isFrameXtv) {
+        if (isFrameXtv && frameControlsVisible && pageError == null) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
                     .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp),
@@ -893,7 +897,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         }
                         frameControlsVisible = true
                         frameInteraction++
-                    }) { Text("CC ${frameSubtitleLabels[frameSubtitleIndex]}") }
+                    }) { Text("CC ${if (frameSubtitleIndex == 0) "Pista 1 — Spanish" else "Pista 2 — Spanish (2)"}") }
                 }
             }
         }
