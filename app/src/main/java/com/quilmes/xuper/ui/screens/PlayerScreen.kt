@@ -106,7 +106,7 @@ fun PlayerScreen(
 ) {
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://videoapi.la/e/")) {
+    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/watch/")) {
         WebEmbedPlayer(url = streamUrl, onExit = onExit)
         return
     }
@@ -646,10 +646,11 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                               try {
                                 if (!window.__xuperTvFocusInstalled) {
                                   window.__xuperTvFocusInstalled = true;
-                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus{transform:scale(1.06)!important;z-index:2147483647!important} video:focus{outline:0!important}`;
+                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus,iframe:focus{transform:scale(1.035)!important;z-index:2147483647!important} video:focus{outline:0!important}`;
                                   var st=document.createElement('style');st.id='xuper-tv-focus-style';st.textContent=css;(document.head||document.documentElement).appendChild(st);
-                                  var getItems=function(){return Array.from(document.querySelectorAll('button,a[href],[role=button],input,select,textarea,[tabindex]')).filter(function(e){var r=e.getBoundingClientRect();var cs=getComputedStyle(e);return !e.disabled && e.tabIndex>=0 && r.width>0 && r.height>0 && cs.visibility!=='hidden' && cs.display!=='none'});};
+                                  var getItems=function(){document.querySelectorAll('iframe').forEach(function(f){if(!f.hasAttribute('tabindex'))f.setAttribute('tabindex','0');if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});return Array.from(document.querySelectorAll('button,a[href],[role=button],input,select,textarea,iframe,[tabindex]')).filter(function(e){var r=e.getBoundingClientRect();var cs=getComputedStyle(e);return !e.disabled && e.tabIndex>=0 && r.width>0 && r.height>0 && cs.visibility!=='hidden' && cs.display!=='none'});};
                                   document.addEventListener('keydown',function(ev){
+                                    if(['Enter',' ','NumpadEnter'].includes(ev.key)){var a=document.activeElement;if(a && a!==document.body && (a.matches('button,a[href],[role=button],input,select,textarea') || a.tagName==='IFRAME')){if(a.tagName!=='IFRAME')a.click();ev.preventDefault();}return;}
                                     if(!['ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(ev.key))return;
                                     var items=getItems();if(!items.length)return;
                                     var current=document.activeElement;var i=items.indexOf(current);

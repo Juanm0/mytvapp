@@ -302,8 +302,19 @@ class MainActivity : ComponentActivity() {
                         if (title != null) DetailScreen(
                             title = title,
                             catalogService = tmdbCatalogService,
-                            onPlay = { requestedId ->
-                                val url = WebSourceRegistry.videoApiUrl(requestedId)
+                            onPlay = { request ->
+                                val useFrameXtv = request.startsWith("framextv:")
+                                val useVideoApi = request.startsWith("videoapi:")
+                                val requestedId = when {
+                                    useFrameXtv -> request.removePrefix("framextv:")
+                                    useVideoApi -> request.removePrefix("videoapi:")
+                                    else -> request
+                                }
+                                val url = when {
+                                    useFrameXtv -> WebSourceRegistry.frameXtvUrl(requestedId)
+                                    useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
+                                    else -> WebSourceRegistry.frameXtvUrl(requestedId)
+                                }
                                 if (url != null) {
                                     val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
                                     navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
