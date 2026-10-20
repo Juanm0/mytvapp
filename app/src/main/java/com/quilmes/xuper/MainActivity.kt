@@ -317,7 +317,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 if (url != null) {
                                     val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                                    navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl")
+                                    navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl/${Uri.encode(requestedId)}")
                                 }
                             },
                             onOpenTitle = { relatedTitle ->
@@ -327,19 +327,21 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     composable(
-                        route = "external-player/{streamName}/{streamUrl}",
+                        route = "external-player/{streamName}/{streamUrl}/{contentKey}",
                         arguments = listOf(
                             navArgument("streamName") { type = NavType.StringType },
                             navArgument("streamUrl") { type = NavType.StringType },
+                            navArgument("contentKey") { type = NavType.StringType },
                         ),
                     ) { entry ->
                         val streamName = entry.arguments?.getString("streamName").orEmpty()
                         val encodedUrl = entry.arguments?.getString("streamUrl").orEmpty()
+                        val contentKey = entry.arguments?.getString("contentKey").orEmpty()
                         val streamUrl = runCatching {
                             String(Base64.decode(encodedUrl, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), StandardCharsets.UTF_8)
                         }.getOrDefault("")
                         if (streamUrl.startsWith("https://") || streamUrl.startsWith("http://")) {
-                            PlayerScreen(name = streamName, streamUrl = streamUrl, onExit = { navController.popBackStack() })
+                            PlayerScreen(name = streamName, streamUrl = streamUrl, currentTitleId = contentKey, onExit = { navController.popBackStack() })
                         }
                     }
                     composable(

@@ -116,8 +116,10 @@ fun DetailScreen(
                             val frameXtvPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
-                            Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Reproducir") }
-                            Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
+                            if (!hasTmdbSeasons) {
+                                Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Reproducir") }
+                                Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
+                            }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
                                 if (favorites) ids.remove(title.id) else ids.add(title.id)
@@ -178,6 +180,10 @@ fun DetailScreen(
                                 selectedEpisode = episode.number
                                 onPlay("framextv:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                             }) { Text("▶  Reproducir episodio") }
+                            Button(onClick = {
+                                selectedEpisode = episode.number
+                                onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                            }) { Text("▶  Latino") }
                         }
                     }
 

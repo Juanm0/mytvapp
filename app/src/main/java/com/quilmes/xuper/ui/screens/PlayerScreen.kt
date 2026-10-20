@@ -176,7 +176,7 @@ fun PlayerScreen(
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
     if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/")) {
-        WebEmbedPlayer(url = streamUrl, onExit = onExit)
+        WebEmbedPlayer(url = streamUrl, contentKey = currentTitleId.ifBlank { streamUrl }, onExit = onExit)
         return
     }
     var resolveAsWebPage by remember(streamUrl) { mutableStateOf(false) }
@@ -594,7 +594,7 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
 }
 
 /** Construye la página contenedora de FrameXTV y conserva el canal postMessage documentado. */
-private fun frameXtvWrapper(rawUrl: String): String {
+private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, subtitleIndex: Int = 0): String {
     var embedUrl = rawUrl
     if (!Regex("(?:[?&])autoplay=").containsMatchIn(embedUrl)) embedUrl += if (embedUrl.contains('?')) "&autoplay=1" else "?autoplay=1"
     if (!Regex("(?:[?&])muted=").containsMatchIn(embedUrl)) embedUrl += "&muted=0"
@@ -602,7 +602,10 @@ private fun frameXtvWrapper(rawUrl: String): String {
     val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;").replace("<", "&lt;")
     return """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
       (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};
-      f.addEventListener('load',function(){setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:0})},2200)});
+      f.addEventListener('load',function(){
+        setTimeout(function(){window.xuperFrameCommand('setSubtitle',{index:$subtitleIndex})},2200);
+        if($resumePositionSeconds>5) setTimeout(function(){window.xuperFrameCommand('seekBy',{seconds:$resumePositionSeconds})},3200);
+      });
       window.addEventListener('message',function(e){var d=e.data;if(d&&typeof d==='object'&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
 }
 
@@ -616,12 +619,42 @@ private fun dispatchWebKey(webView: WebView?, keyCode: Int) {
 }
 
 /**
+ * Guarda/restaura el progreso en videos HTML5 accesibles desde el documento o iframes same-origin.
+ * Los iframes cross-origin bloquean este acceso por diseño del navegador; ahí el proveedor debe ofrecer su propia reanudación.
+ */
+private fun webPlaybackResumeScript(resumePositionSeconds: Long, autoSelectSpanish: Boolean = false): String = """(function(){
+  if(window.__xuperPlaybackTracking) return; window.__xuperPlaybackTracking=true;
+  var resume=$resumePositionSeconds;
+  function visit(w){
+    var d; try{d=w.document;}catch(e){return;}
+    try{
+      Array.from(d.querySelectorAll('video')).forEach(function(v){
+        if($autoSelectSpanish){try{var tracks=v.textTracks;if(tracks){var spanish=Array.from(tracks).find(function(t){var x=((t.language||'')+' '+(t.label||'')).toLowerCase();return /(^|[^a-z])(es|spa|spanish|espanol|español|castellano)([^a-z]|$)/i.test(x)});if(spanish&&spanish.mode==='disabled')spanish.mode='showing';}}catch(e){}}
+        if(v.dataset.xuperTracking==='1') return; v.dataset.xuperTracking='1';
+        var restore=function(){try{if(resume>5 && !v.dataset.xuperRestored && isFinite(v.duration) && v.duration>0){v.dataset.xuperRestored='1';v.currentTime=Math.min(resume,Math.max(0,v.duration-2));}}catch(e){}};
+        v.addEventListener('loadedmetadata',restore); if(v.readyState>=1) restore();
+        v.addEventListener('timeupdate',function(){try{if(window.XuperBridge)window.XuperBridge.onTimeUpdate(Number(v.currentTime)||0,Number(v.duration)||0);}catch(e){}});
+      });
+      for(var i=0;i<w.frames.length;i++){try{visit(w.frames[i]);}catch(e){}}
+    }catch(e){}
+  }
+  visit(window); setInterval(function(){visit(window);},2000);
+})();"""
+
+/**
  * Un embed es una página HTML, no un archivo de video: se renderiza en WebView.
  * ExoPlayer queda reservado para URLs directas (MP4, HLS/M3U8, DASH/MPD, etc.).
  */
 @Composable
-private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
+private fun WebEmbedPlayer(url: String, contentKey: String = url, onExit: () -> Unit = {}) {
     val context = LocalContext.current
+    val playbackPrefs = remember(context) { context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE) }
+    val stableContentKey = contentKey.ifBlank { url }
+    val subtitlePreferenceKey = "web-subtitle:$stableContentKey"
+    val positionPreferenceKey = "web-position:$stableContentKey"
+    val savedSubtitleIndex = remember(url, stableContentKey) { playbackPrefs.getInt(subtitlePreferenceKey, -1) }
+    val savedResumePosition = remember(url, stableContentKey) { playbackPrefs.getLong(positionPreferenceKey, 0L).coerceAtLeast(0L) }
+    var saveSubtitleForContent by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex >= 0) }
     var progress by remember(url) { mutableStateOf(0) }
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
@@ -634,7 +667,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
     // No conocemos los nombres reales: se recorren índices numerados y se vuelve al 1 tras el 32.
-    var frameSubtitleIndex by remember(url) { mutableStateOf(0) }
+    var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
     var frameControlsVisible by remember(url) { mutableStateOf(true) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     val frameControlsFocus = remember(url) { FocusRequester() }
@@ -655,6 +688,8 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
             // El WebView recupera el foco; su dispatchKeyEvent intercepta abajo para reabrir el hub.
             delay(80)
             runCatching { webViewRef?.requestFocus() }
+        } else {
+            Unit
         }
     }
     // Cinco segundos sin interacción real cierran el hub; navegar por sus botones reinicia el contador.
@@ -813,31 +848,13 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                                 }
                               } catch(e) {}
                             })();""", null)
-                            view?.evaluateJavascript("""(function(){
+                            view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
+                            if (isVideoApi) view?.evaluateJavascript("""(function(){
                               try {
-                                if (!window.__xuperSubtitleResume) {
-                                  window.__xuperSubtitleResume = true;
-                                  var key='xuper-pos:'+location.hostname+location.pathname;
-                                  var tick=function(){
-                                    document.querySelectorAll('video').forEach(function(v){
-                                      try {
-                                        var tracks=v.textTracks;
-                                        if(tracks){
-                                          var spanish=Array.from(tracks).find(function(t){var x=((t.language||'')+' '+(t.label||'')).toLowerCase();return /(^|[^a-z])(es|spa|spanish|espanol|español|castellano)([^a-z]|$)/i.test(x)});
-                                          if(spanish && spanish.mode==='disabled') spanish.mode='showing';
-                                        }
-                                        var saved=parseFloat(localStorage.getItem(key)||'0');
-                                        if(saved>5 && v.duration && isFinite(v.duration) && Math.abs(v.currentTime-saved)>8 && !v.dataset.xuperRestored){
-                                          v.dataset.xuperRestored='1'; v.currentTime=Math.min(saved,Math.max(0,v.duration-2));
-                                        }
-                                        if(v.duration && isFinite(v.duration) && v.currentTime>0) localStorage.setItem(key,String(v.currentTime));
-                                      }catch(e){}
-                                    });
-                                  };
-                                  tick(); setInterval(tick,2000);
-                                  window.addEventListener('beforeunload',tick);
-                                }
-                              } catch(e) {}
+                                var css='html,body{margin:0!important;padding:0!important;border:0!important;outline:0!important;box-shadow:none!important;background:#000!important} iframe,video,html:focus,body:focus,iframe:focus,video:focus{border:0!important;outline:0!important;box-shadow:none!important}';
+                                var st=document.getElementById('xuper-videoapi-edge-cleanup');
+                                if(!st){st=document.createElement('style');st.id='xuper-videoapi-edge-cleanup';(document.head||document.documentElement).appendChild(st);}st.textContent=css;
+                              }catch(e){}
                             })();""", null)
                             if (view != null && !pageUrl.isNullOrBlank()) {
                                 runCatching { XuperBraveAdblock.injectCosmetics(view, pageUrl) }
@@ -888,17 +905,29 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     }
                     setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
                     tag = url
-                    if (isFrameXtv) {
+                    if (hasCustomHub) {
                         addJavascriptInterface(object {
+                            private var lastPersistedPosition = -1L
                             @JavascriptInterface
                             fun onTimeUpdate(current: Double, duration: Double) {
                                 android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    frameCurrentTime = current.coerceAtLeast(0.0)
-                                    frameDuration = duration.coerceAtLeast(0.0)
+                                    val safeCurrent = current.coerceAtLeast(0.0)
+                                    val safeDuration = duration.coerceAtLeast(0.0)
+                                    frameCurrentTime = safeCurrent
+                                    frameDuration = safeDuration
+                                    val positionToSave = if (safeDuration > 0 && safeCurrent >= safeDuration - 15.0) 0L else safeCurrent.toLong()
+                                    if (positionToSave == 0L && lastPersistedPosition != 0L ||
+                                        lastPersistedPosition < 0L || positionToSave >= lastPersistedPosition + 5L ||
+                                        positionToSave <= lastPersistedPosition - 5L) {
+                                        playbackPrefs.edit().putLong(positionPreferenceKey, positionToSave).apply()
+                                        lastPersistedPosition = positionToSave
+                                    }
                                 }
                             }
                         }, "XuperBridge")
-                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url), "text/html", "UTF-8", null)
+                    }
+                    if (isFrameXtv) {
+                        loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         // En VideoAPI se activan los controles/subtítulos documentados y se carga su página real,
                         // sin simular un origen ni crear una capa externa que no puede controlar el iframe.
@@ -915,7 +944,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 if (webView != null && webView.tag != url) {
                     webView.tag = url
                     if (isFrameXtv) {
-                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url), "text/html", "UTF-8", null)
+                        webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex), "text/html", "UTF-8", null)
                     } else if (runCatching { URI(url).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                         webView.loadUrl(videoApiEmbedUrl(url))
                     } else webView.loadUrl(url)
@@ -980,17 +1009,20 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         frameMuted = !frameMuted
                         frameInteraction++
                     }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
-                    Button(onClick = {
-                        frameSubtitleIndex = (frameSubtitleIndex + 1) % 32
-                        if (isFrameXtv) {
+                    if (isFrameXtv) {
+                        Button(onClick = {
+                            frameSubtitleIndex = (frameSubtitleIndex + 1) % 32
+                            if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, frameSubtitleIndex).apply()
                             webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:$frameSubtitleIndex});", null)
-                        } else {
-                            webViewRef?.evaluateJavascript(videoApiCommandScript("subtitle", frameSubtitleIndex, 0)) { result ->
-                                if (result != "true") dispatchWebKey(webViewRef, AndroidKeyEvent.KEYCODE_C)
-                            }
-                        }
-                        frameInteraction++
-                    }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
+                            frameInteraction++
+                        }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
+                        Button(onClick = {
+                            saveSubtitleForContent = !saveSubtitleForContent
+                            if (saveSubtitleForContent) playbackPrefs.edit().putInt(subtitlePreferenceKey, frameSubtitleIndex).apply()
+                            else playbackPrefs.edit().remove(subtitlePreferenceKey).apply()
+                            frameInteraction++
+                        }) { Text(if (saveSubtitleForContent) "✓ Guardar pista" else "□ Guardar pista") }
+                    }
                 }
             }
         }
