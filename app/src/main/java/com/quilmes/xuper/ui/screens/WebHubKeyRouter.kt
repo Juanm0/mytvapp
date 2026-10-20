@@ -58,6 +58,8 @@ internal object WebHubKeyRouter {
                 HubKey.DOWN, HubKey.UP -> HubKeyAction.OpenHub
                 HubKey.LEFT -> HubKeyAction.Seek(forward = false)
                 HubKey.RIGHT -> HubKeyAction.Seek(forward = true)
+                // OK con el hub oculto pausa/reanuda, como en el reproductor nativo (README: "OK/Select").
+                HubKey.OK -> HubKeyAction.TogglePlayPause
                 else -> HubKeyAction.PassThrough
             }
         }
@@ -82,4 +84,104 @@ internal object FrameXtvSubtitleSlots {
 
     /** Retrocede sin dar la vuelta: desde la pista 1 no salta a un índice casi seguro inexistente. */
     fun previous(current: Int): Int = (current.coerceIn(0, SLOTS - 1) - 1).coerceAtLeast(0)
+}
+
+/**
+ * Avance/retroceso acelerado al mantener apretada una tecla (estilo plataforma de streaming).
+ *
+ * En vez de mandarle al reproductor un seek cada pocos milisegundos (no sabemos cómo reacciona cada
+ * reproductor embebido a seeks encadenados), se ACUMULA el salto mientras la tecla está apretada y se
+ * aplica de una sola vez al soltarla. Un toque corto sigue siendo un salto de 10 s.
+ */
+internal object SeekRamp {
+    /** Tiempo apretado antes de empezar a acelerar (el primer paso de 10 s ocurre al apretar). */
+    const val HOLD_START_MS = 450L
+
+    /** Cada cuánto se suma un paso mientras la tecla sigue apretada. */
+    const val TICK_MS = 300L
+
+    /** Dos pasos separados por menos que esto cuentan como una misma racha (mandos que repiten pulsaciones). */
+    const val STREAK_GAP_MS = 700L
+
+    /** Si no llega ningún "soltar" (mandos que lo pierden), se aplica lo acumulado pasado este tiempo sin pasos. */
+    const val COMMIT_IDLE_MS = 700L
+
+    /** Tope de seguridad de una sola pulsación sostenida. */
+    const val MAX_HOLD_MS = 15_000L
+
+    private const val MAX_PENDING_SECONDS = 4 * 3600
+
+    /** Segundos que suma el paso número [streak] (1 = primer paso de la racha). */
+    fun stepSeconds(streak: Int): Int = when {
+        streak <= 2 -> 10
+        streak <= 5 -> 20
+        streak <= 9 -> 30
+        streak <= 14 -> 60
+        streak <= 19 -> 120
+        else -> 180
+    }
+
+    fun clampPending(seconds: Int): Int = seconds.coerceIn(-MAX_PENDING_SECONDS, MAX_PENDING_SECONDS)
+
+    /**
+     * Limita un salto a lo que cabe entre el inicio y el final cuando se conocen posición y duración
+     * (FrameXTV informa ambas por `frameXTV:timeupdate`). Sin duración conocida no se toca.
+     */
+    fun clampDelta(delta: Int, currentSeconds: Double, durationSeconds: Double): Int {
+        if (durationSeconds <= 0.0 || currentSeconds.isNaN() || durationSeconds.isNaN()) return delta
+        val minDelta = -currentSeconds.toInt().coerceAtLeast(0)
+        val maxDelta = (durationSeconds - currentSeconds - 2.0).toInt().coerceAtLeast(0)
+        return delta.coerceIn(minDelta, maxDelta)
+    }
+
+    /** "45 s", "1:30", "1:02:03" (siempre en positivo; el signo lo pone quien lo muestra). */
+    fun formatDelta(seconds: Int): String {
+        val total = kotlin.math.abs(seconds)
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return when {
+            total < 60 -> "$total s"
+            h > 0 -> "%d:%02d:%02d".format(h, m, s)
+            else -> "%d:%02d".format(m, s)
+        }
+    }
+
+    /** "12:34" o "1:02:03". */
+    fun formatClock(seconds: Double): String {
+        val total = if (seconds.isNaN()) 0 else seconds.toInt().coerceAtLeast(0)
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
+    }
+}
+
+/** Acumula los pasos de un avance sostenido. Kotlin puro: se prueba en la JVM. */
+internal class SeekScrubber {
+    /** Segundos acumulados todavía sin aplicar (negativo = atrás). */
+    var pendingSeconds: Int = 0
+        private set
+
+    private var streak = 0
+    private var lastStepAtMs = Long.MIN_VALUE / 2
+    private var lastForward = true
+
+    /** Suma un paso en la dirección dada y devuelve el total pendiente. */
+    fun step(forward: Boolean, nowMs: Long): Int {
+        val continues = forward == lastForward && nowMs - lastStepAtMs <= SeekRamp.STREAK_GAP_MS
+        streak = if (continues) streak + 1 else 1
+        lastForward = forward
+        lastStepAtMs = nowMs
+        val signed = SeekRamp.stepSeconds(streak) * if (forward) 1 else -1
+        pendingSeconds = SeekRamp.clampPending(pendingSeconds + signed)
+        return pendingSeconds
+    }
+
+    /** Devuelve lo acumulado y lo deja en cero (la racha sigue viva por si el mando repite pulsaciones). */
+    fun consume(): Int {
+        val pending = pendingSeconds
+        pendingSeconds = 0
+        return pending
+    }
 }

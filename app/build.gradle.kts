@@ -146,5 +146,9 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-dash:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
 
+    // WebViewCompat.addDocumentStartJavaScript: permite inyectar el agente de control del video en TODOS los
+    // frames del WebView (también iframes de otro origen) para Latino, OK.ru y Simuladores.
+    implementation("androidx.webkit:webkit:1.11.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

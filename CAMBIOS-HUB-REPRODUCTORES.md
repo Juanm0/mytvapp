@@ -4,6 +4,74 @@
 > (decía que el hub de Latino estaba quitado y que el selector de subtítulos alternaba dos opciones;
 > ninguna de las dos cosas era cierta en el código actual).
 
+## Iteración 2 — devolución de la prueba en el televisor (20/10/2026)
+
+**Lo que se vio en el TV:** FrameXTV bien; Latino sin hub, sin pausa, y adelantar/atrasar poco; Simuladores
+reproduce el episodio pero sus botones (pausa, ±10 s, silencio) no hacen nada; mantener apretado adelantar no
+avanza "mucho" como en una plataforma de streaming.
+
+**Causas (por lectura del código; no verificadas en dispositivo):**
+- *Avance sostenido:* repetía 10 s fijos (sin aceleración) y solo con el hub oculto; con el hub visible ←/→ mueven
+  el foco y los botones `↶ 10 s` / `10 s ↷` hacían un único salto por OK.
+- *Latino:* el hub solo aparece si una sonda ve un `<video>`, pero `evaluateJavascript` solo corre en el frame
+  principal. Con el video en un iframe de otro origen la sonda da falso, no hay hub y el mando va al reproductor
+  original (por eso adelanta/atrasa con sus teclas pero OK no pausa). Aun con sonda positiva, el hub de Latino
+  arrancaba oculto.
+- *Simuladores / OK.ru:* mismo motivo (video en iframe de ok.ru) y el respaldo inyectaba `DPAD_CENTER` (no es la
+  tecla de pausa de un reproductor HTML5) con el foco de Android en un botón Compose, no en el WebView.
+- *OK con el hub oculto* no hacía nada en los reproductores web (el nativo sí pausa).
+
+**Limitación de la API documentada:** VideoAPI solo documenta parámetros de URL y marca `post_message` /
+`communication` como bloqueados; FrameXTV no tiene documentación. No existe una forma documentada de pausar o
+adelantar Latino desde la app.
+
+**Workaround (explícito, no depende de ninguna API de terceros):** agente de control inyectado por la app.
+- `WebViewCompat.addDocumentStartJavaScript(webView, XUPER_FRAME_AGENT_JS, setOf("*"))` (dependencia
+  `androidx.webkit:webkit:1.11.0`) corre el script en todos los frames, también de otro origen, antes que la página.
+  Se registra antes de cargar la URL y solo si `WebViewFeature.DOCUMENT_START_SCRIPT` está soportado.
+- Cada frame ubica su `<video>` más grande (incluye shadow DOM abierto), lo informa cada segundo y ante
+  `play/pause/volumechange/seeked/loadedmetadata/ended` (`XuperBridge.onAgentReport`; los iframes se lo mandan al
+  frame principal por `postMessage` y este lo entrega al puente). Kotlin elige como principal el de mayor área
+  (≥ 2 500 px²) entre los que informaron en los últimos 6 s.
+- Las órdenes (`toggle`, `seek ±N`, `mute`) las reparte el frame principal a todos los frames por `postMessage` y solo
+  obedece el que tiene el id elegido. El estado de pausa/silencio/posición/duración que muestra el hub es el
+  informado por el video.
+- Alcance: Latino, OK.ru y Simuladores. FrameXTV no lo usa (su canal propio sigue igual).
+- Si no hay soporte o falla la instalación: Latino queda sin hub y con el mando en el reproductor original, con un
+  aviso que dice por qué; Simuladores/OK.ru usan el respaldo anterior.
+
+**Cambios:**
+1. **Avance sostenido** (`SeekRamp` / `SeekScrubber` en `WebHubKeyRouter.kt`): al apretar se suma un paso de 10 s; si
+   se mantiene, desde los 450 ms se suma un paso cada 300 ms con tamaño creciente (10, 20, 30, 60, 120, 180 s por
+   paso). Se acumula y se aplica con **un solo** seek al soltar (o 700 ms después del último paso si el mando
+   pierde el "soltar"; tope 15 s por pulsación y 4 h acumuladas). Indicador central con el delta y, si se conoce
+   la duración, la posición de destino. Tras 1/2/3/4/5 s apretado se acumulan ≈ 40/140/260/440/860 s.
+   Pulsaciones sueltas muy seguidas (< 700 ms, mandos que repiten pulsaciones) también aceleran.
+   En FrameXTV el salto se limita a lo que cabe entre el inicio y el final (con `timeupdate`).
+2. **Hub visible:** OK sostenido sobre `↶ 10 s` / `10 s ↷` usa el mismo avance sostenido; tocar sigue siendo 10 s.
+3. **OK con el hub oculto = reproducir/pausar** (y muestra el hub), también con las teclas de medios. Solo en el
+   primer key-down (no repite con OK sostenido). El mini-hub de "Episodio siguiente" sigue teniendo prioridad sobre OK.
+4. **Latino:** el hub se muestra unos segundos cuando el agente detecta el video (antes arrancaba oculto), con barra
+   de posición; el aviso sin control se cuenta desde que la página terminó de cargar y explica la causa.
+5. **Simuladores / OK.ru:** los botones del hub usan el agente (con respaldo anterior si no hay agente).
+
+**No se tocó:** FrameXTV (`postMessage`, subtítulos, proveedores), `NativePlayerScreen`, listas IPTV, navegación,
+`MainActivity`, ni la firma pública de `PlayerScreen`.
+
+**Verificación:** la lógica de teclas y la rampa (`WebHubKeyRouter.kt`) se compiló con `kotlinc 1.9.24` y pasa 121
+comprobaciones en la JVM (tabla de teclas, rampa, límites, formatos). `PlayerScreen.kt` pasa por `kotlinc` sin errores
+de sintaxis y con el mismo perfil de errores del original (solo referencias de Android/Compose sin resolver, más 2 de
+"tipo de parámetro no inferido" de las dos lambdas nuevas). **Nada de esto está probado en el televisor.**
+
+**Pendiente de probar:** hold de ←/→ en FrameXTV y en Latino; hub de Latino (aparece, pausa, ±10 s, silencio);
+Simuladores/OK.ru (pausa, ±10 s, silencio, hold); `adb logcat -s XuperAgent:I XuperFrameXTV:I` para ver qué frames
+informan un `<video>`. Si Latino sigue sin hub, el logcat y el aviso en pantalla dicen si es falta de soporte del
+WebView, instalación fallida o que no se encontró ningún `<video>` en ningún frame.
+
+---
+
+## Iteración 1 (lo que sigue describe el estado previo; donde contradiga a la iteración 2, vale la 2)
+
 ## Qué se encontró
 
 - El `PlayerScreen.kt` de la **raíz del proyecto** es una copia vieja del archivo completo (commit

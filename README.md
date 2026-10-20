@@ -1,5 +1,16 @@
 # Xuper Quilmes TV — Android TV
 
+## Hub de reproductores web — iteración 2, según la prueba en el televisor (20/10/2026)
+
+Detalle en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen:
+
+- **Avance/retroceso sostenido (todos los reproductores con hub).** Mantener apretado ←/→ (hub oculto), `⏪/⏩` del mando, o OK sobre `↶ 10 s` / `10 s ↷` (hub visible) acumula un salto cada vez mayor (10 s → 20 → 30 → 60 → 120 → 180 s por paso) y lo aplica de una vez **al soltar**, con un indicador central (`⏩ +3:20 · 41:10`). Un toque sigue siendo 10 s. Constantes en `SeekRamp` (`WebHubKeyRouter.kt`).
+- **OK con el hub oculto pausa/reanuda** y vuelve a mostrar el hub (igual que el reproductor nativo).
+- **Latino, OK.ru y Simuladores: agente de control por frame.** El `<video>` de estos reproductores vive en un iframe de otro origen, al que `evaluateJavascript` no puede entrar y cuya API pública no define comandos (VideoAPI marca `post_message` como bloqueado). La app ahora inyecta un script propio en **todos** los frames con `WebViewCompat.addDocumentStartJavaScript` (dependencia nueva: `androidx.webkit:webkit:1.11.0`). Ese script ubica el `<video>` más grande de su frame, informa pausa/silencio/posición/duración y obedece pausa, ±N s y silencio. No envía teclas y no usa ninguna API de VideoAPI/ok.ru. Con el agente: el hub de Latino vuelve a aparecer (se muestra unos segundos al detectar el video), y los botones de Simuladores/OK.ru actúan sobre el video real. El estado "Pausar/Reproducir" y "Silencio" sale de lo que informa el video, no de una suposición.
+- **Límites que siguen:** necesita un *Android System WebView* con soporte `DOCUMENT_START_SCRIPT`; no ve un `<video>` en shadow DOM cerrado ni reproductores que no usen `<video>`; los subtítulos de Latino/OK.ru siguen sin control. Si el agente no está disponible, Latino vuelve a dejar el mando en el reproductor original y lo dice en pantalla; Simuladores/OK.ru usan el respaldo anterior (DOM + teclas, best-effort). FrameXTV mantiene su canal `postMessage` sin cambios (solo se suma el avance sostenido y OK = pausa).
+- **Logcat para diagnosticar:** `adb logcat -s XuperAgent:I XuperFrameXTV:I` (frames que informaron un `<video>` y cuál se eligió como principal).
+- **Pendiente de probar en el televisor** (nada de esto está verificado en dispositivo): hold de ←/→ en FrameXTV; hub de Latino y pausa; Simuladores (pausa, ±10 s, silencio, hold); que Gradle resuelva `androidx.webkit:webkit:1.11.0` con `compileSdk 34` (si falla, pasame el log).
+
 ## Hub de reproductores web — control remoto, ocultamiento y subtítulos (20/10/2026)
 
 Detalle, hallazgos sobre las APIs y lo pendiente de probar en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen: un único manejador de teclas para el hub (nuevo `WebHubKeyRouter.kt`); con el hub oculto ↓ lo abre; con el hub visible las flechas se mueven dentro de él y el hub se oculta a los 5 s sin interacción; FrameXTV suma `◀ CC` / `CC · Pista N ▶` (la API no permite listar pistas ni nombres); Latino solo muestra el hub si el `<video>` es accesible, porque la API pública de VideoAPI no documenta ningún canal de control. **No se compiló** (sin Android SDK/Gradle en el entorno de edición): compilar y probar en el televisor. El `PlayerScreen.kt` de la raíz del repo es una copia vieja fuera de `src/`; la real está en `app/src/main/.../ui/screens/`.

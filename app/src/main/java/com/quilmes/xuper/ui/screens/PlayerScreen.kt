@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Message
+import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -76,6 +77,8 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebPageMediaResolver
@@ -166,6 +169,128 @@ private fun videoApiCommandScript(action: String, index: Int, seconds: Int): Str
       walk(window); return handled;
     })();"""
 }
+
+/**
+ * Agente de control que la APP inyecta en TODOS los frames de su WebView, incluidos los iframes de otro
+ * origen, con WebViewCompat.addDocumentStartJavaScript (androidx.webkit).
+ *
+ * Por qué existe: evaluateJavascript() solo corre en el frame principal y el navegador no deja que una
+ * página lea el <video> de un iframe de otro origen. VideoAPI (Latino) y ok.ru (Simuladores) ponen el
+ * <video> en un iframe así, y su API pública no define ningún comando (post_message figura como bloqueado).
+ * Este script no usa la API de ellos ni envía teclas: cada frame ubica SU <video> más grande, informa su
+ * estado y obedece órdenes {__xuper:1,target,cmd} que la app le reparte por postMessage.
+ *
+ * Límites: necesita un System WebView con DOCUMENT_START_SCRIPT; no ve un <video> dentro de un shadow DOM
+ * cerrado ni reproductores que no usen <video>. Si algo falla, el hub no aparece y el mando queda
+ * en manos del reproductor original (comportamiento anterior).
+ */
+private val XUPER_FRAME_AGENT_JS = """(function(){
+  try{
+    if(window.__xuperFrameAgent) return;
+    window.__xuperFrameAgent=true;
+    var ID=Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+    var isTop=false; try{isTop=(window.top===window);}catch(e){}
+    var tick=0, hadVideo=false, bound=null;
+
+    function collect(root,out,budget){
+      try{
+        var vs=root.querySelectorAll('video');
+        for(var i=0;i<vs.length;i++) out.push(vs[i]);
+        if(!out.length && budget.n>0){
+          var all=root.querySelectorAll('*');
+          for(var j=0;j<all.length && budget.n>0;j++){
+            budget.n--;
+            var sr=all[j].shadowRoot;
+            if(sr) collect(sr,out,budget);
+          }
+        }
+      }catch(e){}
+    }
+    function best(){
+      var out=[]; collect(document,out,{n:(tick%3===0)?4000:0});
+      var b=null, ba=-1;
+      for(var i=0;i<out.length;i++){
+        var r; try{r=out[i].getBoundingClientRect();}catch(e){continue;}
+        var a=r.width*r.height;
+        if(a>ba){ba=a;b=out[i];}
+      }
+      return b?{v:b,area:ba}:null;
+    }
+    function deliver(id,data){
+      try{window.XuperBridge.onAgentReport(id,JSON.stringify(data));}catch(e){}
+    }
+    function send(data){
+      if(isTop){deliver(ID,data);return;}
+      try{window.top.postMessage({__xuperReport:1,id:ID,data:data},'*');}catch(e){}
+    }
+    function report(b){
+      if(!b){ if(hadVideo){hadVideo=false;send({none:true});} return; }
+      hadVideo=true;
+      var v=b.v, du=Number(v.duration);
+      send({area:Math.round(b.area),cur:Number(v.currentTime)||0,dur:isFinite(du)?du:0,paused:!!v.paused,muted:!!v.muted||v.volume===0});
+    }
+    function bind(b){
+      if(!b||b.v===bound) return; bound=b.v;
+      ['play','pause','volumechange','seeked','loadedmetadata','ended'].forEach(function(n){
+        try{b.v.addEventListener(n,function(){try{report(best());}catch(x){}});}catch(e){}
+      });
+    }
+    setInterval(function(){tick++;try{var b=best();bind(b);report(b);}catch(e){}},1000);
+
+    window.addEventListener('message',function(e){
+      var d=e.data; if(!d||typeof d!=='object') return;
+      if(d.__xuperReport===1&&isTop&&typeof d.id==='string'){deliver(d.id.slice(0,32),d.data||{});return;}
+      if(d.__xuper!==1||d.target!==ID) return;
+      var b=best(); if(!b) return; var v=b.v;
+      try{
+        if(d.cmd==='toggle'){
+          if(v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){});}else v.pause();
+        }else if(d.cmd==='seek'){
+          var t=(Number(v.currentTime)||0)+(Number(d.sec)||0), du=Number(v.duration);
+          if(isFinite(du)&&du>0) t=Math.min(t,Math.max(0,du-1));
+          v.currentTime=Math.max(0,t);
+        }else if(d.cmd==='mute'){
+          v.muted=!v.muted;
+        }
+      }catch(err){}
+      setTimeout(function(){try{report(best());}catch(x){}},150);
+    });
+
+    if(isTop){
+      window.__xuperSend=function(msg){
+        var seen=0;
+        function walk(w){
+          var n=0; try{n=w.frames.length;}catch(e){return;}
+          for(var i=0;i<n&&seen<300;i++){
+            var f=null; try{f=w.frames[i];}catch(e){continue;}
+            if(!f) continue; seen++;
+            try{f.postMessage(msg,'*');}catch(e){}
+            walk(f);
+          }
+        }
+        walk(window);
+        try{window.postMessage(msg,'*');}catch(e){}
+      };
+    }
+  }catch(e){}
+})();"""
+
+/** Orden para el agente de frames. [target] es el id del frame que informó el video principal. */
+private fun frameAgentCommandScript(target: String, cmd: String, seconds: Int): String {
+    val safeTarget = target.filter { it.isLetterOrDigit() }
+    val safeCmd = cmd.filter { it.isLetter() }
+    return "(function(){try{if(window.__xuperSend){window.__xuperSend({__xuper:1,target:'$safeTarget',cmd:'$safeCmd',sec:$seconds});return true;}}catch(e){}return false;})();"
+}
+
+/** Último estado informado por el agente de un frame con <video>. */
+private class AgentVideoReport(
+    val area: Double,
+    val current: Double,
+    val duration: Double,
+    val paused: Boolean,
+    val muted: Boolean,
+    val atMs: Long,
+)
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -753,7 +878,15 @@ private fun WebEmbedPlayer(
     // figura como "bloqueado"). El hub de Xuper solo se ofrece cuando una sonda confirma que hay un
     // <video> accesible desde el documento; si no, el mando va directo al reproductor original.
     var latinoDomControl by remember(url) { mutableStateOf(false) }
-    val hubActive = hasCustomHub && (!isVideoApi || latinoDomControl)
+    // Agente por frame (ver XUPER_FRAME_AGENT_JS): permite controlar el <video> aunque esté en un iframe de
+    // otro origen. Latino, OK.ru y Simuladores lo usan; FrameXTV conserva su canal postMessage propio.
+    val useFrameAgent = isVideoApi || isOkRu || isSimuladores
+    val agentSupported = remember { useFrameAgent && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false) }
+    var agentInstalled by remember { mutableStateOf(false) }
+    var agentTarget by remember { mutableStateOf<String?>(null) }
+    val agentReports = remember { HashMap<String, AgentVideoReport>() }
+    val agentActive = agentInstalled && agentTarget != null
+    val hubActive = hasCustomHub && (!isVideoApi || latinoDomControl || agentActive)
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
@@ -769,6 +902,10 @@ private fun WebEmbedPlayer(
     var frameInteraction by remember(url) { mutableStateOf(0) }
     // A TV remote often sends only one key-down on long press. Keep seeking while held.
     var heldSeekAction by remember(url) { mutableStateOf<String?>(null) }
+    // Avance sostenido: se acumula mientras la tecla está apretada y se aplica al soltarla (ver SeekRamp).
+    val scrubber = remember { SeekScrubber() }
+    var scrubPending by remember { mutableStateOf(0) }
+    var scrubFlash by remember { mutableStateOf<String?>(null) }
     var hubHasFocus by remember(url) { mutableStateOf(false) }
     var showLatinoHint by remember(url) { mutableStateOf(true) }
     val focusManager = LocalFocusManager.current
@@ -776,6 +913,51 @@ private fun WebEmbedPlayer(
     val hiddenHubFocus = remember(url) { FocusRequester() }
     val nextEpisodePlayFocus = remember(url, nextEpisode?.id) { FocusRequester() }
     val nextEpisodeDismissFocus = remember(url, nextEpisode?.id) { FocusRequester() }
+
+    // Video principal = el de mayor área entre los frames que informaron en los últimos 6 s.
+    val refreshAgentPrimary: () -> Unit = refresh@{
+        val now = SystemClock.uptimeMillis()
+        val iter = agentReports.entries.iterator()
+        while (iter.hasNext()) if (now - iter.next().value.atMs > 6_000L) iter.remove()
+        var bestId: String? = null
+        var best: AgentVideoReport? = null
+        for ((id, r) in agentReports) {
+            if (r.area < 2_500.0) continue
+            val b = best
+            if (b == null || r.area > b.area || (r.area == b.area && r.duration > b.duration)) { bestId = id; best = r }
+        }
+        if (agentTarget != bestId) {
+            agentTarget = bestId
+            android.util.Log.i("XuperAgent", "video principal: $bestId")
+        }
+        if (best != null) {
+            if (framePaused != best.paused) framePaused = best.paused
+            if (frameMuted != best.muted) frameMuted = best.muted
+            frameCurrentTime = best.current
+            if (best.duration > 0.0) frameDuration = best.duration
+        }
+    }
+    val handleAgentReport: (String, String) -> Unit = report@{ frameId, raw ->
+        val json = runCatching { org.json.JSONObject(raw) }.getOrNull() ?: return@report
+        if (json.optBoolean("none", false)) {
+            agentReports.remove(frameId)
+        } else {
+            val isNew = !agentReports.containsKey(frameId)
+            val r = AgentVideoReport(
+                area = json.optDouble("area", 0.0),
+                current = json.optDouble("cur", 0.0),
+                duration = json.optDouble("dur", 0.0),
+                paused = json.optBoolean("paused", false),
+                muted = json.optBoolean("muted", false),
+                atMs = SystemClock.uptimeMillis(),
+            )
+            agentReports[frameId] = r
+            if (isNew) android.util.Log.i("XuperAgent", "frame $frameId: video de ${r.area.toInt()} px², duración ${r.duration.toInt()} s")
+        }
+        refreshAgentPrimary()
+    }
+    // El puente JS del WebView se crea una sola vez: se lee siempre la versión más reciente.
+    val handleAgentReportState = rememberUpdatedState(handleAgentReport)
 
     LaunchedEffect(url) {
         delay(30_000)
@@ -807,7 +989,8 @@ private fun WebEmbedPlayer(
 
     // Latino: sonda periódica. Con 3 fallos seguidos se considera que ya no es controlable.
     LaunchedEffect(isVideoApi, pageFinished) {
-        if (!isVideoApi || !pageFinished) return@LaunchedEffect
+        // Con el agente instalado la sonda del documento principal sobra (el agente también corre en él).
+        if (!isVideoApi || !pageFinished || agentInstalled) return@LaunchedEffect
         var misses = 0
         while (true) {
             webViewRef?.evaluateJavascript(videoApiCommandScript("probe", 0, 0)) { raw ->
@@ -829,9 +1012,24 @@ private fun WebEmbedPlayer(
             runCatching { webViewRef?.requestFocus() }
         }
     }
-    LaunchedEffect(url) {
-        delay(7_000)
-        showLatinoHint = false
+    // Latino: cuando el video pasa a ser controlable el hub se muestra unos segundos (luego se oculta solo).
+    LaunchedEffect(isVideoApi, hubActive) {
+        if (isVideoApi && hubActive) frameControlsVisible = true
+    }
+    // El aviso de Latino se cuenta desde que la página terminó de cargar (antes podía vencer durante la carga).
+    LaunchedEffect(url, pageFinished) {
+        if (pageFinished) {
+            delay(9_000)
+            showLatinoHint = false
+        }
+    }
+    // Un frame que se fue deja de informar: se purga el video principal aunque no llegue ningún aviso.
+    LaunchedEffect(agentInstalled) {
+        if (!agentInstalled) return@LaunchedEffect
+        while (true) {
+            delay(2_000)
+            refreshAgentPrimary()
+        }
     }
     LaunchedEffect(videoEnded, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered) {
         if (videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
@@ -901,6 +1099,25 @@ private fun WebEmbedPlayer(
             return
         }
 
+        // Agente de frames (Latino / OK.ru / Simuladores): la orden llega al <video> aunque esté en un iframe de
+        // otro origen. El estado de pausa/silencio NO se supone: lo informa el propio agente.
+        val agentTargetNow = agentTarget
+        if (agentInstalled && agentTargetNow != null) {
+            val (cmd, sec) = when (action) {
+                "playPause" -> "toggle" to 0
+                "seekBack" -> "seek" to -kotlin.math.abs(seconds)
+                "seekForward" -> "seek" to kotlin.math.abs(seconds)
+                "mute" -> "mute" to 0
+                else -> null to 0
+            }
+            if (cmd != null) {
+                webView.evaluateJavascript(frameAgentCommandScript(agentTargetNow, cmd, sec)) { raw ->
+                    if (raw != "true") android.util.Log.w("XuperAgent", "El frame principal no pudo repartir la orden $cmd")
+                }
+            }
+            return
+        }
+
         if (isVideoApi) {
             // Latino/VideoAPI: solo control directo sobre el <video> accesible. NO se inyectan teclas:
             // la API pública no define atajos y una flecha/Espacio inyectado puede terminar moviendo el
@@ -947,18 +1164,93 @@ private fun WebEmbedPlayer(
         }
     }
 
-    // Implement long-press seeking ourselves instead of relying on repeatCount, which many
-    // Android TV remotes never increment. Each repeat is a small real seek; release stops it.
+    // Avance/retroceso sostenido, estilo plataforma de streaming: mientras la tecla está apretada se ACUMULA un
+    // salto cada vez mayor (SeekRamp) y se aplica de una sola vez al soltarla. Así no se le mandan seeks
+    // encadenados a un reproductor embebido cuya reacción desconocemos, y no depende de que el mando repita teclas.
+    fun scrubText(seconds: Int): String =
+        (if (seconds >= 0) "⏩ +" else "⏪ −") + SeekRamp.formatDelta(seconds)
+
+    fun commitScrub() {
+        val raw = scrubber.consume()
+        scrubPending = 0
+        if (raw == 0) return
+        val delta = if (isFrameXtv) SeekRamp.clampDelta(raw, frameCurrentTime, frameDuration) else raw
+        scrubFlash = scrubText(if (delta != 0) delta else raw)
+        if (delta == 0) return
+        if (isFrameXtv && frameDuration > 0.0) frameCurrentTime = (frameCurrentTime + delta).coerceIn(0.0, frameDuration)
+        runWebCommand(if (delta < 0) "seekBack" else "seekForward", frameSubtitleIndex, kotlin.math.abs(delta))
+    }
+
+    fun scrubStep(forward: Boolean) {
+        // Si se invierte la dirección, primero se aplica lo acumulado hacia el otro lado.
+        if (scrubber.pendingSeconds != 0 && (scrubber.pendingSeconds > 0) != forward) commitScrub()
+        scrubPending = scrubber.step(forward, SystemClock.uptimeMillis())
+        scrubFlash = null
+        frameInteraction++
+    }
+
+    fun startHeldSeek(forward: Boolean) {
+        val seekAction = if (forward) "seekForward" else "seekBack"
+        if (heldSeekAction != null && heldSeekAction != seekAction) {
+            heldSeekAction = null
+            commitScrub()
+        }
+        scrubStep(forward)
+        heldSeekAction = seekAction
+    }
+
+    fun stopHeldSeek(): Boolean {
+        if (heldSeekAction == null) return false
+        heldSeekAction = null
+        commitScrub()
+        return true
+    }
+
+    // Tecla OK sostenida sobre los botones "↶ 10 s" / "10 s ↷" del hub: mismo avance acelerado.
+    fun holdSeekKeyModifier(forward: Boolean): Modifier = Modifier.onPreviewKeyEvent { event ->
+        val ev = event.nativeKeyEvent
+        val isOk = ev.keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
+            ev.keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
+            ev.keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+        if (!isOk) return@onPreviewKeyEvent false
+        when (ev.action) {
+            AndroidKeyEvent.ACTION_DOWN -> {
+                if (ev.repeatCount == 0) startHeldSeek(forward)
+                true
+            }
+            AndroidKeyEvent.ACTION_UP -> {
+                stopHeldSeek()
+                true
+            }
+            else -> false
+        }
+    }
+
+    // Mientras la tecla sigue apretada se suma un paso cada SeekRamp.TICK_MS (el primero se sumó al apretar).
     LaunchedEffect(heldSeekAction) {
         val action = heldSeekAction ?: return@LaunchedEffect
-        delay(450L)
+        val forward = action == "seekForward"
+        delay(SeekRamp.HOLD_START_MS)
         var elapsedMs = 0L
-        while (heldSeekAction == action && elapsedMs < 15_000L) {
-            runWebCommand(action, frameSubtitleIndex, 10)
-            delay(300L)
-            elapsedMs += 300L
+        while (heldSeekAction == action && elapsedMs < SeekRamp.MAX_HOLD_MS) {
+            scrubStep(forward)
+            delay(SeekRamp.TICK_MS)
+            elapsedMs += SeekRamp.TICK_MS
         }
-        if (heldSeekAction == action) heldSeekAction = null
+        if (heldSeekAction == action) stopHeldSeek()
+    }
+    // Red de seguridad: si el mando nunca avisa que soltaste la tecla, lo acumulado se aplica igual.
+    LaunchedEffect(scrubPending) {
+        if (scrubPending != 0) {
+            delay(SeekRamp.COMMIT_IDLE_MS)
+            if (heldSeekAction == null) commitScrub()
+        }
+    }
+    LaunchedEffect(scrubFlash) {
+        if (scrubFlash != null) {
+            delay(900)
+            scrubFlash = null
+        }
     }
 
     BackHandler(enabled = true) {
@@ -1007,7 +1299,7 @@ private fun WebEmbedPlayer(
                 else -> null
             }
             return@hubKey if (released != null && heldSeekAction == released) {
-                heldSeekAction = null
+                stopHeldSeek()
                 true
             } else false
         }
@@ -1043,16 +1335,20 @@ private fun WebEmbedPlayer(
                 true
             }
             is HubKeyAction.Seek -> {
-                val seekAction = if (action.forward) "seekForward" else "seekBack"
-                // Solo el primer key-down dispara el seek; LaunchedEffect(heldSeekAction) repite mientras se mantenga.
-                if (ev.repeatCount == 0 && heldSeekAction == null) {
-                    heldSeekAction = seekAction
-                    runWebCommand(seekAction, frameSubtitleIndex, 10)
-                }
+                // Solo el primer key-down arranca el avance; LaunchedEffect(heldSeekAction) lo acelera mientras se mantenga.
+                if (ev.repeatCount == 0) startHeldSeek(action.forward)
                 true
             }
             HubKeyAction.TogglePlayPause -> {
-                runWebCommand("playPause", frameSubtitleIndex, 0)
+                if (ev.repeatCount == 0) {
+                    runWebCommand("playPause", frameSubtitleIndex, 0)
+                    // Igual que el reproductor nativo: al pausar con el panel oculto, el panel vuelve a mostrarse.
+                    if (!frameControlsVisible) {
+                        hubHasFocus = false
+                        frameControlsVisible = true
+                        runCatching { frameControlsFocus.requestFocus() }
+                    }
+                }
                 true
             }
         }
@@ -1136,6 +1432,8 @@ private fun WebEmbedPlayer(
                             progress = 0
                             pageFinished = false
                             pageError = null
+                            agentReports.clear()
+                            agentTarget = null
                         }
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
@@ -1206,6 +1504,12 @@ private fun WebEmbedPlayer(
                         }
                     }
                     setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
+                    // Agente de frames: debe registrarse ANTES de cargar la página para correr también en los iframes.
+                    if (agentSupported) {
+                        agentInstalled = runCatching {
+                            WebViewCompat.addDocumentStartJavaScript(this, XUPER_FRAME_AGENT_JS, setOf("*"))
+                        }.onFailure { android.util.Log.w("XuperAgent", "No se pudo instalar el agente de frames", it) }.isSuccess
+                    }
                     tag = url
                     if (nextEpisode != null) {
                         addJavascriptInterface(object {
@@ -1234,6 +1538,13 @@ private fun WebEmbedPlayer(
                                 val key = name.ifBlank { text.take(40) }
                                 val first = synchronized(seenFrameMessages) { seenFrameMessages.add(key) }
                                 if (first) android.util.Log.i("XuperFrameXTV", "mensaje del iframe: $text")
+                            }
+
+                            /** El agente de cada frame informa su video. Corre en un hilo del puente: se pasa al principal. */
+                            @JavascriptInterface fun onAgentReport(frameId: String, json: String) {
+                                val id = frameId.take(32)
+                                val data = json.take(600)
+                                Handler(Looper.getMainLooper()).post { handleAgentReportState.value(id, data) }
                             }
 
                             @JavascriptInterface fun onTimeUpdate(current: Double, duration: Double) {
@@ -1327,14 +1638,23 @@ private fun WebEmbedPlayer(
                             Box(Modifier.fillMaxWidth(if (frameDuration > 0) (frameCurrentTime / frameDuration).toFloat().coerceIn(0f, 1f) else 0f).height(4.dp).background(Color(0xFF65DCE8), RoundedCornerShape(4.dp)))
                         }
                     }
-                } else Text(
-                    when {
-                        isOkRu -> "OK.RU · controles"
-                        isSimuladores -> "SIMULADORES · controles"
-                        else -> "LATINO · controles"
-                    },
-                    color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold
-                )
+                } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        when {
+                            isOkRu -> "OK.RU · controles"
+                            isSimuladores -> "SIMULADORES · controles"
+                            else -> "LATINO · controles"
+                        },
+                        color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold
+                    )
+                    // El agente informa posición y duración del video principal: se muestra igual que en FrameXTV.
+                    if (agentActive && frameDuration > 0.0) {
+                        Text("${SeekRamp.formatClock(frameCurrentTime)} / ${SeekRamp.formatClock(frameDuration)}", color = Color.White, fontSize = 13.sp, modifier = Modifier.widthIn(min = 104.dp))
+                        Box(Modifier.weight(1f).height(4.dp).background(Color(0xFF52616B), RoundedCornerShape(4.dp))) {
+                            Box(Modifier.fillMaxWidth((frameCurrentTime / frameDuration).toFloat().coerceIn(0f, 1f)).height(4.dp).background(Color(0xFF65DCE8), RoundedCornerShape(4.dp)))
+                        }
+                    }
+                }
 
                 // Fila 1: transporte (+ subtítulos en FrameXTV). Fila 2: opciones de FrameXTV.
                 // Antes eran hasta 8 botones en una sola fila, que no entran en pantalla.
@@ -1343,8 +1663,9 @@ private fun WebEmbedPlayer(
                         runWebCommand("playPause", frameSubtitleIndex, 0)
                     }) { Text(if (framePaused) "▶ Reproducir" else "Ⅱ Pausar") }
 
-                    Button(onClick = { runWebCommand("seekBack", frameSubtitleIndex, 10) }) { Text("↶ 10 s") }
-                    Button(onClick = { runWebCommand("seekForward", frameSubtitleIndex, 10) }) { Text("10 s ↷") }
+                    // Tocar = 10 s; mantener OK apretado acelera el avance (se aplica al soltar).
+                    Button(modifier = holdSeekKeyModifier(false), onClick = { runWebCommand("seekBack", frameSubtitleIndex, 10) }) { Text("↶ 10 s") }
+                    Button(modifier = holdSeekKeyModifier(true), onClick = { runWebCommand("seekForward", frameSubtitleIndex, 10) }) { Text("10 s ↷") }
                     Button(onClick = { runWebCommand("mute", frameSubtitleIndex, 0) }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
 
                     if (isFrameXtv) {
@@ -1387,9 +1708,27 @@ private fun WebEmbedPlayer(
         }
         if (isVideoApi && !hubActive && showLatinoHint && pageError == null && progress >= 100) {
             Text(
-                "Latino: el control remoto maneja el reproductor original de VideoAPI",
+                when {
+                    !agentSupported -> "Latino: este WebView no permite controlar el video dentro de iframes (actualizá «Android System WebView»). El mando maneja el reproductor original."
+                    !agentInstalled -> "Latino: no se pudo activar el control del video. El mando maneja el reproductor original."
+                    else -> "Latino: buscando el video para controlarlo… mientras tanto el mando maneja el reproductor original."
+                },
                 Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp),
                 color = Color.White, fontSize = 14.sp
+            )
+        }
+        // Indicador del avance sostenido: delta acumulado y, si se conoce la duración, la posición de destino.
+        val scrubLabel: String? = when {
+            scrubPending != 0 -> scrubText(scrubPending) + if (frameDuration > 0.0)
+                "  ·  " + SeekRamp.formatClock((frameCurrentTime + scrubPending).coerceIn(0.0, frameDuration))
+            else ""
+            else -> scrubFlash
+        }
+        if (hubActive && scrubLabel != null && pageError == null) {
+            Text(
+                scrubLabel,
+                Modifier.align(Alignment.Center).background(Color(0xCC101820), RoundedCornerShape(12.dp)).padding(horizontal = 26.dp, vertical = 14.dp),
+                color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold
             )
         }
         if (progress < 100 && pageError == null) {
