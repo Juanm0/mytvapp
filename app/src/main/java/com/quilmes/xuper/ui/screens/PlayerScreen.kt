@@ -639,6 +639,30 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                             // pistas de subtítulos y el elemento <video> en el documento principal.
                             // Si el proveedor lo encierra en un iframe cross-origin, el navegador
                             // impide controlarlo desde aquí y respetamos esa limitación.
+                            // Foco visible para Android TV: resalta controles HTML accesibles y permite
+                            // recorrerlos con el D-pad cuando están en el documento actual. Los iframes
+                            // cross-origin no se pueden modificar desde la página contenedora.
+                            view?.evaluateJavascript("""(function(){
+                              try {
+                                if (!window.__xuperTvFocusInstalled) {
+                                  window.__xuperTvFocusInstalled = true;
+                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus{transform:scale(1.06)!important;z-index:2147483647!important} video:focus{outline:0!important}`;
+                                  var st=document.createElement('style');st.id='xuper-tv-focus-style';st.textContent=css;(document.head||document.documentElement).appendChild(st);
+                                  var getItems=function(){return Array.from(document.querySelectorAll('button,a[href],[role=button],input,select,textarea,[tabindex]')).filter(function(e){var r=e.getBoundingClientRect();var cs=getComputedStyle(e);return !e.disabled && e.tabIndex>=0 && r.width>0 && r.height>0 && cs.visibility!=='hidden' && cs.display!=='none'});};
+                                  document.addEventListener('keydown',function(ev){
+                                    if(!['ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(ev.key))return;
+                                    var items=getItems();if(!items.length)return;
+                                    var current=document.activeElement;var i=items.indexOf(current);
+                                    if(i<0){items[0].focus();ev.preventDefault();return;}
+                                    var horizontal=ev.key==='ArrowLeft'||ev.key==='ArrowRight';
+                                    var dir=(ev.key==='ArrowRight'||ev.key==='ArrowDown')?1:-1;
+                                    var next=items[(i+dir+items.length)%items.length];
+                                    if(horizontal && current && current.tagName==='VIDEO')return;
+                                    next.focus();ev.preventDefault();
+                                  },true);
+                                }
+                              } catch(e) {}
+                            })();""", null)
                             view?.evaluateJavascript("""(function(){
                               try {
                                 if (!window.__xuperSubtitleResume) {

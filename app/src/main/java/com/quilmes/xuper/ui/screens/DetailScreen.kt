@@ -113,6 +113,7 @@ fun DetailScreen(
                             val videoApiPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
+                            Button(onClick = { onPlay(title.id) }) { Text("▶  Reproducir") }
                             Button(onClick = { onPlay(videoApiPlaybackId) }) { Text("▶  Latino") }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
