@@ -58,9 +58,9 @@ internal fun LibraryScreen(sections: List<Section>, mode: LibraryMode, onPlay: (
     // sincrónicamente en el hilo principal cada vez que se abría esta pestaña,
     // congelando la navegación. Ahora se calcula en segundo plano.
     var rows by remember { mutableStateOf<List<Category>>(emptyList()) }
-    LaunchedEffect(sections, mode, favoriteIds, recentIds) {
+    LaunchedEffect(sections, mode, favoriteIds, recentIds, savedRecentTitles) {
         val computed = withContext(Dispatchers.Default) {
-            buildLibraryRows(sections, mode, favoriteIds, recentIds, recentOrder)
+            buildLibraryRows(sections, mode, favoriteIds, recentIds, recentOrder, savedRecentTitles)
         }
         rows = computed
     }
@@ -106,6 +106,7 @@ private fun buildLibraryRows(
     favoriteIds: Set<String>,
     recentIds: Set<String>,
     recentOrder: List<String>,
+    savedRecentTitles: List<Title>,
 ): List<Category> {
     val allTitles by lazy { sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.id } }
     return when (mode) {
