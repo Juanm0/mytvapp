@@ -179,7 +179,7 @@ fun PlayerScreen(
 ) {
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor")) {
+    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") || streamUrl.startsWith("https://ok.ru/videoembed/")) {
         WebEmbedPlayer(
             url = streamUrl,
             contentKey = currentTitleId.ifBlank { streamUrl },
@@ -601,7 +601,7 @@ private fun NextEpisodeOverlay(
             Text("EPISODIO SIGUIENTE", color = Color(0xFF65DCE8), fontSize = 11.sp, fontWeight = FontWeight.Bold)
             Text(episode.name, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
             Text(episodeMeta, color = Color(0xFFCFD8DE), fontSize = 12.sp)
-            Text("Episodio siguiente en $secondsLeft…", color = Color.White, fontSize = 12.sp)
+            Text(if (secondsLeft > 0) "Episodio siguiente en $secondsLeft…" else "Se reproducirá automáticamente", color = Color.White, fontSize = 12.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = onPlayNow) { Text("▶ Ahora") }
                 if (onDismiss != null) Button(onClick = onDismiss) { Text("Cancelar") }
@@ -756,8 +756,9 @@ private fun WebEmbedPlayer(
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
     var nextEpisodeDismissed by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
+    var videoEnded by remember(url, nextEpisode?.id) { mutableStateOf(false) }
     val nextEpisodeRemaining = (frameDuration - frameCurrentTime).coerceAtLeast(0.0)
-    val showNextEpisodeCard = nextEpisode != null && frameDuration > 0.0 && nextEpisodeRemaining <= 20.0 && !nextEpisodeDismissed && !nextEpisodeTriggered
+    val showNextEpisodeCard = nextEpisode != null && videoEnded && !nextEpisodeDismissed && !nextEpisodeTriggered
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
     // Índice de pista de subtítulos; se reinicia al cambiar de proveedor.
@@ -812,10 +813,11 @@ private fun WebEmbedPlayer(
             frameControlsVisible = false
         }
     }
-    LaunchedEffect(nextEpisode?.id, frameCurrentTime, frameDuration, framePaused, nextEpisodeDismissed, nextEpisodeTriggered) {
-        if (nextEpisode != null && frameDuration > 0.0 && !framePaused && !nextEpisodeDismissed && !nextEpisodeTriggered) {
-            val remaining = frameDuration - frameCurrentTime
-            if (remaining <= 1.0 && remaining >= 0.0) {
+    LaunchedEffect(videoEnded, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered) {
+        if (videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+            // Dejamos que el mini-hub llegue a mostrarse; no calculamos el tiempo restante del video.
+            delay(2_000)
+            if (!nextEpisodeDismissed && !nextEpisodeTriggered) {
                 nextEpisodeTriggered = true
                 onPlayNextEpisode(nextEpisode.id)
             }
@@ -969,6 +971,17 @@ private fun WebEmbedPlayer(
                                 Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               } catch(e) {}
                             })();""", null)
+                            if (nextEpisode != null) view?.evaluateJavascript("""(function(){
+                              try {
+                                if(!window.__xuperEndDetector){
+                                  window.__xuperEndDetector=true;
+                                  var notify=function(){try{XuperEndBridge.onVideoEnded()}catch(e){}};
+                                  var bind=function(){document.querySelectorAll('video').forEach(function(v){if(!v.__xuperEnded){v.__xuperEnded=true;v.addEventListener('ended',notify);}})};
+                                  bind(); new MutationObserver(bind).observe(document.documentElement,{childList:true,subtree:true});
+                                  window.addEventListener('message',function(e){var d=e.data;try{if(typeof d==='string')d=JSON.parse(d);var x=JSON.stringify(d||{}).toLowerCase();if(/ended|video.?end|playback.?complete|finished/.test(x))notify();}catch(err){}});
+                                }
+                              }catch(e){}
+                            })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             if (isVideoApi) view?.evaluateJavascript("""(function(){
                               try {
@@ -1026,6 +1039,14 @@ private fun WebEmbedPlayer(
                     }
                     setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
                     tag = url
+                    if (nextEpisode != null) {
+                        addJavascriptInterface(object {
+                            @JavascriptInterface
+                            fun onVideoEnded() {
+                                android.os.Handler(android.os.Looper.getMainLooper()).post { videoEnded = true }
+                            }
+                        }, "XuperEndBridge")
+                    }
                     if (hasCustomHub) {
                         addJavascriptInterface(object {
                             private var lastPersistedPosition = -1L
@@ -1083,10 +1104,9 @@ private fun WebEmbedPlayer(
             },
         )
         if (showNextEpisodeCard && nextEpisode != null) {
-            val secondsLeft = kotlin.math.ceil(nextEpisodeRemaining).toInt().coerceIn(0, 20)
             NextEpisodeOverlay(
                 episode = nextEpisode,
-                secondsLeft = secondsLeft,
+                secondsLeft = 0,
                 onPlayNow = {
                     if (!nextEpisodeTriggered) {
                         nextEpisodeTriggered = true

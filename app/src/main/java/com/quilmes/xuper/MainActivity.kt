@@ -318,9 +318,10 @@ class MainActivity : ComponentActivity() {
                                     useFrameXtv -> WebSourceRegistry.frameXtvUrl(requestedId)
                                     useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
                                     useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
-                                        val season = match.groupValues[1]
-                                        val episode = match.groupValues[2]
-                                        "https://los-simuladores.bringfeel.com.ar/reproductor?temporada=$season&capitulo=$episode"
+                                        val season = match.groupValues[1].toIntOrNull() ?: 1
+                                        val episode = match.groupValues[2].toIntOrNull() ?: 1
+                                        val videoId = simuladoresVideoId(season, episode)
+                                        if (videoId != null) "https://ok.ru/videoembed/$videoId" else null
                                     }
                                     else -> WebSourceRegistry.frameXtvUrl(requestedId)
                                 }
@@ -394,6 +395,25 @@ class MainActivity : ComponentActivity() {
                                     val seriesId = "tmdb-tv-$tmdbNumber"
                                     val currentSeason = seasonText.toIntOrNull() ?: 0
                                     val currentEpisode = episodeText.toIntOrNull() ?: 0
+                                    if (tmdbNumber == "332") {
+                                        val nextSeason = if (currentSeason == 1 && currentEpisode >= 13) 2 else currentSeason
+                                        val nextEpisodeNumber = if (currentSeason == 1 && currentEpisode >= 13) 1 else currentEpisode + 1
+                                        val nextVideoId = simuladoresVideoId(nextSeason, nextEpisodeNumber)
+                                        if (nextVideoId != null) {
+                                            val nextKey = "tmdb-tv-332|s$nextSeason|e$nextEpisodeNumber"
+                                            val nextUrl = "https://ok.ru/videoembed/$nextVideoId"
+                                            nextExternalEpisode = Title(
+                                                id = nextKey,
+                                                name = "Los Simuladores · T$nextSeason E$nextEpisodeNumber",
+                                                description = "",
+                                                posterUrl = "",
+                                                backdropUrl = "",
+                                                streamUrl = nextUrl,
+                                                contentKind = ContentKind.SERIES,
+                                            )
+                                        }
+                                        return@LaunchedEffect
+                                    }
                                     val seasons = tmdbCatalogService.loadSeasons(seriesId).filter { it.number > 0 }.sortedBy { it.number }
                                     val sameSeasonEpisodes = tmdbCatalogService.loadEpisodes(seriesId, currentSeason).sortedBy { it.number }
                                     var nextSeasonNumber = currentSeason
@@ -409,7 +429,10 @@ class MainActivity : ComponentActivity() {
                                     }
                                     if (nextEpisodeData != null) {
                                         val nextKey = "$seriesId|s$nextSeasonNumber|e${nextEpisodeData.number}"
-                                        val nextUrl = if (runCatching { Uri.parse(streamUrl).host.equals("videoapi.la", true) }.getOrDefault(false)) {
+                                        val nextUrl = if (tmdbNumber == "332") {
+                                            val okId = simuladoresVideoId(nextSeasonNumber, nextEpisodeData.number)
+                                            okId?.let { "https://ok.ru/videoembed/$it" }
+                                        } else if (runCatching { Uri.parse(streamUrl).host.equals("videoapi.la", true) }.getOrDefault(false)) {
                                             WebSourceRegistry.videoApiUrl(nextKey)
                                         } else {
                                             WebSourceRegistry.frameXtvUrl(nextKey)
@@ -524,3 +547,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+private fun simuladoresVideoId(season: Int, episode: Int): String? {
+    val ids = listOf(
+        listOf("7286191491722", "9601507658378", "7286192802442", "7286192605834", "7286192671370", "9601509427850", "7286192736906", "9601510673034", "9601512311434", "9601513818762", "7286192474762", "7286193130122", "9601515719306"),
+        listOf("7289262312074", "9602281245322", "9602281310858", "7289262181002", "9602281179786", "7289262246538", "9602281114250", "7289262508682", "7289262115466", "9602281376394", "7289262574218")
+    )
+    return ids.getOrNull(season - 1)?.getOrNull(episode - 1)
+}
+
