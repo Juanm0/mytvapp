@@ -20,14 +20,14 @@ object WebSourceRegistry {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         if (episode != null) {
             val (id, season, number) = episode.destructured
-            return "https://framextv.xyz/watch/$id/$season/$number"
+            return "https://framextv.xyz/embed/$id/$season/$number"
         }
         Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
-            return "https://framextv.xyz/watch/${it.groupValues[1]}"
+            return "https://framextv.xyz/embed/${it.groupValues[1]}"
         }
         // Si se pide una serie sin episodio elegido, abre el primer episodio como valor inicial.
         Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
-            return "https://framextv.xyz/watch/${it.groupValues[1]}/1/1"
+            return "https://framextv.xyz/embed/${it.groupValues[1]}/1/1"
         }
         return null
     }

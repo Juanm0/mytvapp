@@ -106,7 +106,7 @@ fun PlayerScreen(
 ) {
     // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/watch/")) {
+    if (streamUrl.startsWith("https://videoapi.la/e/") || streamUrl.startsWith("https://framextv.xyz/embed/")) {
         WebEmbedPlayer(url = streamUrl, onExit = onExit)
         return
     }
@@ -642,25 +642,21 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                             // Foco visible para Android TV: resalta controles HTML accesibles y permite
                             // recorrerlos con el D-pad cuando están en el documento actual. Los iframes
                             // cross-origin no se pueden modificar desde la página contenedora.
+                            // No interceptamos las flechas: el reproductor/iframe debe recibirlas para
+                            // pausar, navegar por controles y buscar. Solo añadimos un indicador de foco
+                            // y hacemos que los iframes sean alcanzables con el control remoto.
                             view?.evaluateJavascript("""(function(){
                               try {
-                                if (!window.__xuperTvFocusInstalled) {
-                                  window.__xuperTvFocusInstalled = true;
-                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus,iframe:focus{transform:scale(1.035)!important;z-index:2147483647!important} video:focus{outline:0!important}`;
+                                if (!window.__xuperTvFocusStyle) {
+                                  window.__xuperTvFocusStyle = true;
+                                  var css = `:focus{outline:4px solid #65DCE8!important;outline-offset:4px!important;box-shadow:0 0 0 5px rgba(101,220,232,.28)!important;filter:brightness(1.18)!important} button:focus,a:focus,[role=button]:focus,[tabindex]:focus,iframe:focus{transform:scale(1.025)!important;z-index:2147483647!important}`;
                                   var st=document.createElement('style');st.id='xuper-tv-focus-style';st.textContent=css;(document.head||document.documentElement).appendChild(st);
-                                  var getItems=function(){document.querySelectorAll('iframe').forEach(function(f){if(!f.hasAttribute('tabindex'))f.setAttribute('tabindex','0');if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});return Array.from(document.querySelectorAll('button,a[href],[role=button],input,select,textarea,iframe,[tabindex]')).filter(function(e){var r=e.getBoundingClientRect();var cs=getComputedStyle(e);return !e.disabled && e.tabIndex>=0 && r.width>0 && r.height>0 && cs.visibility!=='hidden' && cs.display!=='none'});};
-                                  document.addEventListener('keydown',function(ev){
-                                    if(['Enter',' ','NumpadEnter'].includes(ev.key)){var a=document.activeElement;if(a && a!==document.body && (a.matches('button,a[href],[role=button],input,select,textarea') || a.tagName==='IFRAME')){if(a.tagName!=='IFRAME')a.click();ev.preventDefault();}return;}
-                                    if(!['ArrowDown','ArrowUp','ArrowLeft','ArrowRight'].includes(ev.key))return;
-                                    var items=getItems();if(!items.length)return;
-                                    var current=document.activeElement;var i=items.indexOf(current);
-                                    if(i<0){items[0].focus();ev.preventDefault();return;}
-                                    var horizontal=ev.key==='ArrowLeft'||ev.key==='ArrowRight';
-                                    var dir=(ev.key==='ArrowRight'||ev.key==='ArrowDown')?1:-1;
-                                    var next=items[(i+dir+items.length)%items.length];
-                                    if(horizontal && current && current.tagName==='VIDEO')return;
-                                    next.focus();ev.preventDefault();
-                                  },true);
+                                  document.querySelectorAll('iframe').forEach(function(f){
+                                    if(!f.hasAttribute('tabindex')) f.setAttribute('tabindex','0');
+                                    if(!f.getAttribute('title')) f.setAttribute('title','Reproductor de video');
+                                  });
+                                  // No se bloquean ni se redirigen ArrowLeft/Right/Up/Down: hacerlo
+                                  // aquí impide que el iframe de otro origen controle su propio player.
                                 }
                               } catch(e) {}
                             })();""", null)
