@@ -12,6 +12,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.os.Message
@@ -25,7 +26,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
@@ -535,12 +539,24 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    val isFrameXtv = remember(url) { runCatching { URI(url).host.equals("framextv.xyz", true) }.getOrDefault(false) }
+    var frameCurrentTime by remember(url) { mutableStateOf(0.0) }
+    var frameDuration by remember(url) { mutableStateOf(0.0) }
+    var framePaused by remember(url) { mutableStateOf(false) }
+    var frameMuted by remember(url) { mutableStateOf(false) }
+    val frameControlsFocus = remember(url) { FocusRequester() }
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
         delay(30_000)
         if (!pageFinished && pageError == null) {
             pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
+        }
+    }
+    LaunchedEffect(isFrameXtv) {
+        if (isFrameXtv) {
+            delay(1_500)
+            runCatching { frameControlsFocus.requestFocus() }
         }
     }
 
@@ -734,7 +750,26 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                         }
                     }
                     setDownloadListener { _, _, _, _, _ -> pageError = "El sitio ofreció una descarga en lugar de reproducir el video." }
-                    loadUrl(url)
+                    tag = url
+                    if (isFrameXtv) {
+                        addJavascriptInterface(object {
+                            @JavascriptInterface
+                            fun onTimeUpdate(current: Double, duration: Double) {
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    frameCurrentTime = current.coerceAtLeast(0.0)
+                                    frameDuration = duration.coerceAtLeast(0.0)
+                                }
+                            }
+                        }, "XuperBridge")
+                        val embedUrl = if (url.contains("?")) "$url&autoplay=1&muted=0&controls=1" else "$url?autoplay=1&muted=0&controls=1"
+                        val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;")
+                        val wrapper = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>
+                          (function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{var m=Object.assign({action:action},extra||{});f.contentWindow.postMessage(m,'*');}catch(e){}};
+                          window.addEventListener('message',function(e){var d=e.data;if(!d||typeof d!=='object')return;if(d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0);}catch(x){}}});
+                          window.addEventListener('keydown',function(e){if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Enter',' '].indexOf(e.key)>=0){e.stopPropagation();}},true);
+                          })();</script></body></html>"""
+                        loadDataWithBaseURL("https://xuper.local/", wrapper, "text/html", "UTF-8", null)
+                    } else loadUrl(url)
                     requestFocus()
                 }
                 webViewRef = webView
@@ -743,7 +778,15 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
             },
             update = { container ->
                 val webView = container.getChildAt(0) as? WebView
-                if (webView != null && webView.url != url && webView.tag != url) { webView.tag = url; webView.loadUrl(url) }
+                if (webView != null && webView.tag != url) {
+                    webView.tag = url
+                    if (isFrameXtv) {
+                        val embedUrl = if (url.contains("?")) "$url&autoplay=1&muted=0&controls=1" else "$url?autoplay=1&muted=0&controls=1"
+                        val safeEmbed = embedUrl.replace("&", "&amp;").replace("\"", "&quot;")
+                        val wrapper = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}iframe{width:100%;height:100%;border:0;display:block}</style></head><body><iframe id="framextv-player" src="$safeEmbed" allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe><script>(function(){var f=document.getElementById('framextv-player');window.xuperFrameCommand=function(action,extra){try{f.contentWindow.postMessage(Object.assign({action:action},extra||{}),'*')}catch(e){}};window.addEventListener('message',function(e){var d=e.data;if(d&&d.event==='frameXTV:timeupdate'){try{window.XuperBridge.onTimeUpdate(Number(d.currentTime)||0,Number(d.duration)||0)}catch(x){}}});})();</script></body></html>"""
+                        webView.loadDataWithBaseURL("https://xuper.local/", wrapper, "text/html", "UTF-8", null)
+                    } else webView.loadUrl(url)
+                }
             },
             onRelease = { container ->
                 (container.getChildAt(0) as? WebView)?.let { webView ->
@@ -756,6 +799,31 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 webViewRef = null
             },
         )
+        if (isFrameXtv && pageError == null) {
+            Column(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp)
+                    .background(Color(0xE6101820), RoundedCornerShape(14.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                val timeText = { value: Double ->
+                    val total = value.toInt().coerceAtLeast(0)
+                    "%02d:%02d".format(total / 60, total % 60)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${timeText(frameCurrentTime)} / ${timeText(frameDuration)}", color = Color.White, fontSize = 13.sp, modifier = Modifier.widthIn(min = 104.dp))
+                    Box(Modifier.weight(1f).height(4.dp).background(Color(0xFF52616B), RoundedCornerShape(4.dp))) {
+                        Box(Modifier.fillMaxWidth(if (frameDuration > 0) (frameCurrentTime / frameDuration).toFloat().coerceIn(0f, 1f) else 0f).height(4.dp).background(Color(0xFF65DCE8), RoundedCornerShape(4.dp)))
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('${if (framePaused) "play" else "pause"}');", null); framePaused = !framePaused }) { Text(if (framePaused) "▶ Reproducir" else "Ⅱ Pausar") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:-10});", null) }) { Text("↶ 10 s") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('seekBy',{seconds:10});", null) }) { Text("10 s ↷") }
+                    Button(modifier = Modifier.focusRequester(frameControlsFocus), onClick = { webViewRef?.evaluateJavascript(if (frameMuted) "window.xuperFrameCommand('setVolume',{volume:1});" else "window.xuperFrameCommand('mute');", null); frameMuted = !frameMuted }) { Text(if (frameMuted) "🔊 Sonido" else "🔇 Silencio") }
+                    Button(onClick = { webViewRef?.evaluateJavascript("window.xuperFrameCommand('setSubtitle',{index:0});", null) }) { Text("CC Subtítulos") }
+                }
+            }
+        }
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }
