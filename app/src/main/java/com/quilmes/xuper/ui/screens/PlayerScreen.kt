@@ -655,6 +655,23 @@ private fun WebPageResolverPlayer(name: String, pageUrl: String) {
     }
 }
 
+/** Prueba el selector por URL además de postMessage: FrameXTV puede ignorar comandos no documentados. */
+private fun frameXtvServerUrl(rawUrl: String, serverIndex: Int): String {
+    val clean = rawUrl.substringBefore("#")
+    val fragment = rawUrl.substringAfter("#", "")
+    val base = clean.substringBefore("?")
+    val query = clean.substringAfter("?", "").split("&")
+        .filter { it.isNotBlank() && it.substringBefore("=").lowercase() !in setOf("server", "source", "line", "host") }
+        .toMutableList()
+    if (serverIndex > 0) {
+        query += "server=$serverIndex"
+        query += "source=$serverIndex"
+        query += "line=$serverIndex"
+    }
+    return base + (if (query.isEmpty()) "" else "?" + query.joinToString("&")) +
+        (if (fragment.isNotEmpty()) "#$fragment" else "")
+}
+
 /** Construye la página contenedora de FrameXTV y conserva el canal postMessage documentado. */
 private fun frameXtvWrapper(rawUrl: String, resumePositionSeconds: Long = 0L, subtitleIndex: Int = 0, serverIndex: Int = 0): String {
     var embedUrl = rawUrl
@@ -1143,16 +1160,20 @@ private fun WebEmbedPlayer(
                         }) { Text("CC · Pista ${frameSubtitleIndex + 1}") }
                         Button(onClick = {
                             // Al cambiar de fuente, los índices de subtítulos anteriores ya no son fiables.
-                            frameServerIndex = (frameServerIndex + 1) % 8
+                            // Cicla 1..5 y recarga el embed con parámetros de servidor; también
+                            // prueba mensajes alternativos por si esta versión de FrameXTV los admite.
+                            frameServerIndex = if (frameServerIndex >= 5) 1 else frameServerIndex + 1
                             frameSubtitleIndex = 0
                             saveSubtitleForContent = false
                             playbackPrefs.edit()
                                 .putInt(serverPreferenceKey, frameServerIndex)
                                 .remove(subtitlePreferenceKey)
                                 .apply()
-                            webViewRef?.evaluateJavascript(
-                                "(function(){var f=document.getElementById('framextv-player');if(!f)return;var n=$frameServerIndex;var ps=[{action:'setServer',index:n,serverIndex:n,server:n},{action:'changeServer',index:n,serverIndex:n,server:n},{action:'switchServer',index:n,serverIndex:n,server:n},{action:'selectServer',index:n,serverIndex:n,server:n},{type:'setServer',index:n,serverIndex:n,server:n},{type:'changeServer',index:n,serverIndex:n,server:n},{event:'changeServer',index:n,serverIndex:n,server:n},{action:'nextServer'}];ps.forEach(function(p){try{f.contentWindow.postMessage(p,'*')}catch(e){}})})();",
-                                null
+                            val candidateUrl = frameXtvServerUrl(url, frameServerIndex)
+                            webViewRef?.loadDataWithBaseURL(
+                                "https://xuper.local/",
+                                frameXtvWrapper(candidateUrl, 0L, 0, frameServerIndex),
+                                "text/html", "UTF-8", null
                             )
                             frameInteraction++
                         }) { Text(if (frameServerIndex == 0) "Pista servidor · Auto" else "Pista servidor · ${frameServerIndex + 1}") }
