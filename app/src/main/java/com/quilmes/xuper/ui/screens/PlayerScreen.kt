@@ -104,9 +104,9 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
-    // Los embeds FrameXTV son páginas HTML, no streams directos. En modo de prueba
+    // Los embeds de VideoAPI son páginas HTML, no streams directos. En modo de prueba
     // entramos al WebView de inmediato y evitamos que IPTV/ExoPlayer intente resolverlos.
-    if (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://playlatinsrc.co/") || streamUrl.startsWith("https://videoapi.la/e/")) {
+    if (streamUrl.startsWith("https://videoapi.la/e/")) {
         WebEmbedPlayer(url = streamUrl, onExit = onExit)
         return
     }
@@ -535,25 +535,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    var showWebControls by remember(url) { mutableStateOf(true) }
-    var remoteInteraction by remember(url) { mutableStateOf(0) }
-    val webControlsFocus = remember { FocusRequester() }
-    val webRootFocus = remember { FocusRequester() }
-
-    // Los controles aparecen al entrar y se esconden tras unos segundos sin actividad.
-    // El foco vuelve al contenedor Compose, no al WebView, porque muchos embeds no exponen
-    // sus controles HTML al D-pad del televisor.
-    LaunchedEffect(url) {
-        delay(250)
-        runCatching { webControlsFocus.requestFocus() }
-    }
-    LaunchedEffect(showWebControls, remoteInteraction, url) {
-        if (showWebControls) {
-            delay(5_000)
-            runCatching { webRootFocus.requestFocus() }
-            showWebControls = false
-        }
-    }
 
     // No dejamos un indicador de carga infinito si el servidor no termina de responder.
     LaunchedEffect(url) {
@@ -569,22 +550,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
     }
 
     Box(
-        Modifier.fillMaxSize()
-            .background(Color.Black)
-            .focusRequester(webRootFocus)
-            .focusable()
-            .onPreviewKeyEvent { event ->
-                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                remoteInteraction++
-                val isNavigationKey = event.key == Key.DirectionUp || event.key == Key.DirectionDown ||
-                    event.key == Key.DirectionLeft || event.key == Key.DirectionRight ||
-                    event.key == Key.Enter || event.key == Key.NumPadEnter || event.key == Key.DirectionCenter
-                if (!showWebControls && isNavigationKey) {
-                    showWebControls = true
-                    runCatching { webControlsFocus.requestFocus() }
-                    true
-                } else false
-            }
+        Modifier.fillMaxSize().background(Color.Black)
     ) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -606,10 +572,9 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) settings.safeBrowsingEnabled = true
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                    // El WebView no debe secuestrar el foco D-pad: los controles nativos
-                    // de Compose reciben las flechas y el OK de Android TV.
-                    isFocusable = false
-                    isFocusableInTouchMode = false
+                    // El reproductor oficial controla sus propios botones y navegación.
+                    isFocusable = true
+                    isFocusableInTouchMode = true
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     webChromeClient = object : WebChromeClient() {
                         private var fullscreenView: View? = null
@@ -700,31 +665,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                                 }
                               } catch(e) {}
                             })();""", null)
-                            // Convierte el D-pad del control remoto en navegación por foco/click
-                            // dentro del reproductor web, con un foco visual consistente.
-                            view?.evaluateJavascript("""(function(){
-                              if(window.__xuperRemoteNavInstalled)return;window.__xuperRemoteNavInstalled=true;
-                              var css='button:focus,a:focus,[role=button]:focus,input:focus,select:focus,video:focus,[tabindex]:focus{outline:3px solid #42d9ff!important;outline-offset:3px!important;box-shadow:0 0 0 4px rgba(66,217,255,.22)!important}';
-                              var st=document.getElementById('xuper-remote-focus');if(!st){st=document.createElement('style');st.id='xuper-remote-focus';(document.head||document.documentElement).appendChild(st)}st.textContent=css;
-                              window.__xuperRemoteKey=function(k){
-                                var sel='button:not([disabled]),a[href],[role=button]:not([aria-disabled=true]),input:not([disabled]),select:not([disabled]),video,[tabindex]:not([tabindex="-1"])';
-                                var els=Array.from(document.querySelectorAll(sel)).filter(function(e){var r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none'});
-                                var active=document.activeElement, idx=els.indexOf(active);
-                                if(k==='enter'||k==='center'){if(active&&active!==document.body){active.click();return true}if(els[0]){els[0].focus();els[0].click();return true}return false}
-                                if(!['left','right','up','down'].includes(k))return false;
-                                var cur=idx>=0?els[idx]:null;if(!cur){if(els[0]){els[0].focus();els[0].scrollIntoView({block:'nearest',inline:'nearest'});return true}return false}
-                                var a=cur.getBoundingClientRect(),ax=a.left+a.width/2,ay=a.top+a.height/2,best=null,bestScore=Infinity;
-                                els.forEach(function(e){if(e===cur)return;var r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2,dx=x-ax,dy=y-ay,primary,secondary;
-                                  if(k==='left'){if(dx>=-1)return;primary=-dx;secondary=Math.abs(dy)}
-                                  if(k==='right'){if(dx<=1)return;primary=dx;secondary=Math.abs(dy)}
-                                  if(k==='up'){if(dy>=-1)return;primary=-dy;secondary=Math.abs(dx)}
-                                  if(k==='down'){if(dy<=1)return;primary=dy;secondary=Math.abs(dx)}
-                                  var score=primary+secondary*1.8;if(score<bestScore){best=e;bestScore=score}
-                                });
-                                if(best){best.focus();best.scrollIntoView({block:'nearest',inline:'nearest',behavior:'auto'});return true}return false;
-                              };
-                              document.addEventListener('keydown',function(e){var map={ArrowLeft:'left',ArrowRight:'right',ArrowUp:'up',ArrowDown:'down',Enter:'center',' ':'center'};var k=map[e.key];if(k&&window.__xuperRemoteKey&&window.__xuperRemoteKey(k)){e.preventDefault();e.stopPropagation()}},true);
-                            })();""", null)
                             if (view != null && !pageUrl.isNullOrBlank()) {
                                 runCatching { XuperBraveAdblock.injectCosmetics(view, pageUrl) }
                                     .onFailure { android.util.Log.w("XuperWebView", "No se pudieron aplicar reglas cosméticas", it) }
@@ -795,47 +735,6 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
                 webViewRef = null
             },
         )
-        // Controles nativos visibles y enfocables con el D-pad: no dependemos de que el sitio
-        // web exponga sus botones al foco del WebView. El click intenta reproducir el video
-        // o activar un botón de play reconocible en el documento/iframe accesible.
-        if (showWebControls) Row(
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(22.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(modifier = Modifier.focusRequester(webControlsFocus), onClick = {
-                remoteInteraction++
-                showWebControls = true
-                webViewRef?.evaluateJavascript("""(function(){
-                  try {
-                    var videos=Array.from(document.querySelectorAll('video'));
-                    videos.forEach(function(v){v.muted=false;var p=v.play();if(p&&p.catch)p.catch(function(){});});
-                    var labels=/play|reproducir|watch now|ver ahora|start/i;
-                    var els=Array.from(document.querySelectorAll('button,[role=button],a,[aria-label],.play,.vjs-big-play-button'));
-                    var b=els.find(function(e){var x=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')+' '+e.className).toLowerCase();var r=e.getBoundingClientRect();return labels.test(x)&&r.width>0&&r.height>0});
-                    if(b)b.click();
-                    return 'attempted';
-                  }catch(e){return 'error'}
-                })();""", null)
-            }) { Text("▶  Reproducir") }
-            Button(onClick = {
-                remoteInteraction++
-                showWebControls = true
-                webViewRef?.evaluateJavascript("""(function(){try{
-                  var videos=Array.from(document.querySelectorAll('video'));
-                  var tracks=[];videos.forEach(function(v){try{Array.from(v.textTracks||[]).forEach(function(t){tracks.push(t)})}catch(e){}});
-                  var t=tracks.find(function(t){return /es|spa|spanish|español|castellano/i.test((t.language||'')+' '+(t.label||''))});
-                  if(t){t.mode='showing';return 'enabled'}
-                  var buttons=Array.from(document.querySelectorAll('button,[role=button],[aria-label],a'));
-                  var b=buttons.find(function(e){var x=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).toLowerCase();return /subtitle|captions|subtitulos|subtítulos|cc/.test(x)});
-                  if(b)b.click();return 'attempted';
-                }catch(e){return 'error'}})();""", null)
-            }) { Text("CC  Subtítulos") }
-            Button(onClick = { remoteInteraction++; showWebControls = true; webViewRef?.reload() }) { Text("↻  Reiniciar") }
-        }
-        if (!showWebControls && pageError == null) {
-            Text("OK o una flecha: mostrar controles", Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(horizontal = 12.dp, vertical = 7.dp), color = Color.White, fontSize = 12.sp)
-        }
         if (progress < 100 && pageError == null) {
             Text("Cargando reproductor web… $progress%", Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp), color = Color.White, fontSize = 14.sp)
         }
@@ -843,7 +742,7 @@ private fun WebEmbedPlayer(url: String, onExit: () -> Unit = {}) {
             Column(Modifier.align(Alignment.Center).fillMaxWidth(0.78f).background(Color(0xF014202B), RoundedCornerShape(14.dp)).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("No se pudo reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text(pageError.orEmpty(), color = Color(0xFFD8E3EA), fontSize = 15.sp)
-                Text("Esta URL /embed/ es una página web, no un archivo de video directo. Si el proveedor bloquea WebView o no aloja este título, la app no puede generar un stream alternativo.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
+                Text("VideoAPI no pudo cargar este título en el reproductor integrado. Revisá la conexión e intentá nuevamente.", color = Color(0xFFB5C6D2), fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Button(onClick = { pageError = null; progress = 0; pageFinished = false; webViewRef?.reload() }) { Text("↻  Reintentar") }
                     Button(onClick = { webViewRef?.let { if (it.canGoBack()) it.goBack() } }) { Text("←  Volver") }

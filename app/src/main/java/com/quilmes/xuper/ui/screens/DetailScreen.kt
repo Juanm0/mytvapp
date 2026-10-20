@@ -110,12 +110,10 @@ fun DetailScreen(
                         )
                         Text(title.description.ifBlank { "Sin descripción disponible." }, color = XuperTextSecondary, fontSize = 15.sp, maxLines = 4)
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            val frameXPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
+                            val videoApiPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
-                            Button(onClick = { onPlay(frameXPlaybackId) }) { Text("▶  Reproducir") }
-                            Button(onClick = { onPlay("playlatinsrc::$frameXPlaybackId") }) { Text("▷  Latino") }
-                            Button(onClick = { onPlay("videoapp::$frameXPlaybackId") }) { Text("▷  Latino 2") }
+                            Button(onClick = { onPlay(videoApiPlaybackId) }) { Text("▶  Latino") }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
                                 if (favorites) ids.remove(title.id) else ids.add(title.id)

@@ -1,42 +1,20 @@
 package com.quilmes.xuper.data
 
-/** Constructores de páginas de reproducción. FrameXTV sigue siendo el predeterminado. */
+/** URLs del reproductor oficial de VideoAPI para el catálogo TMDb. */
 object WebSourceRegistry {
-    fun frameXEmbedUrl(catalogId: String): String? {
+    /**
+     * Devuelve un embed de VideoAPI. En series requiere temporada y episodio.
+     * Activa las funciones públicas documentadas que puede ofrecer el reproductor.
+     */
+    fun videoApiUrl(catalogId: String): String? {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
-        if (episode != null) {
-            val (id, season, number) = episode.destructured
-            return "https://framextv.xyz/embed/$id/$season/$number?autoplay=1&muted=0"
-        }
-        val title = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(catalogId) ?: return null
-        return "https://framextv.xyz/embed/${title.groupValues[1]}?autoplay=1&muted=0"
-    }
-
-
-    /** Segundo reproductor: VideoAPI, usando las rutas públicas documentadas. */
-    fun videoAppUrl(catalogId: String): String? {
-        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
-        if (episode != null) {
-            val (id, season, number) = episode.destructured
-            return "https://videoapi.la/e/tv/$id/$season/$number"
-        }
-        val title = Regex("^tmdb-(?:movie|tv)-(\\d+)$").matchEntire(catalogId) ?: return null
-        val type = if (catalogId.startsWith("tmdb-tv-")) "tv" else "movie"
-        return "https://videoapi.la/e/$type/${title.groupValues[1]}"
-    }
-
-    /** PLAYLATINSRC requires IMDb IDs; callers must resolve the ID through TMDB first. */
-    fun playLatinsrcUrl(imdbId: String, catalogId: String, language: String = "castellano"): String? {
-        if (!Regex("^tt\\d{5,12}$").matches(imdbId)) return null
-        val episode = Regex("^tmdb-tv-\\d+\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         val base = if (episode != null) {
-            val (season, number) = episode.destructured
-            "https://playlatinsrc.co/serial/$imdbId/$season/$number"
-        } else if (catalogId.startsWith("tmdb-tv-")) {
-            "https://playlatinsrc.co/serial/$imdbId"
+            val (id, season, number) = episode.destructured
+            "https://videoapi.la/e/tv/$id/$season/$number"
         } else {
-            "https://playlatinsrc.co/movie/$imdbId"
+            val title = Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId) ?: return null
+            "https://videoapi.la/e/movie/${title.groupValues[1]}"
         }
-        return "$base?lang=${java.net.URLEncoder.encode(language, "UTF-8")}" 
+        return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
     }
 }

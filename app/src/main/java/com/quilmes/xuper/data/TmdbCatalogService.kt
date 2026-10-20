@@ -104,7 +104,7 @@ class TmdbCatalogService(private val cacheDir: File) {
             val found = linkedMapOf<String, Title>()
 
             // La búsqueda por texto de TMDB no interpreta un número como ID.
-            // Si el usuario pega un ID (por ejemplo el de FrameXTV), consultar
+            // Si el usuario pega un ID (por ejemplo el ID de TMDb), consultar
             // directamente las fichas de película y serie para poder encontrarlo.
             if (q.matches(Regex("\\d{1,12}"))) {
                 val numericId = q.toLongOrNull()
