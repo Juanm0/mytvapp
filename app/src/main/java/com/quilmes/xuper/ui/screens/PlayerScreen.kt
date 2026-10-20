@@ -847,6 +847,9 @@ private fun simuladoresAutoplayScript(): String = """(function(){
   tryPlay();
 })();"""
 
+/** Duración mínima (s) para tratar un <video> web como el capítulo y no como publicidad/intro corta. */
+private const val MIN_WEB_EPISODE_SECONDS = 120.0
+
 @Composable
 private fun WebEmbedPlayer(
     url: String,
@@ -935,6 +938,7 @@ private fun WebEmbedPlayer(
             if (frameMuted != best.muted) frameMuted = best.muted
             frameCurrentTime = best.current
             if (best.duration > 0.0) frameDuration = best.duration
+            if (best.duration >= MIN_WEB_EPISODE_SECONDS && best.duration - best.current <= 1.0) videoEnded = true
         }
     }
     val handleAgentReport: (String, String) -> Unit = report@{ frameId, raw ->
@@ -1042,8 +1046,11 @@ private fun WebEmbedPlayer(
     }
     val frameRemainingSeconds = (frameDuration - frameCurrentTime).coerceAtLeast(0.0)
     // FrameXTV emits timeupdate events, so its mini-hub can start 30 seconds before the end.
-    // Latino/VideoAPI and OK.ru keep event-based end detection instead of guessing duration.
-    val showFrameCountdown = isFrameXtv && frameDuration > 0.0 && frameRemainingSeconds <= 30.0
+    // Latino/VideoAPI, OK.ru y Simuladores informan tiempo/duración reales del <video> (agente de frames o
+    // listener timeupdate), así que también usan la cuenta regresiva de 30 s. Se exige una duración mínima
+    // para no confundir un pre-roll/publicidad corta con el final del capítulo.
+    val showFrameCountdown = frameDuration > 0.0 && frameRemainingSeconds <= 30.0 &&
+        (isFrameXtv || (hasCustomHub && frameDuration >= MIN_WEB_EPISODE_SECONDS))
     val showNextEpisodeCard = nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
 
     // Give the mini-hub real TV focus; otherwise the WebView keeps consuming remote input.
@@ -1553,7 +1560,7 @@ private fun WebEmbedPlayer(
                                     val safeDuration = duration.coerceAtLeast(0.0)
                                     frameCurrentTime = safeCurrent
                                     frameDuration = safeDuration
-                                    if (isFrameXtv && safeDuration > 0.0 && safeDuration - safeCurrent <= 1.0) {
+                                    if (safeDuration > 0.0 && safeDuration - safeCurrent <= 1.0 && (isFrameXtv || safeDuration >= MIN_WEB_EPISODE_SECONDS)) {
                                         videoEnded = true
                                     }
                                     val savePosition = if (safeDuration > 0 && safeCurrent >= safeDuration - 15.0) 0L else safeCurrent.toLong()
