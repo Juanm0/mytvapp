@@ -228,7 +228,10 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       if(!b){ if(hadVideo){hadVideo=false;send({none:true});} return; }
       hadVideo=true;
       var v=b.v, du=Number(v.duration);
-      send({area:Math.round(b.area),cur:Number(v.currentTime)||0,dur:isFinite(du)?du:0,paused:!!v.paused,muted:!!v.muted||v.volume===0});
+      var audio=[],subs=[],audioSelected=-1,subtitleSelected=-1;
+      try{var ats=v.audioTracks;if(ats){for(var ai=0;ai<ats.length;ai++){var at=ats[ai];audio.push(at.label||at.language||('Audio '+(ai+1)));if(at.enabled)audioSelected=ai;}}}catch(e){}
+      try{var tts=v.textTracks;if(tts){for(var ti=0;ti<tts.length;ti++){var tt=tts[ti];subs.push(tt.label||tt.language||('Subtítulo '+(ti+1)));if(tt.mode==='showing')subtitleSelected=ti;}}}catch(e){}
+      send({area:Math.round(b.area),cur:Number(v.currentTime)||0,dur:isFinite(du)?du:0,paused:!!v.paused,muted:!!v.muted||v.volume===0,audio:audio,audioSelected:audioSelected,subs:subs,subtitleSelected:subtitleSelected});
     }
     function bind(b){
       if(!b||b.v===bound) return; bound=b.v;
@@ -252,6 +255,10 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
           v.currentTime=Math.max(0,t);
         }else if(d.cmd==='mute'){
           v.muted=!v.muted;
+        }else if(d.cmd==='audioNext'){
+          var ats=v.audioTracks;if(ats&&ats.length){var current=-1;for(var ai=0;ai<ats.length;ai++)if(ats[ai].enabled)current=ai;var next=(current+1)%ats.length;for(var aj=0;aj<ats.length;aj++)ats[aj].enabled=(aj===next);}
+        }else if(d.cmd==='subtitleNext'){
+          var tts=v.textTracks;if(tts&&tts.length){var current=-1;for(var ti=0;ti<tts.length;ti++)if(tts[ti].mode==='showing')current=ti;var next=current+1;if(next>=tts.length)next=-1;for(var tj=0;tj<tts.length;tj++)tts[tj].mode=(tj===next?'showing':'disabled');}
         }
       }catch(err){}
       setTimeout(function(){try{report(best());}catch(x){}},150);
@@ -290,6 +297,10 @@ private class AgentVideoReport(
     val duration: Double,
     val paused: Boolean,
     val muted: Boolean,
+    val audioTracks: List<String>,
+    val audioSelected: Int,
+    val subtitleTracks: List<String>,
+    val subtitleSelected: Int,
     val atMs: Long,
 )
 
@@ -899,6 +910,10 @@ private fun WebEmbedPlayer(
     var framePaused by remember(url) { mutableStateOf(false) }
     var frameMuted by remember(url) { mutableStateOf(false) }
     var frameSubtitleIndex by remember(url, stableContentKey) { mutableStateOf(savedSubtitleIndex.coerceAtLeast(0)) }
+    var latinoAudioTracks by remember(url) { mutableStateOf(emptyList<String>()) }
+    var latinoSubtitleTracks by remember(url) { mutableStateOf(emptyList<String>()) }
+    var latinoAudioSelected by remember(url) { mutableStateOf(-1) }
+    var latinoSubtitleSelected by remember(url) { mutableStateOf(-1) }
     var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
     // Latino arranca sin hub (solo aparece si la sonda confirma que puede controlarse).
@@ -937,6 +952,10 @@ private fun WebEmbedPlayer(
         if (best != null) {
             if (framePaused != best.paused) framePaused = best.paused
             if (frameMuted != best.muted) frameMuted = best.muted
+            if (latinoAudioTracks != best.audioTracks) latinoAudioTracks = best.audioTracks
+            if (latinoSubtitleTracks != best.subtitleTracks) latinoSubtitleTracks = best.subtitleTracks
+            if (latinoAudioSelected != best.audioSelected) latinoAudioSelected = best.audioSelected
+            if (latinoSubtitleSelected != best.subtitleSelected) latinoSubtitleSelected = best.subtitleSelected
             frameCurrentTime = best.current
             if (best.duration > 0.0) frameDuration = best.duration
             if (best.duration >= MIN_WEB_EPISODE_SECONDS && best.duration - best.current <= 1.0) videoEnded = true
@@ -948,12 +967,20 @@ private fun WebEmbedPlayer(
             agentReports.remove(frameId)
         } else {
             val isNew = !agentReports.containsKey(frameId)
+            fun readLabels(key: String): List<String> {
+                val array = json.optJSONArray(key) ?: return emptyList()
+                return (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+            }
             val r = AgentVideoReport(
                 area = json.optDouble("area", 0.0),
                 current = json.optDouble("cur", 0.0),
                 duration = json.optDouble("dur", 0.0),
                 paused = json.optBoolean("paused", false),
                 muted = json.optBoolean("muted", false),
+                audioTracks = readLabels("audio"),
+                audioSelected = json.optInt("audioSelected", -1),
+                subtitleTracks = readLabels("subs"),
+                subtitleSelected = json.optInt("subtitleSelected", -1),
                 atMs = SystemClock.uptimeMillis(),
             )
             agentReports[frameId] = r
@@ -1116,6 +1143,8 @@ private fun WebEmbedPlayer(
                 "seekBack" -> "seek" to -kotlin.math.abs(seconds)
                 "seekForward" -> "seek" to kotlin.math.abs(seconds)
                 "mute" -> "mute" to 0
+                "audioNext" -> "audioNext" to 0
+                "subtitleNext" -> "subtitleNext" to 0
                 else -> null to 0
             }
             if (cmd != null) {
@@ -1680,6 +1709,28 @@ private fun WebEmbedPlayer(
                         // FrameXTV no permite listar las pistas ni sus nombres: solo existe setSubtitle{index}.
                         Button(onClick = { applyFrameSubtitle(FrameXtvSubtitleSlots.previous(frameSubtitleIndex)) }) { Text("◀ CC") }
                         Button(onClick = { applyFrameSubtitle(FrameXtvSubtitleSlots.next(frameSubtitleIndex)) }) { Text("CC · Pista ${frameSubtitleIndex + 1} ▶") }
+                    }
+                }
+
+                if (isVideoApi) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(
+                            enabled = agentActive && latinoAudioTracks.size > 1,
+                            onClick = { runWebCommand("audioNext", frameSubtitleIndex, 0) }
+                        ) {
+                            val label = latinoAudioTracks.getOrNull(latinoAudioSelected).orEmpty()
+                            Text(if (latinoAudioTracks.isEmpty()) "Idioma · no detectado" else "Idioma · ${label.take(18)} ▶")
+                        }
+                        Button(
+                            enabled = agentActive && latinoSubtitleTracks.isNotEmpty(),
+                            onClick = { runWebCommand("subtitleNext", frameSubtitleIndex, 0) }
+                        ) {
+                            val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
+                            Text(if (latinoSubtitleTracks.isEmpty()) "Subtítulos · no detectados" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
+                        }
+                    }
+                    if (agentActive && latinoAudioTracks.isEmpty() && latinoSubtitleTracks.isEmpty()) {
+                        Text("VideoAPI no expone pistas de audio/subtítulos al control de Xuper; probá las opciones del reproductor original.", color = Color.LightGray, fontSize = 11.sp)
                     }
                 }
 
