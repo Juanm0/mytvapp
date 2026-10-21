@@ -226,6 +226,13 @@ class M3uRepository(
         }
     }
 
+    // Títulos de la sección ANIME: solo sirven para abrir su ficha por id; NO se publican en Inicio.
+    private val lookupTitles = java.util.concurrent.ConcurrentHashMap<String, Title>()
+    fun registerLookupTitles(titles: List<Title>) {
+        if (lookupTitles.size > 600) lookupTitles.clear()
+        titles.forEach { lookupTitles[it.id] = it }
+    }
+
     /**
      * Devuelve el título; si es una ficha de TMDB sin video, intenta vincularle un stream M3U
      * (una sola búsqueda, con resultado cacheado).
@@ -235,6 +242,7 @@ class M3uRepository(
         // rebuildPublishedState), pero su ficha tiene que poder abrirse: se buscan acá, y solo con el ajuste activado.
         ?: searchCatalogTitles.firstOrNull { it.id == id && !AdultContentSettings.isHiddenAdult(it) }
             ?.let(::resolveForDisplay)
+        ?: lookupTitles[id]?.let(::resolveForDisplay)
 
     /** Guarda el catálogo visual de TMDB. Llamar desde un hilo de fondo. */
     fun setCatalogCategories(categories: List<Category>) {

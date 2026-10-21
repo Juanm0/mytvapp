@@ -7,7 +7,6 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.Normalizer
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
@@ -39,7 +38,7 @@ internal class AniListResolver(cacheDir: File) {
                 val m = media.optJSONObject(i) ?: continue
                 val titles = m.optJSONObject("title")
                 val candidates = listOf("romaji", "english", "native")
-                    .map { norm(titles?.optString(it).orEmpty()) }.filter { it.isNotBlank() }
+                    .map { norm(titles.strOrEmpty(it)) }.filter { it.isNotBlank() }
                 var score = candidates.maxOfOrNull { c -> wanted.maxOfOrNull { w -> similarity(c, w) } ?: 0.0 } ?: 0.0
                 val y = m.optJSONObject("startDate")?.optInt("year", 0) ?: 0
                 if (year != null && y > 0) score += if (abs(y - year) <= 1) 0.3 else -0.4
@@ -79,19 +78,8 @@ internal class AniListResolver(cacheDir: File) {
         } finally { connection.disconnect() }
     }
 
-    private fun norm(value: String): String =
-        Normalizer.normalize(value.lowercase(), Normalizer.Form.NFD)
-            .replace(Regex("\\p{Mn}+"), "")
-            .replace(Regex("[^\\p{L}\\p{N}]+"), " ").trim()
-
-    private fun similarity(a: String, b: String): Double {
-        if (a.isBlank() || b.isBlank()) return 0.0
-        if (a == b) return 1.0
-        val ta = a.split(' ').filter { it.isNotBlank() }.toSet()
-        val tb = b.split(' ').filter { it.isNotBlank() }.toSet()
-        if (ta.isEmpty() || tb.isEmpty()) return 0.0
-        return ta.intersect(tb).size.toDouble() / ta.union(tb).size
-    }
+    private fun norm(value: String) = TitleMatch.norm(value)
+    private fun similarity(a: String, b: String) = TitleMatch.similarity(a, b)
 
     @Synchronized private fun load() {
         if (loaded) return

@@ -15,7 +15,11 @@ object WebSourceRegistry {
 
     // Id de AniList por serie de TMDb (lo usa el embed de anime de FrameXTV). Lo completa TmdbCatalogService.
     private val aniListIds = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    /** Id conocido con certeza (viene de una ficha de AniList): pisa cualquier suposición anterior. */
     fun setAniListId(tmdbTvId: String, aniListId: Long) { aniListIds[tmdbTvId] = aniListId }
+    /** Id deducido por búsqueda de título: no pisa uno ya confirmado. */
+    fun setAniListIdIfAbsent(tmdbTvId: String, aniListId: Long) { aniListIds.putIfAbsent(tmdbTvId, aniListId) }
+    fun hasAniListId(tmdbTvId: String): Boolean = aniListIds.containsKey(tmdbTvId)
     private const val FRAMEXTV_ANIME_SUB_TYPE = "sub"
 
     private fun frameXtvAnimeUrl(tmdbTvId: String, season: String, episode: String): String? {
@@ -57,6 +61,14 @@ object WebSourceRegistry {
         }
         Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
             return "https://framextv.xyz/embed/${it.groupValues[1]}"
+        }
+        // Fichas de AniList sin equivalente en TMDb: el id ya es el de AniList.
+        Regex("^anilist-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)?.let {
+            val (id, season, number) = it.destructured
+            return "https://framextv.xyz/embed/anime?id=$id&type=tv&season=$season&episode=$number&sub_type=$FRAMEXTV_ANIME_SUB_TYPE"
+        }
+        Regex("^anilist-(\\d+)$").matchEntire(catalogId)?.let {
+            return "https://framextv.xyz/embed/anime?id=${it.groupValues[1]}&type=tv&season=1&episode=1&sub_type=$FRAMEXTV_ANIME_SUB_TYPE"
         }
         // Si se pide una serie sin episodio elegido, abre el primer episodio como valor inicial.
         Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {

@@ -58,6 +58,7 @@ fun MainScreen(
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
         add(NavItem("favorites", "♡", "MI LISTA"))
         add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
+        add(NavItem("anime", "🍥", "ANIME"))
         if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
         add(NavItem("profile", "●", "PERFIL"))
     }
@@ -73,6 +74,7 @@ fun MainScreen(
                 "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
+                "anime" -> AnimeScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "profile" -> ProfileScreen()
             }

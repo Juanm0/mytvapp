@@ -392,6 +392,21 @@ class MainActivity : ComponentActivity() {
                             var nextExternalEpisode by remember(contentKey) { mutableStateOf<Title?>(null) }
                             LaunchedEffect(contentKey, streamUrl) {
                                 nextExternalEpisode = null
+                                // Fichas de AniList (sección ANIME): siguiente episodio dentro de la misma entrada.
+                                Regex("^anilist-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)?.let { ani ->
+                                    val (aniId, aniSeason, aniEpisode) = ani.destructured
+                                    val total = tmdbCatalogService.anime.episodeCount(aniId.toLong())
+                                    val nextNumber = (aniEpisode.toIntOrNull() ?: 0) + 1
+                                    if (nextNumber <= total) {
+                                        val nextKey = "anilist-$aniId|s$aniSeason|e$nextNumber"
+                                        nextExternalEpisode = Title(
+                                            id = nextKey, name = "Episodio $nextNumber", posterUrl = "",
+                                            streamUrl = WebSourceRegistry.frameXtvUrl(nextKey).orEmpty(),
+                                            contentKind = ContentKind.SERIES,
+                                        )
+                                    }
+                                    return@LaunchedEffect
+                                }
                                 val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
                                 if (match != null) {
                                     val (tmdbNumber, seasonText, episodeText) = match.destructured
