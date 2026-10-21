@@ -7,7 +7,6 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -21,9 +20,6 @@ class TmdbCatalogService(private val cacheDir: File) {
     private val apiKey = BuildConfig.TMDB_API_KEY.trim()
     private val cacheFile = File(cacheDir, "tmdb_home_catalog.json")
     private val cacheMaxAgeMs = 18 * 60 * 60 * 1000L
-    private val aniList = AniListResolver(cacheDir)
-    /** Sección ANIME (fichas de AniList + TMDb). */
-    val anime: AnimeCatalogService by lazy { AnimeCatalogService(cacheDir, this) }
 
     suspend fun loadCatalog(): List<Category> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext emptyList()
@@ -275,21 +271,11 @@ class TmdbCatalogService(private val cacheDir: File) {
     }
 
     suspend fun loadSeasons(titleId: String): List<TmdbSeason> = withContext(Dispatchers.IO) {
-        if (titleId.startsWith("anilist-")) return@withContext anime.seasons(titleId)
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()
         runCatching {
             val data = request("tv/${parsed.second}", AdultContentSettings.isEnabled())
             markIfAnime(data, true)
-            // Anime: FrameXTV necesita el id de AniList (no el de TMDb). Se resuelve acá, al abrir la ficha,
-            // para que esté listo antes de tocar Reproducir. Si falla, se usa el embed normal de TMDb.
-            if (WebSourceRegistry.isAnime(parsed.second.toString()) && !WebSourceRegistry.hasAniListId(parsed.second.toString())) runCatching {
-                val tvId = parsed.second.toString()
-                val names = listOf(data.optString("original_name"), data.optString("name"))
-                val year = data.optString("first_air_date").take(4).toIntOrNull()
-                withTimeoutOrNull(7000) { aniList.resolve(tvId, names, year) }
-                    ?.let { WebSourceRegistry.setAniListIdIfAbsent(tvId, it) }
-            }
             val seasons = data.optJSONArray("seasons") ?: JSONArray()
             buildList {
                 for (i in 0 until seasons.length()) {
@@ -309,7 +295,6 @@ class TmdbCatalogService(private val cacheDir: File) {
     }
 
     suspend fun loadEpisodes(titleId: String, seasonNumber: Int): List<TmdbEpisode> = withContext(Dispatchers.IO) {
-        if (titleId.startsWith("anilist-")) return@withContext anime.episodes(titleId)
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()
         runCatching {
@@ -331,40 +316,6 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
-
-    /**
-     * Busca en TMDb la serie de anime equivalente a una ficha de AniList. Es estricto a propósito: exige género
-     * Animación, título casi idéntico y año de estreno (±1); ante la duda devuelve null y se usa la ficha de AniList.
-     */
-    suspend fun matchAnimeTv(names: List<String>, year: Int?): Title? = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) return@withContext null
-        val queries = names.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(2)
-        val wanted = names.map(TitleMatch::norm).filter { it.isNotBlank() }.toSet()
-        var best: JSONObject? = null
-        var bestScore = 0.0
-        for (q in queries) {
-            val results = runCatching {
-                request("search/tv?query=${URLEncoder.encode(q, "UTF-8")}", false).optJSONArray("results")
-            }.getOrNull() ?: continue
-            for (i in 0 until results.length()) {
-                val item = results.optJSONObject(i) ?: continue
-                val genres = item.optJSONArray("genre_ids") ?: continue
-                if ((0 until genres.length()).none { genres.optInt(it) == 16 }) continue
-                val candidates = listOf(item.optString("name"), item.optString("original_name"))
-                    .map(TitleMatch::norm).filter { it.isNotBlank() }
-                var score = candidates.maxOfOrNull { c -> wanted.maxOfOrNull { w -> TitleMatch.similarity(c, w) } ?: 0.0 } ?: 0.0
-                val itemYear = item.optString("first_air_date").take(4).toIntOrNull()
-                score += when {
-                    year == null || itemYear == null -> 0.15
-                    kotlin.math.abs(itemYear - year) <= 1 -> 0.3
-                    else -> -0.4
-                }
-                if (score > bestScore) { bestScore = score; best = item }
-            }
-            if (bestScore >= 1.3) break
-        }
-        best?.takeIf { bestScore >= 1.15 }?.let { runCatching { titleFromJson(it, ContentKind.SERIES) }.getOrNull() }
-    }
 
     /** Marca la serie como anime (género Animación 16 + idioma original japonés) para elegir el embed de anime. */
     private fun markIfAnime(item: JSONObject, isTv: Boolean) {

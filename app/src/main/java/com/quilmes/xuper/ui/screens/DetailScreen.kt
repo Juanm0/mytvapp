@@ -53,9 +53,7 @@ fun DetailScreen(
     val isLosSimuladores = title.contentKind == ContentKind.SERIES &&
         (title.id == "tmdb-tv-332" || title.id == "332" || title.id.endsWith("-332")) &&
         title.name.contains("simuladores", ignoreCase = true)
-    // Fichas de AniList (sección ANIME): episodios 1..N sintéticos; solo se reproducen por FrameXTV (ruta de anime).
-    val isAniList = title.id.startsWith("anilist-")
-    val hasTmdbSeasons = (title.id.startsWith("tmdb-tv-") || isLosSimuladores || isAniList) && title.contentKind == ContentKind.SERIES
+    val hasTmdbSeasons = (title.id.startsWith("tmdb-tv-") || isLosSimuladores) && title.contentKind == ContentKind.SERIES
 
     LaunchedEffect(title.id) {
         relatedTitles = if (isTmdb && title.contentKind != ContentKind.LIVE) catalogService.loadRelatedTitles(title.id) else emptyList()
@@ -211,7 +209,7 @@ fun DetailScreen(
                                     onPlay("framextv:${title.id}|s$seasonNumber|e${episode.number}")
                                 }
                             }) { Text(if (isLosSimuladores) "▶  Reproducir episodio" else "▶  Reproducir episodio") }
-                            if (!isLosSimuladores && !isAniList) {
+                            if (!isLosSimuladores) {
                                 Button(onClick = {
                                     selectedEpisode = episode.number
                                     onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
