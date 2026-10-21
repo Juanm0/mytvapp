@@ -18,3 +18,25 @@ siguen en `https://videoapi.la/e/tv/<id>/<temporada>/<episodio>` y las película
 - Los parámetros (`autoplay`, `auto_next`, etc.) se mandan igual que en videoapi.la; si el dominio nuevo no
   los soporta, simplemente los ignora.
 - No compilado ni probado en el TV.
+
+---
+# FrameXTV con anime (ruta propia, id de AniList)
+
+FrameXTV tiene ruta de anime: `https://framextv.xyz/embed/anime?id=<anilist>&type=tv&season=<t>&episode=<e>&sub_type=sub`.
+Ese `id` es de **AniList**, no de TMDb.
+
+- `data/AniListResolver.kt` (nuevo): al abrir la ficha de una serie de anime, busca en la API pública de AniList
+  (`graphql.anilist.co`) por título original + título + año de estreno y guarda el id en `anilist_ids.json`
+  (caché en disco: una sola consulta por serie). Si no hay coincidencia clara (puntaje < 0,75), no inventa nada.
+- `WebSourceRegistry.frameXtvUrl`: si la serie es anime y ya se resolvió su id de AniList, arma la ruta de anime;
+  si no, usa el embed normal de TMDb como antes (no se rompe nada).
+- `TmdbCatalogService.loadSeasons`: dispara la resolución (máx. 7 s) al abrir la ficha.
+
+## Supuestos a verificar
+- Se manda `season` y `episode` de TMDb con el id de AniList de la **primera** entrada de la serie. AniList separa
+  muchas series en una entrada por temporada y TMDb no; si en temporadas 2+ no reproduce o abre otro episodio,
+  pasame un link que funcione y cambio a "un id de AniList por temporada".
+- `sub_type=sub` fijo (como en tu ejemplo). Si querés `dub`, es la constante `FRAMEXTV_ANIME_SUB_TYPE`.
+- La API de AniList no se pudo probar desde el entorno de edición. Si un anime no reproduce, verificar que el id
+  guardado sea el correcto (anilist.co/anime/<id>).
+- Solo series. No compilado ni probado en el TV.

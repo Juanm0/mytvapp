@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +21,7 @@ class TmdbCatalogService(private val cacheDir: File) {
     private val apiKey = BuildConfig.TMDB_API_KEY.trim()
     private val cacheFile = File(cacheDir, "tmdb_home_catalog.json")
     private val cacheMaxAgeMs = 18 * 60 * 60 * 1000L
+    private val aniList = AniListResolver(cacheDir)
 
     suspend fun loadCatalog(): List<Category> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext emptyList()
@@ -276,6 +278,15 @@ class TmdbCatalogService(private val cacheDir: File) {
         runCatching {
             val data = request("tv/${parsed.second}", AdultContentSettings.isEnabled())
             markIfAnime(data, true)
+            // Anime: FrameXTV necesita el id de AniList (no el de TMDb). Se resuelve acá, al abrir la ficha,
+            // para que esté listo antes de tocar Reproducir. Si falla, se usa el embed normal de TMDb.
+            if (WebSourceRegistry.isAnime(parsed.second.toString())) runCatching {
+                val tvId = parsed.second.toString()
+                val names = listOf(data.optString("original_name"), data.optString("name"))
+                val year = data.optString("first_air_date").take(4).toIntOrNull()
+                withTimeoutOrNull(7000) { aniList.resolve(tvId, names, year) }
+                    ?.let { WebSourceRegistry.setAniListId(tvId, it) }
+            }
             val seasons = data.optJSONArray("seasons") ?: JSONArray()
             buildList {
                 for (i in 0 until seasons.length()) {

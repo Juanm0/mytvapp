@@ -13,6 +13,16 @@ object WebSourceRegistry {
     fun markAnime(tmdbTvId: String) { animeTvIds.add(tmdbTvId) }
     fun isAnime(tmdbTvId: String): Boolean = tmdbTvId in animeTvIds
 
+    // Id de AniList por serie de TMDb (lo usa el embed de anime de FrameXTV). Lo completa TmdbCatalogService.
+    private val aniListIds = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    fun setAniListId(tmdbTvId: String, aniListId: Long) { aniListIds[tmdbTvId] = aniListId }
+    private const val FRAMEXTV_ANIME_SUB_TYPE = "sub"
+
+    private fun frameXtvAnimeUrl(tmdbTvId: String, season: String, episode: String): String? {
+        val aniList = aniListIds[tmdbTvId] ?: return null
+        return "https://framextv.xyz/embed/anime?id=$aniList&type=tv&season=$season&episode=$episode&sub_type=$FRAMEXTV_ANIME_SUB_TYPE"
+    }
+
     /** true si [host] es de VideoAPI (dominio normal o el de anime). Único lugar con la lista de hosts. */
     fun isVideoApiHost(host: String?): Boolean {
         val h = host?.lowercase()?.trimEnd('.') ?: return false
@@ -42,6 +52,7 @@ object WebSourceRegistry {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         if (episode != null) {
             val (id, season, number) = episode.destructured
+            frameXtvAnimeUrl(id, season, number)?.let { return it }
             return "https://framextv.xyz/embed/$id/$season/$number"
         }
         Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
@@ -49,6 +60,7 @@ object WebSourceRegistry {
         }
         // Si se pide una serie sin episodio elegido, abre el primer episodio como valor inicial.
         Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
+            frameXtvAnimeUrl(it.groupValues[1], "1", "1")?.let { url -> return url }
             return "https://framextv.xyz/embed/${it.groupValues[1]}/1/1"
         }
         return null
