@@ -441,22 +441,21 @@ class MainActivity : ComponentActivity() {
                                             if (nextEpisodeData == null && page.totalPages > page.page) {
                                                 nextEpisodeData = jkanimeService.getEpisodesPage(animeInfo.url, page.page + 1).episodes.minByOrNull { it.number }
                                             }
-                                            if (nextEpisodeData != null) {
-                                                val nextStream = jkanimeService.getEpisodeStream(nextEpisodeData.url)
-                                                val nextKey = "jkanime-" + Base64.encodeToString(
-                                                    nextEpisodeData.url.toByteArray(StandardCharsets.UTF_8),
-                                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                                                )
-                                                nextExternalEpisode = Title(
-                                                    id = nextKey,
-                                                    name = "${animeInfo.title} · ${nextEpisodeData.title}",
-                                                    description = animeInfo.description,
-                                                    posterUrl = animeInfo.image,
-                                                    backdropUrl = animeInfo.image,
-                                                    streamUrl = nextStream.streamUrl,
-                                                    contentKind = ContentKind.SERIES,
-                                                )
-                                            }
+                                            val nextEpisode = nextEpisodeData ?: return@runCatching
+                                            val nextStream = jkanimeService.getEpisodeStream(nextEpisode.url)
+                                            val nextKey = "jkanime-" + Base64.encodeToString(
+                                                nextEpisode.url.toByteArray(StandardCharsets.UTF_8),
+                                                Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                            )
+                                            nextExternalEpisode = Title(
+                                                id = nextKey,
+                                                name = "${animeInfo.title} · ${nextEpisode.title}",
+                                                description = animeInfo.description,
+                                                posterUrl = animeInfo.image,
+                                                backdropUrl = animeInfo.image,
+                                                streamUrl = nextStream.streamUrl,
+                                                contentKind = ContentKind.SERIES,
+                                            )
                                         }.onFailure { error ->
                                             android.util.Log.w("XuperAnime", "No se pudo preparar el siguiente episodio", error)
                                         }
@@ -501,27 +500,26 @@ class MainActivity : ComponentActivity() {
                                             nextEpisodeData = tmdbCatalogService.loadEpisodes(seriesId, nextSeasonNumber).minByOrNull { it.number }
                                         }
                                     }
-                                    if (nextEpisodeData != null) {
-                                        val nextKey = "$seriesId|s$nextSeasonNumber|e${nextEpisodeData.number}"
-                                        val nextUrl = if (tmdbNumber == "332") {
-                                            val okId = simuladoresVideoId(nextSeasonNumber, nextEpisodeData.number)
-                                            okId?.let { "https://ok.ru/videoembed/$it" }
-                                        } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
-                                            WebSourceRegistry.videoApiUrl(nextKey)
-                                        } else {
-                                            WebSourceRegistry.frameXtvUrl(nextKey)
-                                        }
-                                        if (!nextUrl.isNullOrBlank()) {
-                                            nextExternalEpisode = Title(
-                                                id = nextKey,
-                                                name = nextEpisodeData.name,
-                                                description = nextEpisodeData.overview,
-                                                posterUrl = nextEpisodeData.stillUrl.ifBlank { nextSeasonPoster },
-                                                backdropUrl = nextEpisodeData.stillUrl.ifBlank { nextSeasonPoster },
-                                                streamUrl = nextUrl,
-                                                contentKind = ContentKind.SERIES,
-                                            )
-                                        }
+                                    val nextEpisode = nextEpisodeData ?: return@LaunchedEffect
+                                    val nextKey = "$seriesId|s$nextSeasonNumber|e${nextEpisode.number}"
+                                    val nextUrl = if (tmdbNumber == "332") {
+                                        val okId = simuladoresVideoId(nextSeasonNumber, nextEpisode.number)
+                                        okId?.let { "https://ok.ru/videoembed/$it" }
+                                    } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
+                                        WebSourceRegistry.videoApiUrl(nextKey)
+                                    } else {
+                                        WebSourceRegistry.frameXtvUrl(nextKey)
+                                    }
+                                    if (!nextUrl.isNullOrBlank()) {
+                                        nextExternalEpisode = Title(
+                                            id = nextKey,
+                                            name = nextEpisode.name,
+                                            description = nextEpisode.overview,
+                                            posterUrl = nextEpisode.stillUrl.ifBlank { nextSeasonPoster },
+                                            backdropUrl = nextEpisode.stillUrl.ifBlank { nextSeasonPoster },
+                                            streamUrl = nextUrl,
+                                            contentKind = ContentKind.SERIES,
+                                        )
                                     }
                                 }
                             }
