@@ -310,7 +310,7 @@ fun PlayerScreen(
     directOnly: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) ||
-        streamUrl.startsWith("https://framextv.xyz/embed/") ||
+        (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://framextv.cc/embed/")) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
 
@@ -873,7 +873,7 @@ private fun WebEmbedPlayer(
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") } == true }.getOrDefault(false) }
+    val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") || it == "framextv.cc" || it.endsWith(".framextv.cc") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
