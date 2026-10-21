@@ -192,6 +192,32 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
     var ID=Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
     var isTop=false; try{isTop=(window.top===window);}catch(e){}
     var tick=0, hadVideo=false, bound=null;
+    var audioMenuOpen=false, subtitleMenuOpen=false;
+    function visible(el){try{var r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0.05;}catch(e){return false;}}
+    function label(el){return ((el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')+' '+(el.getAttribute('data-testid')||'')+' '+(el.innerText||el.textContent||'')).replace(/\s+/g,' ').trim();}
+    function clickPlayerMenu(kind){
+      var audio=kind==='audio', opened=audio?audioMenuOpen:subtitleMenuOpen;
+      var menuRe=audio?/(audio|language|idioma|sound track|pista de audio)/i:/(subtitle|captions|closed caption|subtitulos|subtítulos|\bcc\b)/i;
+      var all=Array.from(document.querySelectorAll('button,[role=button],[role=menuitem],[role=option],[role=menuitemradio],[role=radio],[aria-label],[title],[tabindex]')).filter(visible);
+      // When the provider opened a menu, cycle through the visible menu choices (including custom React menus).
+      if(opened){
+        var opts=all.filter(function(e){var r=e.getAttribute('role')||'',txt=label(e);return /menuitem|option|radio/.test(r)||e.hasAttribute('aria-checked')||e.hasAttribute('aria-selected')||/^(off|none|desactivados?|ninguno|english|spanish|español|latino|original|[a-záéíóúüñ]{2,}(?:\s+\([^)]*\))?)$/i.test(txt);});
+        opts=opts.filter(function(e){return !menuRe.test(label(e)) && !/settings|configuraci[oó]n|ajustes/i.test(label(e));});
+        if(opts.length){
+          var active=opts.findIndex(function(e){return e.getAttribute('aria-checked')==='true'||e.getAttribute('aria-selected')==='true'||e.getAttribute('data-state')==='checked'||e.getAttribute('aria-current')==='true';});
+          var next=(active+1)%opts.length; try{opts[next].click();if(audio)audioMenuOpen=false;else subtitleMenuOpen=false;return true;}catch(e){}
+        }
+      }
+      var trigger=all.filter(function(e){return menuRe.test(label(e)) && !/^(audio|subtitles?|captions?|cc|idioma|language|subt[ií]tulos?)$/i.test(label(e));});
+      if(!trigger.length) trigger=all.filter(function(e){return menuRe.test(label(e));});
+      // Prefer the most specific, smallest clickable element to avoid clicking a whole control bar.
+      trigger.sort(function(a,b){return label(a).length-label(b).length;});
+      if(trigger.length){try{trigger[0].click();if(audio)audioMenuOpen=true;else subtitleMenuOpen=true;return true;}catch(e){}}
+      // A gear/settings menu may contain the audio and subtitle entries one level down.
+      var gear=all.find(function(e){return /settings|configuraci[oó]n|ajustes|opciones/i.test(label(e))||/settings|gear/i.test(e.className||'');});
+      if(gear){try{gear.click();return true;}catch(e){}}
+      return false;
+    }
 
     function collect(root,out,budget){
       try{
@@ -256,9 +282,13 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
         }else if(d.cmd==='mute'){
           v.muted=!v.muted;
         }else if(d.cmd==='audioNext'){
-          var ats=v.audioTracks;if(ats&&ats.length){var current=-1;for(var ai=0;ai<ats.length;ai++)if(ats[ai].enabled)current=ai;var next=(current+1)%ats.length;for(var aj=0;aj<ats.length;aj++)ats[aj].enabled=(aj===next);}
+          var ats=v.audioTracks;
+          if(ats&&ats.length>1){var current=-1;for(var ai=0;ai<ats.length;ai++)if(ats[ai].enabled)current=ai;var next=(current+1)%ats.length;for(var aj=0;aj<ats.length;aj++)ats[aj].enabled=(aj===next);}
+          else {clickPlayerMenu('audio');}
         }else if(d.cmd==='subtitleNext'){
-          var tts=v.textTracks;if(tts&&tts.length){var current=-1;for(var ti=0;ti<tts.length;ti++)if(tts[ti].mode==='showing')current=ti;var next=current+1;if(next>=tts.length)next=-1;for(var tj=0;tj<tts.length;tj++)tts[tj].mode=(tj===next?'showing':'disabled');}
+          var tts=v.textTracks;
+          if(tts&&tts.length){var current=-1;for(var ti=0;ti<tts.length;ti++)if(tts[ti].mode==='showing')current=ti;var next=current+1;if(next>=tts.length)next=-1;for(var tj=0;tj<tts.length;tj++)tts[tj].mode=(tj===next?'showing':'disabled');}
+          else {clickPlayerMenu('subtitle');}
         }
       }catch(err){}
       setTimeout(function(){try{report(best());}catch(x){}},150);
@@ -991,12 +1021,8 @@ private fun WebEmbedPlayer(
     // El puente JS del WebView se crea una sola vez: se lee siempre la versión más reciente.
     val handleAgentReportState = rememberUpdatedState(handleAgentReport)
 
-    LaunchedEffect(url) {
-        delay(30_000)
-        if (!pageFinished && pageError == null) {
-            pageError = "El sitio no terminó de cargar en 30 segundos. Puede estar caído, bloqueando la app o esperando una verificación incompatible."
-        }
-    }
+    // No imponer un timeout artificial: algunos proveedores tardan más de 30 segundos en iniciar.
+    // Los errores reales de WebView siguen mostrándose mediante onReceivedError/onReceivedHttpError.
     LaunchedEffect(hubActive, frameControlsVisible) {
         if (hubActive && frameControlsVisible) {
             delay(180)
@@ -1715,22 +1741,22 @@ private fun WebEmbedPlayer(
                 if (isVideoApi) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
-                            enabled = agentActive && latinoAudioTracks.size > 1,
+                            enabled = agentActive,
                             onClick = { runWebCommand("audioNext", frameSubtitleIndex, 0) }
                         ) {
                             val label = latinoAudioTracks.getOrNull(latinoAudioSelected).orEmpty()
-                            Text(if (latinoAudioTracks.isEmpty()) "Idioma · no detectado" else "Idioma · ${label.take(18)} ▶")
+                            Text(if (latinoAudioTracks.isEmpty()) "Idioma · abrir/cambiar ▶" else "Idioma · ${label.take(18)} ▶")
                         }
                         Button(
-                            enabled = agentActive && latinoSubtitleTracks.isNotEmpty(),
+                            enabled = agentActive,
                             onClick = { runWebCommand("subtitleNext", frameSubtitleIndex, 0) }
                         ) {
                             val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
-                            Text(if (latinoSubtitleTracks.isEmpty()) "Subtítulos · no detectados" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
+                            Text(if (latinoSubtitleTracks.isEmpty()) "CC · abrir/cambiar ▶" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
                         }
                     }
                     if (agentActive && latinoAudioTracks.isEmpty() && latinoSubtitleTracks.isEmpty()) {
-                        Text("VideoAPI no expone pistas de audio/subtítulos al control de Xuper; probá las opciones del reproductor original.", color = Color.LightGray, fontSize = 11.sp)
+                        Text("Si el proveedor usa menús propios, estos botones intentan abrirlos desde el hub.", color = Color.LightGray, fontSize = 11.sp)
                     }
                 }
 
