@@ -192,30 +192,50 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
     var ID=Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
     var isTop=false; try{isTop=(window.top===window);}catch(e){}
     var tick=0, hadVideo=false, bound=null;
-    var audioMenuOpen=false, subtitleMenuOpen=false;
+    var audioMenuOpen=false, subtitleMenuOpen=false, latinoAudioEnglish=false, latinoSpanishSubs=false;
     function visible(el){try{var r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0.05;}catch(e){return false;}}
     function label(el){return ((el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')+' '+(el.getAttribute('data-testid')||'')+' '+(el.innerText||el.textContent||'')).replace(/\s+/g,' ').trim();}
-    function clickPlayerMenu(kind){
-      var audio=kind==='audio', opened=audio?audioMenuOpen:subtitleMenuOpen;
-      var menuRe=audio?/(audio|language|idioma|sound track|pista de audio)/i:/(subtitle|captions|closed caption|subtitulos|subtítulos|\bcc\b)/i;
-      var all=Array.from(document.querySelectorAll('button,[role=button],[role=menuitem],[role=option],[role=menuitemradio],[role=radio],[aria-label],[title],[tabindex]')).filter(visible);
-      // When the provider opened a menu, cycle through the visible menu choices (including custom React menus).
-      if(opened){
-        var opts=all.filter(function(e){var r=e.getAttribute('role')||'',txt=label(e);return /menuitem|option|radio/.test(r)||e.hasAttribute('aria-checked')||e.hasAttribute('aria-selected')||/^(off|none|desactivados?|ninguno|english|spanish|español|latino|original|[a-záéíóúüñ]{2,}(?:\s+\([^)]*\))?)$/i.test(txt);});
-        opts=opts.filter(function(e){return !menuRe.test(label(e)) && !/settings|configuraci[oó]n|ajustes/i.test(label(e));});
-        if(opts.length){
-          var active=opts.findIndex(function(e){return e.getAttribute('aria-checked')==='true'||e.getAttribute('aria-selected')==='true'||e.getAttribute('data-state')==='checked'||e.getAttribute('aria-current')==='true';});
-          var next=(active+1)%opts.length; try{opts[next].click();if(audio)audioMenuOpen=false;else subtitleMenuOpen=false;return true;}catch(e){}
-        }
+    function clickText(patterns){
+      var sels='button,[role=button],[role=tab],[role=menuitem],[role=option],[role=menuitemradio],[role=radio],[aria-label],[title],[tabindex]';
+      var all=Array.from(document.querySelectorAll(sels)).filter(visible);
+      for(var p=0;p<patterns.length;p++){
+        var re=patterns[p];
+        var hits=all.filter(function(e){return re.test(label(e));});
+        // Prefer exact labels, then the shortest accessible label to avoid clicking a parent panel.
+        hits.sort(function(a,b){var ae=label(a).toLowerCase().trim()===re.source.toLowerCase()?0:1;var be=label(b).toLowerCase().trim()===re.source.toLowerCase()?0:1;return ae-be||label(a).length-label(b).length;});
+        if(hits.length){try{hits[0].click();return true;}catch(e){}}
       }
-      var trigger=all.filter(function(e){return menuRe.test(label(e)) && !/^(audio|subtitles?|captions?|cc|idioma|language|subt[ií]tulos?)$/i.test(label(e));});
-      if(!trigger.length) trigger=all.filter(function(e){return menuRe.test(label(e));});
-      // Prefer the most specific, smallest clickable element to avoid clicking a whole control bar.
-      trigger.sort(function(a,b){return label(a).length-label(b).length;});
-      if(trigger.length){try{trigger[0].click();if(audio)audioMenuOpen=true;else subtitleMenuOpen=true;return true;}catch(e){}}
-      // A gear/settings menu may contain the audio and subtitle entries one level down.
-      var gear=all.find(function(e){return /settings|configuraci[oó]n|ajustes|opciones/i.test(label(e))||/settings|gear/i.test(e.className||'');});
-      if(gear){try{gear.click();return true;}catch(e){}}
+      return false;
+    }
+    function clickPlayerMenu(kind){
+      var audio=kind==='audio';
+      // VideoAPI's custom CC menu: CC -> Predeterminados -> Spanish. The subtitle file may need time to download.
+      if(!audio){
+        var hasDefaultTab=Array.from(document.querySelectorAll('button,[role=button],[role=tab]')).some(function(e){return visible(e)&&/^predeterminados$/i.test(label(e));});
+        var hasSpanish=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem]')).some(function(e){return visible(e)&&/^spanish$/i.test(label(e));});
+        if(hasDefaultTab){
+          if(!latinoSpanishSubs){
+            try{clickText([/^predeterminados$/i]);setTimeout(function(){if(clickText([/^spanish$/i]))latinoSpanishSubs=true;},500);return true;}catch(e){}
+          }
+          if(latinoSpanishSubs || hasSpanish){
+            if(clickText([/^desactivados?$/i,/^off$/i,/^none$/i])){latinoSpanishSubs=false;return true;}
+            if(clickText([/^spanish$/i])){latinoSpanishSubs=true;return true;}
+          }
+        }
+        if(clickText([/^cc$/i,/^subtítulos?$/i,/^captions?$/i])){subtitleMenuOpen=true;return true;}
+        // If the CC panel is already open on the first tab, jump directly to Predeterminados and choose Spanish.
+        if(clickText([/^predeterminados$/i])){setTimeout(function(){if(clickText([/^spanish$/i]))latinoSpanishSubs=true;},500);return true;}
+        return false;
+      }
+      // VideoAPI's language menu: settings/gear -> Idioma -> Español/English.
+      var english=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem],[role=radio]')).some(function(e){return visible(e)&&/^english$/i.test(label(e));});
+      var spanish=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem],[role=radio]')).some(function(e){return visible(e)&&/^español$/i.test(label(e));});
+      if(english||spanish){
+        var target=latinoAudioEnglish?/^español$/i:/^english$/i;
+        if(clickText([target])){latinoAudioEnglish=!latinoAudioEnglish;audioMenuOpen=false;return true;}
+      }
+      if(clickText([/^idioma$/i,/^language$/i])){audioMenuOpen=true;return true;}
+      if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){audioMenuOpen=true;return true;}
       return false;
     }
 
