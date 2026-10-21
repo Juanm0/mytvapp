@@ -394,7 +394,9 @@ class M3uRepository(
 
         val visibleCatalog = catalogCategories.toMutableList()
         if (searchCatalogTitles.isNotEmpty()) {
-            visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", searchCatalogTitles))
+            // Nunca +18 en Inicio, aunque el buscador los haya registrado para abrir su ficha.
+            val discovered = searchCatalogTitles.filterNot { it.adult }
+            if (discovered.isNotEmpty()) visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", discovered))
         }
         val secs = sources.indices.mapNotNull { n ->
             val source = sources[n]

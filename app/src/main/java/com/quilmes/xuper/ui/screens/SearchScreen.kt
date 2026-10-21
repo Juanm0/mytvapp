@@ -28,6 +28,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.TmdbCatalogService
@@ -68,7 +69,8 @@ fun SearchScreen(
             }
             // Conserva los resultados directos de TMDB: al buscar un ID numérico,
             // el título se obtiene por ID y no coincide por texto con el índice local.
-            results = (tmdb + localResults).distinctBy { it.id }.take(120)
+            results = (tmdb + localResults).distinctBy { it.id }
+                .filterNot { AdultContentSettings.isHiddenAdult(it) }.take(120)
         }
     }
 

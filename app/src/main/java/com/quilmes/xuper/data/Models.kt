@@ -20,6 +20,8 @@ data class Title(
     val contentKind: ContentKind = if (isLive) ContentKind.LIVE else ContentKind.OTHER_VOD,
     /** HTTP headers required by some M3U streams (e.g. Referer). */
     val requestHeaders: Map<String, String> = emptyMap(),
+    /** TMDb lo marca como contenido adulto (+18). */
+    val adult: Boolean = false,
 )
 
 /** Una fila horizontal (ej: "Noticias", "Deportes"). */

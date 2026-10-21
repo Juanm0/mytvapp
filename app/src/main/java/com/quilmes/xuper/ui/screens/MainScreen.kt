@@ -20,11 +20,24 @@ import androidx.tv.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.components.NavItem
+import com.quilmes.xuper.ui.components.PinDialog
 import com.quilmes.xuper.ui.components.SideBar
+import com.quilmes.xuper.ui.theme.XuperAccent
 import com.quilmes.xuper.ui.theme.XuperBackground
+import com.quilmes.xuper.ui.theme.XuperSurfaceVariant
+import com.quilmes.xuper.ui.theme.XuperTextPrimary
+import com.quilmes.xuper.ui.theme.XuperTextSecondary
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
+import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Surface
 
 /** Navegación estilo streaming: solo quedan Inicio, Buscar, Argentina y utilidades personales. */
 @Composable
@@ -37,14 +50,18 @@ fun MainScreen(
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
 
-    val items = listOf(
-        NavItem("home", "⌂", "INICIO"),
-        NavItem("search", "⌕", "BUSCAR"),
-        NavItem("live", "🇦🇷", "ARGENTINA"),
-        NavItem("favorites", "♡", "MI LISTA"),
-        NavItem("continue", "▶", "CONTINUAR VIENDO"),
-        NavItem("profile", "●", "PERFIL"),
-    )
+    // La sección +18 existe en la barra lateral solo con el ajuste activado (Perfil, protegido con PIN).
+    val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
+    val items = buildList {
+        add(NavItem("home", "⌂", "INICIO"))
+        add(NavItem("search", "⌕", "BUSCAR"))
+        add(NavItem("live", "🇦🇷", "ARGENTINA"))
+        add(NavItem("favorites", "♡", "MI LISTA"))
+        add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
+        if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
+        add(NavItem("profile", "●", "PERFIL"))
+    }
+    LaunchedEffect(adultEnabled) { if (!adultEnabled && dest == "adult") dest = "home" }
 
     BackHandler(enabled = dest != "home") { dest = "home" }
 
@@ -56,6 +73,7 @@ fun MainScreen(
                 "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
+                "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "profile" -> ProfileScreen()
             }
         }
@@ -97,5 +115,90 @@ private fun ProfileScreen() {
             "Tus favoritos, historial y fuentes de reproducción se gestionan localmente en este dispositivo.",
             fontSize = 16.sp,
         )
+        AdultContentPreference()
+    }
+}
+
+private enum class PinStep { CREATE_AND_ENABLE, VERIFY_TO_ENABLE, VERIFY_TO_CHANGE, CREATE_NEW }
+
+/** Check "Mostrar contenido adulto" (+18), apagado por defecto. Activarlo exige PIN; desactivarlo no. */
+@Composable
+private fun AdultContentPreference() {
+    val enabled by AdultContentSettings.enabledFlow.collectAsState()
+    var step by remember { mutableStateOf<PinStep?>(null) }
+    var hasPin by remember { mutableStateOf(AdultContentSettings.hasPin()) }
+
+    PreferenceRow(
+        check = if (enabled) "☑" else "☐",
+        title = "Mostrar contenido adulto (+18)",
+        subtitle = if (enabled) "Activado: aparece la sección +18 y las búsquedas/fichas incluyen contenido adulto."
+            else "Desactivado: la sección +18 queda oculta. Para activarlo se pide un PIN.",
+        onClick = {
+            if (enabled) AdultContentSettings.disable()
+            else step = if (hasPin) PinStep.VERIFY_TO_ENABLE else PinStep.CREATE_AND_ENABLE
+        },
+    )
+    if (hasPin) {
+        PreferenceRow(
+            check = "🔒", title = "Cambiar PIN", subtitle = "Se pide el PIN actual.",
+            onClick = { step = PinStep.VERIFY_TO_CHANGE },
+        )
+    }
+
+    fun verdict(result: AdultContentSettings.PinResult, onOk: () -> Unit): String? = when (result) {
+        AdultContentSettings.PinResult.OK -> { onOk(); null }
+        AdultContentSettings.PinResult.WRONG -> "PIN incorrecto."
+        AdultContentSettings.PinResult.LOCKED -> "Demasiados intentos. Esperá ${AdultContentSettings.lockSecondsLeft()} s."
+    }
+
+    step?.let { current ->
+        key(current) {
+            when (current) {
+                PinStep.CREATE_AND_ENABLE -> PinDialog(
+                    title = "Creá un PIN", message = "Elegí un PIN de 4 dígitos para proteger el contenido +18.",
+                    confirmEntry = true, onDismiss = { step = null },
+                ) { pin ->
+                    if (AdultContentSettings.createPinAndEnable(pin)) { hasPin = true; step = null; null } else "PIN inválido."
+                }
+                PinStep.VERIFY_TO_ENABLE -> PinDialog(
+                    title = "Ingresá tu PIN", message = "Necesitás el PIN para activar el contenido +18.",
+                    confirmEntry = false, onDismiss = { step = null },
+                ) { pin -> verdict(AdultContentSettings.enableWithPin(pin)) { step = null } }
+                PinStep.VERIFY_TO_CHANGE -> PinDialog(
+                    title = "PIN actual", message = "Ingresá tu PIN actual para cambiarlo.",
+                    confirmEntry = false, onDismiss = { step = null },
+                ) { pin -> verdict(AdultContentSettings.verifyPin(pin)) { step = PinStep.CREATE_NEW } }
+                PinStep.CREATE_NEW -> PinDialog(
+                    title = "Nuevo PIN", message = "Elegí un PIN de 4 dígitos.",
+                    confirmEntry = true, onDismiss = { step = null },
+                ) { pin -> if (AdultContentSettings.setPin(pin)) { step = null; null } else "PIN inválido." }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreferenceRow(check: String, title: String, subtitle: String, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(10.dp)),
+        colors = ClickableSurfaceDefaults.colors(
+            containerColor = XuperSurfaceVariant,
+            contentColor = XuperTextPrimary,
+            focusedContainerColor = XuperAccent,
+            focusedContentColor = Color.White,
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(check, fontSize = 26.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, fontSize = 19.sp)
+                Text(subtitle, fontSize = 14.sp, color = XuperTextSecondary)
+            }
+        }
     }
 }
