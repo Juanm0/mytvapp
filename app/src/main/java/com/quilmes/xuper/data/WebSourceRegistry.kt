@@ -23,6 +23,11 @@ object WebSourceRegistry {
     private const val FRAMEXTV_ANIME_SUB_TYPE = "sub"
 
     private fun frameXtvAnimeUrl(tmdbTvId: String, season: String, episode: String): String? {
+        // Un ID de AniList por sí solo NO convierte una serie TMDb en anime.
+        // Esta ruta solo se permite para títulos clasificados explícitamente como anime.
+        // Así, una equivalencia vieja/incorrecta en memoria no desvía una serie normal
+        // al endpoint /embed/anime y deja intacta la ruta clásica de TMDb.
+        if (!isAnime(tmdbTvId)) return null
         val aniList = aniListIds[tmdbTvId] ?: return null
         return "https://framextv.xyz/embed/anime?id=$aniList&type=tv&season=$season&episode=$episode&sub_type=$FRAMEXTV_ANIME_SUB_TYPE"
     }
