@@ -26,6 +26,7 @@ import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.TmdbCatalogService
+import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
@@ -229,6 +230,7 @@ class MainActivity : ComponentActivity() {
     private val pendingDetailTitle = mutableStateOf<Title?>(null)
     private val repository: ContentRepository by lazy { buildRepository(filesDir, assets) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
+    private val jkanimeService: JkanimeService by lazy { JkanimeService() }
 
 
     /** Corre en un hilo de fondo (Dispatchers.IO). */
@@ -291,8 +293,33 @@ class MainActivity : ComponentActivity() {
                             onRequestIptv = { requestIptvRefresh() },
                             onPlay = { id ->
                                 val selected = repository.find(id)
-                                if (selected?.isLive == true) navController.navigate("player/$id")
+                                if (id.startsWith("jkanime-")) {
+                                    val saved = runCatching {
+                                        val items = org.json.JSONArray(getSharedPreferences("xuper-library", MODE_PRIVATE).getString("recent_items", "[]"))
+                                        (0 until items.length()).mapNotNull { items.optJSONObject(it) }
+                                            .firstOrNull { it.optString("id") == id }
+                                    }.getOrNull()
+                                    val savedUrl = saved?.optString("streamUrl").orEmpty()
+                                    if (savedUrl.startsWith("https://") || savedUrl.startsWith("http://")) {
+                                        val encodedStream = Base64.encodeToString(savedUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                        val savedName = saved?.optString("name").orEmpty().ifBlank { "Anime" }
+                                        navController.navigate("external-player/${Uri.encode(savedName)}/$encodedStream/$id")
+                                    }
+                                } else if (selected?.isLive == true) navController.navigate("player/$id")
                                 else navController.navigate("detail/$id")
+                            },
+                            jkanimeService = jkanimeService,
+                            onPlayAnimeEpisode = { title, streamUrl, episodeUrl ->
+                                val encodedStream = Base64.encodeToString(
+                                    streamUrl.toByteArray(StandardCharsets.UTF_8),
+                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                )
+                                val encodedEpisode = Base64.encodeToString(
+                                    episodeUrl.toByteArray(StandardCharsets.UTF_8),
+                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                )
+                                val key = "jkanime-$encodedEpisode"
+                                navController.navigate("external-player/${Uri.encode(title)}/$encodedStream/$key")
                             },
                         )
                     }
@@ -363,7 +390,7 @@ class MainActivity : ComponentActivity() {
                                         .filter { it.isNotBlank() && it != contentKey }.toMutableList()
                                     recent.add(contentKey)
                                     val episodeMatch = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
-                                    val kind = if (episodeMatch != null) ContentKind.SERIES.name else ContentKind.MOVIE.name
+                                    val kind = if (episodeMatch != null || contentKey.startsWith("jkanime-")) ContentKind.SERIES.name else ContentKind.MOVIE.name
                                     val recentJson = org.json.JSONObject().apply {
                                         put("id", contentKey)
                                         put("name", streamName)
@@ -392,6 +419,50 @@ class MainActivity : ComponentActivity() {
                             var nextExternalEpisode by remember(contentKey) { mutableStateOf<Title?>(null) }
                             LaunchedEffect(contentKey, streamUrl) {
                                 nextExternalEpisode = null
+                                if (contentKey.startsWith("jkanime-")) {
+                                    val episodeUrl = runCatching {
+                                        String(
+                                            Base64.decode(contentKey.removePrefix("jkanime-"), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                                            StandardCharsets.UTF_8,
+                                        )
+                                    }.getOrDefault("")
+                                    val episodeNumber = runCatching {
+                                        Uri.parse(episodeUrl).pathSegments.lastOrNull()?.toIntOrNull()
+                                    }.getOrNull()
+                                    val animeSlug = runCatching {
+                                        Uri.parse(episodeUrl).pathSegments.firstOrNull().orEmpty()
+                                    }.getOrDefault("")
+                                    if (episodeUrl.isNotBlank() && episodeNumber != null && animeSlug.isNotBlank()) {
+                                        runCatching {
+                                            val animeInfo = jkanimeService.getAnimeInfo("https://jkanime.net/$animeSlug/")
+                                            val pageNumber = ((episodeNumber - 1) / 16) + 1
+                                            val page = jkanimeService.getEpisodesPage(animeInfo.url, pageNumber)
+                                            var nextEpisodeData = page.episodes.firstOrNull { it.number > episodeNumber }
+                                            if (nextEpisodeData == null && page.totalPages > page.page) {
+                                                nextEpisodeData = jkanimeService.getEpisodesPage(animeInfo.url, page.page + 1).episodes.minByOrNull { it.number }
+                                            }
+                                            if (nextEpisodeData != null) {
+                                                val nextStream = jkanimeService.getEpisodeStream(nextEpisodeData.url)
+                                                val nextKey = "jkanime-" + Base64.encodeToString(
+                                                    nextEpisodeData.url.toByteArray(StandardCharsets.UTF_8),
+                                                    Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                                                )
+                                                nextExternalEpisode = Title(
+                                                    id = nextKey,
+                                                    name = "${animeInfo.title} · ${nextEpisodeData.title}",
+                                                    description = animeInfo.description,
+                                                    posterUrl = animeInfo.image,
+                                                    backdropUrl = animeInfo.image,
+                                                    streamUrl = nextStream.streamUrl,
+                                                    contentKind = ContentKind.SERIES,
+                                                )
+                                            }
+                                        }.onFailure { error ->
+                                            android.util.Log.w("XuperAnime", "No se pudo preparar el siguiente episodio", error)
+                                        }
+                                    }
+                                    return@LaunchedEffect
+                                }
                                 val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
                                 if (match != null) {
                                     val (tmdbNumber, seasonText, episodeText) = match.destructured
@@ -454,9 +525,23 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+                            val animeEpisodeUrl = if (contentKey.startsWith("jkanime-")) {
+                                runCatching {
+                                    String(
+                                        Base64.decode(contentKey.removePrefix("jkanime-"), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                                        StandardCharsets.UTF_8,
+                                    )
+                                }.getOrDefault("")
+                            } else ""
+                            val animeHeaders = if (animeEpisodeUrl.isNotBlank()) mapOf(
+                                "Referer" to animeEpisodeUrl,
+                                "Origin" to "https://jkanime.net",
+                                "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                            ) else emptyMap()
                             PlayerScreen(
                                 name = streamName,
                                 streamUrl = streamUrl,
+                                streamHeaders = animeHeaders,
                                 currentTitleId = contentKey,
                                 nextEpisode = nextExternalEpisode,
                                 onPlayNextEpisode = { nextId ->

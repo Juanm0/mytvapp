@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.TmdbCatalogService
+import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.components.NavItem
 import com.quilmes.xuper.ui.components.PinDialog
 import com.quilmes.xuper.ui.components.SideBar
@@ -46,6 +47,8 @@ fun MainScreen(
     catalogService: TmdbCatalogService,
     onPlay: (String) -> Unit,
     onRequestIptv: () -> Unit = {},
+    jkanimeService: JkanimeService,
+    onPlayAnimeEpisode: (title: String, streamUrl: String, episodeUrl: String) -> Unit,
 ) {
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
@@ -56,6 +59,7 @@ fun MainScreen(
         add(NavItem("home", "⌂", "INICIO"))
         add(NavItem("search", "⌕", "BUSCAR"))
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
+        add(NavItem("anime", "🎌", "ANIME"))
         add(NavItem("favorites", "♡", "MI LISTA"))
         add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
         if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
@@ -71,6 +75,7 @@ fun MainScreen(
                 "home" -> HomeScreen(repository = repository, onPlay = onPlay)
                 "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
+                "anime" -> AnimeScreen(service = jkanimeService, onPlayEpisode = onPlayAnimeEpisode)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
                 "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
