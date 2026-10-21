@@ -36,3 +36,9 @@ Copiar estos archivos respetando las rutas (todo bajo `app/src/main/java/com/qui
   así que pueden venir cortas. La búsqueda en +18 es la vía más confiable.
 - Si se olvida el PIN: borrar los datos de la app (no hay recuperación).
 - Las listas M3U locales no traen contenido adulto; esta sección es solo metadata/carátulas de TMDb.
+
+## Corrección (21/10/2026): al tocar un título +18 no abría la ficha
+Causa: `M3uRepository.find(id)` dejó de encontrar los títulos +18 porque se excluyeron de la fila
+"Descubiertos recientemente" (para que no aparezcan en Inicio). Ahora `find` también busca en los
+títulos registrados por el buscador/+18 (solo con el ajuste activado). Además, cada fila de +18
+consulta 8 páginas de `discover` en vez de 4.

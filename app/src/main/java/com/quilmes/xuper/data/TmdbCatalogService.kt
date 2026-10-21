@@ -169,7 +169,7 @@ class TmdbCatalogService(private val cacheDir: File) {
         coroutineScope {
             rows.map { (id, title, endpoint) ->
                 async {
-                    val pages = (1..4).map { page ->
+                    val pages = (1..8).map { page ->
                         async {
                             semaphore.acquire()
                             try {

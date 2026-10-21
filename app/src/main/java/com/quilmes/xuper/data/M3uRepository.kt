@@ -231,6 +231,10 @@ class M3uRepository(
      * (una sola búsqueda, con resultado cacheado).
      */
     override fun find(id: String): Title? = byId[id]?.let(::resolveForDisplay)
+        // Los títulos +18 registrados por el buscador/sección +18 no se publican en Inicio (ver
+        // rebuildPublishedState), pero su ficha tiene que poder abrirse: se buscan acá, y solo con el ajuste activado.
+        ?: searchCatalogTitles.firstOrNull { it.id == id && !AdultContentSettings.isHiddenAdult(it) }
+            ?.let(::resolveForDisplay)
 
     /** Guarda el catálogo visual de TMDB. Llamar desde un hilo de fondo. */
     fun setCatalogCategories(categories: List<Category>) {
