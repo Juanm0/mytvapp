@@ -7,6 +7,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +21,9 @@ class TmdbCatalogService(private val cacheDir: File) {
     private val apiKey = BuildConfig.TMDB_API_KEY.trim()
     private val cacheFile = File(cacheDir, "tmdb_home_catalog.json")
     private val cacheMaxAgeMs = 18 * 60 * 60 * 1000L
+    private val aniList = AniListResolver(cacheDir)
+    /** Sección ANIME (fichas de AniList + TMDb). */
+    val anime: AnimeCatalogService by lazy { AnimeCatalogService(cacheDir, this) }
 
     suspend fun loadCatalog(): List<Category> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext emptyList()
@@ -62,14 +66,17 @@ class TmdbCatalogService(private val cacheDir: File) {
 
     private fun asyncRequest(title: String, endpoint: String, kind: ContentKind): suspend () -> Category = {
         withContext(Dispatchers.IO) {
-            val json = request(endpoint)
+            // Filas de Inicio: SIEMPRE sin contenido adulto, sin importar el ajuste.
+            val json = request(endpoint, includeAdult = false)
             val results = json.optJSONArray("results") ?: JSONArray()
             val items = buildList {
                 for (i in 0 until results.length()) {
                     val item = results.optJSONObject(i) ?: continue
+                    if (item.optBoolean("adult", false)) continue
                     val id = item.optLong("id", 0L)
                     if (id <= 0L) continue
                     val isTv = kind == ContentKind.SERIES || endpoint.contains("/tv/") || endpoint.startsWith("tv/")
+                    markIfAnime(item, isTv)
                     val candidateName = item.optString(if (isTv) "name" else "title")
                     if (candidateName.isBlank()) continue
                     val name = candidateName
@@ -99,6 +106,7 @@ class TmdbCatalogService(private val cacheDir: File) {
     suspend fun search(query: String): List<Title> = withContext(Dispatchers.IO) {
         val q = query.trim()
         if (apiKey.isBlank() || q.length < 2) return@withContext emptyList()
+        val includeAdult = AdultContentSettings.isEnabled()
 
         runCatching {
             val found = linkedMapOf<String, Title>()
@@ -113,17 +121,18 @@ class TmdbCatalogService(private val cacheDir: File) {
                     // consultamos ambos endpoints y devolvemos solo coincidencias exactas.
                     listOf("movie" to ContentKind.MOVIE, "tv" to ContentKind.SERIES).forEach { (type, kind) ->
                         runCatching {
-                            val item = request("$type/$numericId")
+                            val item = request("$type/$numericId", includeAdult)
                             val title = titleFromJson(item, kind)
                             found[title.id] = title
                         }
                     }
-                    return@runCatching found.values.toList()
+                    return@runCatching found.values.filter { includeAdult || !it.adult }
+                        .also { list -> AdultContentSettings.recordAdultIds(list.filter { it.adult }.map { it.id }) }
                 }
             }
 
             val data = runCatching {
-                request("search/multi?query=${URLEncoder.encode(q, "UTF-8")}&include_adult=false")
+                request("search/multi?query=${URLEncoder.encode(q, "UTF-8")}", includeAdult)
             }.getOrNull()
             val results = data?.optJSONArray("results") ?: JSONArray()
             for (i in 0 until results.length()) {
@@ -136,14 +145,72 @@ class TmdbCatalogService(private val cacheDir: File) {
                 }
                 runCatching { titleFromJson(item, kind) }.getOrNull()?.let { found[it.id] = it }
             }
-            found.values.toList()
+            // Defensa extra: con el ajuste apagado no pasa nada marcado como adulto.
+            found.values.filter { includeAdult || !it.adult }
+                .also { list -> AdultContentSettings.recordAdultIds(list.filter { it.adult }.map { it.id }) }
         }.getOrDefault(emptyList())
+    }
+
+    /** Sección +18: solo títulos marcados como adultos por TMDb. Requiere el ajuste activado. */
+    suspend fun searchAdult(query: String): List<Title> = withContext(Dispatchers.IO) {
+        val q = query.trim()
+        if (apiKey.isBlank() || q.length < 2 || !AdultContentSettings.isEnabled()) return@withContext emptyList()
+        runCatching {
+            val results = request("search/multi?query=${URLEncoder.encode(q, "UTF-8")}", true).optJSONArray("results") ?: JSONArray()
+            adultTitles(results, null)
+        }.getOrDefault(emptyList())
+    }
+
+    /** Filas de la sección +18 (en memoria: nada de esto se guarda en el caché de disco). */
+    suspend fun loadAdultCatalog(): List<Category> = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank() || !AdultContentSettings.isEnabled()) return@withContext emptyList()
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", Locale.US).format(java.util.Date())
+        val rows = listOf(
+            Triple("adult-popular", "Populares", "discover/movie?sort_by=popularity.desc"),
+            Triple("adult-recent", "Estrenos", "discover/movie?sort_by=primary_release_date.desc&primary_release_date.lte=$today"),
+            Triple("adult-rated", "Mejor valoradas", "discover/movie?sort_by=vote_average.desc&vote_count.gte=10"),
+        )
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            rows.map { (id, title, endpoint) ->
+                async {
+                    val pages = (1..8).map { page ->
+                        async {
+                            semaphore.acquire()
+                            try {
+                                runCatching { request("$endpoint&page=$page", true).optJSONArray("results") }.getOrNull()
+                            } finally { semaphore.release() }
+                        }
+                    }.awaitAll()
+                    val merged = JSONArray().also { arr -> pages.filterNotNull().forEach { p -> for (i in 0 until p.length()) arr.put(p.get(i)) } }
+                    Category("tmdb-$id", title, adultTitles(merged, ContentKind.MOVIE))
+                }
+            }.awaitAll()
+        }.filter { it.items.isNotEmpty() }
+    }
+
+    private fun adultTitles(results: JSONArray, forcedKind: ContentKind?): List<Title> {
+        val titles = buildList {
+            for (i in 0 until results.length()) {
+                val item = results.optJSONObject(i) ?: continue
+                if (!item.optBoolean("adult", false)) continue
+                val kind = forcedKind ?: when (item.optString("media_type")) {
+                    "movie" -> ContentKind.MOVIE
+                    "tv" -> ContentKind.SERIES
+                    else -> continue
+                }
+                runCatching { titleFromJson(item, kind) }.getOrNull()?.let { add(it) }
+            }
+        }.distinctBy { it.id }
+        AdultContentSettings.recordAdultIds(titles.map { it.id })
+        return titles
     }
 
     private fun titleFromJson(item: JSONObject, kind: ContentKind): Title {
         val isTv = kind == ContentKind.SERIES
         val id = item.optLong("id", 0L)
         require(id > 0L) { "TMDB devolvió un ID inválido" }
+        markIfAnime(item, isTv)
         val name = item.optString(if (isTv) "name" else "title").trim()
         require(name.isNotBlank()) { "TMDB no devolvió título" }
         val date = item.optString(if (isTv) "first_air_date" else "release_date")
@@ -160,6 +227,7 @@ class TmdbCatalogService(private val cacheDir: File) {
             rating = item.optDouble("vote_average", 0.0).takeIf { it > 0.0 }
                 ?.let { String.format(Locale.US, "%.1f", it) },
             contentKind = kind,
+            adult = item.optBoolean("adult", false),
         )
     }
 
@@ -169,12 +237,16 @@ class TmdbCatalogService(private val cacheDir: File) {
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         val mediaType = parsed.first
         val endpointType = if (mediaType == "tv") "tv" else "movie"
+        val includeAdult = AdultContentSettings.isEnabled()
         runCatching {
             val resultTitles = mutableListOf<Title>()
             for (endpoint in listOf("$endpointType/${parsed.second}/recommendations", "$endpointType/${parsed.second}/similar")) {
-                val results = request(endpoint).optJSONArray("results") ?: continue
+                val results = request(endpoint, includeAdult).optJSONArray("results") ?: continue
                 for (i in 0 until results.length()) {
                     val item = results.optJSONObject(i) ?: continue
+                    val isAdult = item.optBoolean("adult", false)
+                    if (isAdult && !includeAdult) continue
+                    markIfAnime(item, mediaType == "tv")
                     val id = item.optLong("id", 0L)
                     if (id <= 0L) continue
                     val name = item.optString(if (mediaType == "tv") "name" else "title").trim()
@@ -193,18 +265,31 @@ class TmdbCatalogService(private val cacheDir: File) {
                         year = date.take(4).takeIf { it.length == 4 },
                         rating = rating,
                         contentKind = if (mediaType == "tv") ContentKind.SERIES else ContentKind.MOVIE,
+                        adult = isAdult,
                     )
                 }
             }
             resultTitles.filterNot { it.id == titleId }.distinctBy { it.id }.take(18)
+                .also { list -> AdultContentSettings.recordAdultIds(list.filter { it.adult }.map { it.id }) }
         }.getOrDefault(emptyList())
     }
 
     suspend fun loadSeasons(titleId: String): List<TmdbSeason> = withContext(Dispatchers.IO) {
+        if (titleId.startsWith("anilist-")) return@withContext anime.seasons(titleId)
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()
         runCatching {
-            val data = request("tv/${parsed.second}")
+            val data = request("tv/${parsed.second}", AdultContentSettings.isEnabled())
+            markIfAnime(data, true)
+            // Anime: FrameXTV necesita el id de AniList (no el de TMDb). Se resuelve acá, al abrir la ficha,
+            // para que esté listo antes de tocar Reproducir. Si falla, se usa el embed normal de TMDb.
+            if (WebSourceRegistry.isAnime(parsed.second.toString()) && !WebSourceRegistry.hasAniListId(parsed.second.toString())) runCatching {
+                val tvId = parsed.second.toString()
+                val names = listOf(data.optString("original_name"), data.optString("name"))
+                val year = data.optString("first_air_date").take(4).toIntOrNull()
+                withTimeoutOrNull(7000) { aniList.resolve(tvId, names, year) }
+                    ?.let { WebSourceRegistry.setAniListIdIfAbsent(tvId, it) }
+            }
             val seasons = data.optJSONArray("seasons") ?: JSONArray()
             buildList {
                 for (i in 0 until seasons.length()) {
@@ -224,10 +309,11 @@ class TmdbCatalogService(private val cacheDir: File) {
     }
 
     suspend fun loadEpisodes(titleId: String, seasonNumber: Int): List<TmdbEpisode> = withContext(Dispatchers.IO) {
+        if (titleId.startsWith("anilist-")) return@withContext anime.episodes(titleId)
         val parsed = parseTmdbId(titleId) ?: return@withContext emptyList()
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()
         runCatching {
-            val data = request("tv/${parsed.second}/season/$seasonNumber")
+            val data = request("tv/${parsed.second}/season/$seasonNumber", AdultContentSettings.isEnabled())
             val episodes = data.optJSONArray("episodes") ?: JSONArray()
             buildList {
                 for (i in 0 until episodes.length()) {
@@ -246,14 +332,68 @@ class TmdbCatalogService(private val cacheDir: File) {
     }
 
 
+    /**
+     * Busca en TMDb la serie de anime equivalente a una ficha de AniList. Es estricto a propósito: exige género
+     * Animación, título casi idéntico y año de estreno (±1); ante la duda devuelve null y se usa la ficha de AniList.
+     */
+    suspend fun matchAnimeTv(names: List<String>, year: Int?): Title? = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) return@withContext null
+        val queries = names.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(2)
+        val wanted = names.map(TitleMatch::norm).filter { it.isNotBlank() }.toSet()
+        var best: JSONObject? = null
+        var bestScore = 0.0
+        for (q in queries) {
+            val results = runCatching {
+                request("search/tv?query=${URLEncoder.encode(q, "UTF-8")}", false).optJSONArray("results")
+            }.getOrNull() ?: continue
+            for (i in 0 until results.length()) {
+                val item = results.optJSONObject(i) ?: continue
+                val genres = item.optJSONArray("genre_ids") ?: continue
+                if ((0 until genres.length()).none { genres.optInt(it) == 16 }) continue
+                val candidates = listOf(item.optString("name"), item.optString("original_name"))
+                    .map(TitleMatch::norm).filter { it.isNotBlank() }
+                var score = candidates.maxOfOrNull { c -> wanted.maxOfOrNull { w -> TitleMatch.similarity(c, w) } ?: 0.0 } ?: 0.0
+                val itemYear = item.optString("first_air_date").take(4).toIntOrNull()
+                score += when {
+                    year == null || itemYear == null -> 0.15
+                    kotlin.math.abs(itemYear - year) <= 1 -> 0.3
+                    else -> -0.4
+                }
+                if (score > bestScore) { bestScore = score; best = item }
+            }
+            if (bestScore >= 1.3) break
+        }
+        best?.takeIf { bestScore >= 1.15 }?.let { runCatching { titleFromJson(it, ContentKind.SERIES) }.getOrNull() }
+    }
+
+    /** Marca la serie como anime (género Animación 16 + idioma original japonés) para elegir el embed de anime. */
+    private fun markIfAnime(item: JSONObject, isTv: Boolean) {
+        if (!isTv) return
+        val id = item.optLong("id", 0L)
+        if (id <= 0L) return
+        val ids = item.optJSONArray("genre_ids")
+        val genres = item.optJSONArray("genres")
+        val animation = (ids != null && (0 until ids.length()).any { ids.optInt(it) == 16 }) ||
+            (genres != null && (0 until genres.length()).any { genres.optJSONObject(it)?.optInt("id") == 16 })
+        val countries = item.optJSONArray("origin_country")
+        val japanese = item.optString("original_language") == "ja" ||
+            (countries != null && (0 until countries.length()).any { countries.optString(it) == "JP" })
+        if (animation && japanese) WebSourceRegistry.markAnime(id.toString())
+    }
+
     private fun parseTmdbId(id: String): Pair<String, Long>? {
         val match = Regex("^tmdb-(tv|movie)-(\\d+)$").matchEntire(id) ?: return null
         return match.groupValues[1] to (match.groupValues[2].toLongOrNull() ?: return null)
     }
 
-    private fun request(path: String): JSONObject {
-        val separator = if (path.contains('?')) '&' else '?'
-        val url = URL("https://api.themoviedb.org/3/$path${separator}api_key=${URLEncoder.encode(apiKey, "UTF-8")}&language=es-AR&page=1&include_adult=false")
+    /**
+     * Todas las llamadas a TMDb pasan por acá. [includeAdult] es obligatorio (sin valor por defecto) para que
+     * cada llamador decida explícitamente; `applyIncludeAdult` garantiza un único `include_adult` en la URL.
+     */
+    private fun request(path: String, includeAdult: Boolean): JSONObject {
+        val withAdult = AdultContentSettings.applyIncludeAdult(path, includeAdult)
+        val pageParam = if (Regex("[?&]page=").containsMatchIn(withAdult)) "" else "&page=1"
+        val url = URL("https://api.themoviedb.org/3/$withAdult&api_key=${URLEncoder.encode(apiKey, "UTF-8")}&language=es-AR$pageParam")
         val connection = (url.openConnection() as HttpURLConnection).apply {
             connectTimeout = 8000
             readTimeout = 10000

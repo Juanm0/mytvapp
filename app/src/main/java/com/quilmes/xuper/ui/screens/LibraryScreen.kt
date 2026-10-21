@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
+import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.Category
 import com.quilmes.xuper.data.Section
 import com.quilmes.xuper.data.Title
@@ -111,12 +112,13 @@ private fun buildLibraryRows(
     val allTitles by lazy { sections.flatMap { it.categories }.flatMap { it.items }.distinctBy { it.id } }
     return when (mode) {
         LibraryMode.FAVORITES -> listOfNotNull(
-            allTitles.filter { it.id in favoriteIds }.takeIf { it.isNotEmpty() }
+            allTitles.filter { it.id in favoriteIds && !AdultContentSettings.isHiddenAdult(it) }.takeIf { it.isNotEmpty() }
                 ?.let { Category("favorites", "Mi lista", it) }
         )
         LibraryMode.CONTINUE -> listOfNotNull(
             (recentOrder.mapNotNull { id -> allTitles.firstOrNull { it.id == id && !it.isLive } ?: savedRecentTitles.firstOrNull { it.id == id && !it.isLive } }
                 .distinctBy { it.id })
+                .filterNot { AdultContentSettings.isHiddenAdult(it) }
                 .takeIf { it.isNotEmpty() }?.let { Category("continue", "Continuar viendo", it) }
         )
         LibraryMode.ARGENTINA -> {

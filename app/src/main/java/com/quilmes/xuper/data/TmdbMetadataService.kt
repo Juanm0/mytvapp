@@ -39,7 +39,9 @@ internal class TmdbMetadataService(private val cacheDir: File) {
                     if (title.isLive || title.contentKind !in setOf(ContentKind.MOVIE, ContentKind.SERIES)) return@async item
                     val query = cleanQuery(title.name, title.contentKind)
                     if (query.isBlank()) return@async item
-                    val key = "${title.contentKind}|${normalize(query)}"
+                    // El ajuste +18 cambia los resultados posibles: no mezclar entradas del caché entre ambos modos.
+                    val adultPrefix = if (AdultContentSettings.isEnabled()) "+18|" else ""
+                    val key = "$adultPrefix${title.contentKind}|${normalize(query)}"
                     val cached = synchronized(metadataCache) { metadataCache[key] }
                     if (cached != null) return@async item.copy(title = merge(title, cached))
                     // Keep first launch responsive on very large lists; later launches use the disk cache.
@@ -57,7 +59,10 @@ internal class TmdbMetadataService(private val cacheDir: File) {
     private fun lookup(query: String, kind: ContentKind): Title? {
         val endpoint = if (kind == ContentKind.SERIES) "tv" else "movie"
         val encoded = URLEncoder.encode(query, "UTF-8")
-        val url = URL("https://api.themoviedb.org/3/search/$endpoint?api_key=$apiKey&language=es-AR&include_adult=false&query=$encoded")
+        val url = URL(AdultContentSettings.applyIncludeAdult(
+            "https://api.themoviedb.org/3/search/$endpoint?api_key=$apiKey&language=es-AR&query=$encoded",
+            AdultContentSettings.isEnabled(),
+        ))
         val connection = (url.openConnection() as HttpURLConnection).apply {
             connectTimeout = 7000
             readTimeout = 9000

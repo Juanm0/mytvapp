@@ -226,11 +226,23 @@ class M3uRepository(
         }
     }
 
+    // Títulos de la sección ANIME: solo sirven para abrir su ficha por id; NO se publican en Inicio.
+    private val lookupTitles = java.util.concurrent.ConcurrentHashMap<String, Title>()
+    fun registerLookupTitles(titles: List<Title>) {
+        if (lookupTitles.size > 600) lookupTitles.clear()
+        titles.forEach { lookupTitles[it.id] = it }
+    }
+
     /**
      * Devuelve el título; si es una ficha de TMDB sin video, intenta vincularle un stream M3U
      * (una sola búsqueda, con resultado cacheado).
      */
     override fun find(id: String): Title? = byId[id]?.let(::resolveForDisplay)
+        // Los títulos +18 registrados por el buscador/sección +18 no se publican en Inicio (ver
+        // rebuildPublishedState), pero su ficha tiene que poder abrirse: se buscan acá, y solo con el ajuste activado.
+        ?: searchCatalogTitles.firstOrNull { it.id == id && !AdultContentSettings.isHiddenAdult(it) }
+            ?.let(::resolveForDisplay)
+        ?: lookupTitles[id]?.let(::resolveForDisplay)
 
     /** Guarda el catálogo visual de TMDB. Llamar desde un hilo de fondo. */
     fun setCatalogCategories(categories: List<Category>) {
@@ -394,7 +406,9 @@ class M3uRepository(
 
         val visibleCatalog = catalogCategories.toMutableList()
         if (searchCatalogTitles.isNotEmpty()) {
-            visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", searchCatalogTitles))
+            // Nunca +18 en Inicio, aunque el buscador los haya registrado para abrir su ficha.
+            val discovered = searchCatalogTitles.filterNot { it.adult }
+            if (discovered.isNotEmpty()) visibleCatalog.add(Category("tmdb-search-results", "Descubiertos recientemente", discovered))
         }
         val secs = sources.indices.mapNotNull { n ->
             val source = sources[n]

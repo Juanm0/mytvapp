@@ -24,6 +24,7 @@ import com.quilmes.xuper.data.M3uSource
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.IptvAccountTextParser
+import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
@@ -255,6 +256,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Ajuste +18: debe inicializarse antes de que cualquier servicio de TMDb lea include_adult.
+        AdultContentSettings.init(applicationContext)
         XuperBraveAdblock.initialize(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
@@ -389,6 +392,21 @@ class MainActivity : ComponentActivity() {
                             var nextExternalEpisode by remember(contentKey) { mutableStateOf<Title?>(null) }
                             LaunchedEffect(contentKey, streamUrl) {
                                 nextExternalEpisode = null
+                                // Fichas de AniList (sección ANIME): siguiente episodio dentro de la misma entrada.
+                                Regex("^anilist-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)?.let { ani ->
+                                    val (aniId, aniSeason, aniEpisode) = ani.destructured
+                                    val total = tmdbCatalogService.anime.episodeCount(aniId.toLong())
+                                    val nextNumber = (aniEpisode.toIntOrNull() ?: 0) + 1
+                                    if (nextNumber <= total) {
+                                        val nextKey = "anilist-$aniId|s$aniSeason|e$nextNumber"
+                                        nextExternalEpisode = Title(
+                                            id = nextKey, name = "Episodio $nextNumber", posterUrl = "",
+                                            streamUrl = WebSourceRegistry.frameXtvUrl(nextKey).orEmpty(),
+                                            contentKind = ContentKind.SERIES,
+                                        )
+                                    }
+                                    return@LaunchedEffect
+                                }
                                 val match = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(contentKey)
                                 if (match != null) {
                                     val (tmdbNumber, seasonText, episodeText) = match.destructured
@@ -432,7 +450,7 @@ class MainActivity : ComponentActivity() {
                                         val nextUrl = if (tmdbNumber == "332") {
                                             val okId = simuladoresVideoId(nextSeasonNumber, nextEpisodeData.number)
                                             okId?.let { "https://ok.ru/videoembed/$it" }
-                                        } else if (runCatching { Uri.parse(streamUrl).host.equals("videoapi.la", true) }.getOrDefault(false)) {
+                                        } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
                                             WebSourceRegistry.videoApiUrl(nextKey)
                                         } else {
                                             WebSourceRegistry.frameXtvUrl(nextKey)
