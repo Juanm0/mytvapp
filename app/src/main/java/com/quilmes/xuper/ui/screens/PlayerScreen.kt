@@ -316,7 +316,14 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       if(d.__xuper!==1) return;
       var menuCommand=(d.cmd==='audioNext'||d.cmd==='subtitleNext');
       if(d.target!==ID && !(d.target==='*'&&menuCommand)) return;
-      if(d.target==='*'&&menuCommand){try{clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle');}catch(menuErr){}return;}
+      if(d.target==='*'&&menuCommand){
+        // El menú puede vivir en un iframe distinto del que contiene el <video>.
+        // Cada frame prueba el menú local y reenvía la orden a sus propios hijos;
+        // así también alcanzamos iframes anidados de origen cruzado.
+        try{clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle');}catch(menuErr){}
+        try{for(var fi=0;fi<window.frames.length;fi++){try{window.frames[fi].postMessage(d,'*');}catch(fe){}}}catch(ferr){}
+        return;
+      }
       var b=best(); if(!b) return; var v=b.v;
       try{
         if(d.cmd==='toggle'){
@@ -1206,6 +1213,16 @@ private fun WebEmbedPlayer(
             return
         }
 
+        // Los menús de VideoAPI pueden estar en otro frame y no necesitan que la sonda haya
+        // encontrado un <video>. Mandar CC/Idioma a todos los frames aunque agentTarget sea null.
+        if (isVideoApi && (action == "audioNext" || action == "subtitleNext") && agentInstalled) {
+            val menuCmd = if (action == "audioNext") "audioNext" else "subtitleNext"
+            webView.evaluateJavascript(frameAgentCommandScript("*", menuCmd, 0)) { raw ->
+                if (raw != "true") android.util.Log.w("XuperAgent", "No se pudo repartir la orden de menú $menuCmd")
+            }
+            return
+        }
+
         // Agente de frames (Latino / OK.ru / Simuladores): la orden llega al <video> aunque esté en un iframe de
         // otro origen. El estado de pausa/silencio NO se supone: lo informa el propio agente.
         val agentTargetNow = agentTarget
@@ -1787,14 +1804,14 @@ private fun WebEmbedPlayer(
                 if (isVideoApi) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
-                            enabled = agentActive,
+                            enabled = true,
                             onClick = { runWebCommand("audioNext", frameSubtitleIndex, 0) }
                         ) {
                             val label = latinoAudioTracks.getOrNull(latinoAudioSelected).orEmpty()
                             Text(if (latinoAudioTracks.isEmpty()) "Idioma · abrir/cambiar ▶" else "Idioma · ${label.take(18)} ▶")
                         }
                         Button(
-                            enabled = agentActive,
+                            enabled = true,
                             onClick = { runWebCommand("subtitleNext", frameSubtitleIndex, 0) }
                         ) {
                             val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
@@ -1833,17 +1850,6 @@ private fun WebEmbedPlayer(
                     }
                 }
             }
-        }
-        if (isVideoApi && !hubActive && showLatinoHint && pageError == null && progress >= 100) {
-            Text(
-                when {
-                    !agentSupported -> "Latino: este WebView no permite controlar el video dentro de iframes (actualizá «Android System WebView»). El mando maneja el reproductor original."
-                    !agentInstalled -> "Latino: no se pudo activar el control del video. El mando maneja el reproductor original."
-                    else -> "Latino: buscando el video para controlarlo… mientras tanto el mando maneja el reproductor original."
-                },
-                Modifier.align(Alignment.TopCenter).padding(16.dp).background(Color(0xCC101820), RoundedCornerShape(8.dp)).padding(12.dp),
-                color = Color.White, fontSize = 14.sp
-            )
         }
         // Indicador del avance sostenido: delta acumulado y, si se conoce la duración, la posición de destino.
         val scrubLabel: String? = when {
