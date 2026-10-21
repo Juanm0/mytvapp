@@ -72,6 +72,7 @@ class TmdbCatalogService(private val cacheDir: File) {
                     val id = item.optLong("id", 0L)
                     if (id <= 0L) continue
                     val isTv = kind == ContentKind.SERIES || endpoint.contains("/tv/") || endpoint.startsWith("tv/")
+                    markIfAnime(item, isTv)
                     val candidateName = item.optString(if (isTv) "name" else "title")
                     if (candidateName.isBlank()) continue
                     val name = candidateName
@@ -205,6 +206,7 @@ class TmdbCatalogService(private val cacheDir: File) {
         val isTv = kind == ContentKind.SERIES
         val id = item.optLong("id", 0L)
         require(id > 0L) { "TMDB devolvió un ID inválido" }
+        markIfAnime(item, isTv)
         val name = item.optString(if (isTv) "name" else "title").trim()
         require(name.isNotBlank()) { "TMDB no devolvió título" }
         val date = item.optString(if (isTv) "first_air_date" else "release_date")
@@ -240,6 +242,7 @@ class TmdbCatalogService(private val cacheDir: File) {
                     val item = results.optJSONObject(i) ?: continue
                     val isAdult = item.optBoolean("adult", false)
                     if (isAdult && !includeAdult) continue
+                    markIfAnime(item, mediaType == "tv")
                     val id = item.optLong("id", 0L)
                     if (id <= 0L) continue
                     val name = item.optString(if (mediaType == "tv") "name" else "title").trim()
@@ -272,6 +275,7 @@ class TmdbCatalogService(private val cacheDir: File) {
         if (apiKey.isBlank() || parsed.first != "tv") return@withContext emptyList()
         runCatching {
             val data = request("tv/${parsed.second}", AdultContentSettings.isEnabled())
+            markIfAnime(data, true)
             val seasons = data.optJSONArray("seasons") ?: JSONArray()
             buildList {
                 for (i in 0 until seasons.length()) {
@@ -312,6 +316,21 @@ class TmdbCatalogService(private val cacheDir: File) {
         }.getOrDefault(emptyList())
     }
 
+
+    /** Marca la serie como anime (género Animación 16 + idioma original japonés) para elegir el embed de anime. */
+    private fun markIfAnime(item: JSONObject, isTv: Boolean) {
+        if (!isTv) return
+        val id = item.optLong("id", 0L)
+        if (id <= 0L) return
+        val ids = item.optJSONArray("genre_ids")
+        val genres = item.optJSONArray("genres")
+        val animation = (ids != null && (0 until ids.length()).any { ids.optInt(it) == 16 }) ||
+            (genres != null && (0 until genres.length()).any { genres.optJSONObject(it)?.optInt("id") == 16 })
+        val countries = item.optJSONArray("origin_country")
+        val japanese = item.optString("original_language") == "ja" ||
+            (countries != null && (0 until countries.length()).any { countries.optString(it) == "JP" })
+        if (animation && japanese) WebSourceRegistry.markAnime(id.toString())
+    }
 
     private fun parseTmdbId(id: String): Pair<String, Long>? {
         val match = Regex("^tmdb-(tv|movie)-(\\d+)$").matchEntire(id) ?: return null

@@ -435,7 +435,7 @@ class MainActivity : ComponentActivity() {
                                         val nextUrl = if (tmdbNumber == "332") {
                                             val okId = simuladoresVideoId(nextSeasonNumber, nextEpisodeData.number)
                                             okId?.let { "https://ok.ru/videoembed/$it" }
-                                        } else if (runCatching { Uri.parse(streamUrl).host.equals("videoapi.la", true) }.getOrDefault(false)) {
+                                        } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
                                             WebSourceRegistry.videoApiUrl(nextKey)
                                         } else {
                                             WebSourceRegistry.frameXtvUrl(nextKey)

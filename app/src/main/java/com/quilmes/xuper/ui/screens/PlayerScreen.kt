@@ -80,6 +80,7 @@ import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
+import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebPageMediaResolver
 import java.net.URI
@@ -308,7 +309,7 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
-    val isKnownEmbed = streamUrl.startsWith("https://videoapi.la/e/") ||
+    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) ||
         streamUrl.startsWith("https://framextv.xyz/embed/") ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
@@ -873,7 +874,7 @@ private fun WebEmbedPlayer(
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") } == true }.getOrDefault(false) }
-    val isVideoApi = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "videoapi.la" || it.endsWith(".videoapi.la") } == true }.getOrDefault(false) }
+    val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isVideoApi || isOkRu || isSimuladores
