@@ -192,50 +192,73 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
     var ID=Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
     var isTop=false; try{isTop=(window.top===window);}catch(e){}
     var tick=0, hadVideo=false, bound=null;
-    var audioMenuOpen=false, subtitleMenuOpen=false, latinoAudioEnglish=false, latinoSpanishSubs=false;
     function visible(el){try{var r=el.getBoundingClientRect(),s=getComputedStyle(el);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity||1)>0.05;}catch(e){return false;}}
-    function label(el){return ((el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')+' '+(el.getAttribute('data-testid')||'')+' '+(el.innerText||el.textContent||'')).replace(/\s+/g,' ').trim();}
-    function clickText(patterns){
-      var sels='button,[role=button],[role=tab],[role=menuitem],[role=option],[role=menuitemradio],[role=radio],[aria-label],[title],[tabindex]';
+    function label(el){return (el.innerText||el.textContent||el.getAttribute('aria-label')||el.getAttribute('title')||el.getAttribute('data-testid')||'').replace(/\s+/g,' ').trim();}
+    function findText(patterns){
+      var sels='button,[role=button],[role=tab],[role=menuitem],[role=option],[role=menuitemradio],[role=radio],[aria-label],[title],[tabindex],div,span';
       var all=Array.from(document.querySelectorAll(sels)).filter(visible);
       for(var p=0;p<patterns.length;p++){
         var re=patterns[p];
         var hits=all.filter(function(e){return re.test(label(e));});
-        // Prefer exact labels, then the shortest accessible label to avoid clicking a parent panel.
-        hits.sort(function(a,b){var ae=label(a).toLowerCase().trim()===re.source.toLowerCase()?0:1;var be=label(b).toLowerCase().trim()===re.source.toLowerCase()?0:1;return ae-be||label(a).length-label(b).length;});
-        if(hits.length){try{hits[0].click();return true;}catch(e){}}
+        // Evitar el contenedor padre: priorizar el elemento cuyo texto visible coincide exactamente.
+        hits.sort(function(a,b){var la=label(a).toLowerCase().trim(),lb=label(b).toLowerCase().trim();var ea=re.test(la)&&patterns[p].source.replace(/^\^|\$$/g,'').toLowerCase()===la?0:1;var eb=re.test(lb)&&patterns[p].source.replace(/^\^|\$$/g,'').toLowerCase()===lb?0:1;return ea-eb||la.length-lb.length;});
+        if(hits.length)return hits[0];
       }
+      return null;
+    }
+    function clickText(patterns){var el=findText(patterns);if(!el)return false;try{el.click();return true;}catch(e){return false;}}
+    function chooseSpanishSubtitle(){
+      if(clickText([/^spanish$/i]))return true;
       return false;
     }
     function clickPlayerMenu(kind){
-      var audio=kind==='audio';
-      // VideoAPI's custom CC menu: CC -> Predeterminados -> Spanish. The subtitle file may need time to download.
-      if(!audio){
-        var hasDefaultTab=Array.from(document.querySelectorAll('button,[role=button],[role=tab]')).some(function(e){return visible(e)&&/^predeterminados$/i.test(label(e));});
-        var hasSpanish=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem]')).some(function(e){return visible(e)&&/^spanish$/i.test(label(e));});
-        if(hasDefaultTab){
-          if(!latinoSpanishSubs){
-            try{clickText([/^predeterminados$/i]);setTimeout(function(){if(clickText([/^spanish$/i]))latinoSpanishSubs=true;},500);return true;}catch(e){}
-          }
-          if(latinoSpanishSubs || hasSpanish){
-            if(clickText([/^desactivados?$/i,/^off$/i,/^none$/i])){latinoSpanishSubs=false;return true;}
-            if(clickText([/^spanish$/i])){latinoSpanishSubs=true;return true;}
-          }
+      if(kind==='subtitle'){
+        // Flujo real de VideoAPI: CC -> Predeterminados -> Spanish. Cada paso espera a que
+        // el panel anterior se pinte; no damos por activado el subtítulo solo por tocar una pestaña.
+        if(findText([/^spanish$/i])) return chooseSpanishSubtitle();
+        if(findText([/^predeterminados$/i])){
+          if(clickText([/^predeterminados$/i])) setTimeout(function(){chooseSpanishSubtitle();},450);
+          return true;
         }
-        if(clickText([/^cc$/i,/^subtítulos?$/i,/^captions?$/i])){subtitleMenuOpen=true;return true;}
-        // If the CC panel is already open on the first tab, jump directly to Predeterminados and choose Spanish.
-        if(clickText([/^predeterminados$/i])){setTimeout(function(){if(clickText([/^spanish$/i]))latinoSpanishSubs=true;},500);return true;}
+        if(clickText([/^cc$/i,/^subtítulos?$/i,/^captions?$/i,/^closed captions?$/i])){
+          setTimeout(function(){
+            if(findText([/^spanish$/i])){chooseSpanishSubtitle();return;}
+            if(clickText([/^predeterminados$/i]))setTimeout(function(){chooseSpanishSubtitle();},450);
+          },350);
+          return true;
+        }
         return false;
       }
-      // VideoAPI's language menu: settings/gear -> Idioma -> Español/English.
-      var english=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem],[role=radio]')).some(function(e){return visible(e)&&/^english$/i.test(label(e));});
-      var spanish=Array.from(document.querySelectorAll('button,[role=button],[role=option],[role=menuitem],[role=radio]')).some(function(e){return visible(e)&&/^español$/i.test(label(e));});
-      if(english||spanish){
-        var target=latinoAudioEnglish?/^español$/i:/^english$/i;
-        if(clickText([target])){latinoAudioEnglish=!latinoAudioEnglish;audioMenuOpen=false;return true;}
+      // Audio: abrir Ajustes -> Idioma y elegir la opción contraria a la que figura seleccionada.
+      function chooseLanguage(){
+        var en=findText([/^english$/i]),es=findText([/^español$/i,/^espanol$/i]);
+        if(!en&&!es)return false;
+        function selected(el){
+          if(!el)return false;
+          var cur=el;
+          for(var i=0;i<4&&cur;i++,cur=cur.parentElement){
+            var a=(cur.getAttribute('aria-checked')||cur.getAttribute('aria-selected')||cur.getAttribute('data-state')||'').toLowerCase();
+            var c=String(cur.className||'').toLowerCase();
+            if(a==='true'||a==='checked'||a==='on'||/selected|active|checked|current/.test(c))return true;
+          }
+          return false;
+        }
+        var englishSelected=selected(en), spanishSelected=selected(es);
+        // Si no hay estado accesible, usar Español como predeterminado; después alternar según el estado visible.
+        var target=englishSelected?es:(spanishSelected?en:es);
+        if(!target)target=en;
+        try{target.click();return true;}catch(e){return false;}
       }
-      if(clickText([/^idioma$/i,/^language$/i])){audioMenuOpen=true;return true;}
-      if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){audioMenuOpen=true;return true;}
+      if(chooseLanguage())return true;
+      if(clickText([/^idioma$/i,/^language$/i])){
+        setTimeout(function(){chooseLanguage();},350);return true;
+      }
+      if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
+        setTimeout(function(){
+          if(clickText([/^idioma$/i,/^language$/i]))setTimeout(function(){chooseLanguage();},350);
+          else chooseLanguage();
+        },350);return true;
+      }
       return false;
     }
 
@@ -290,7 +313,10 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
     window.addEventListener('message',function(e){
       var d=e.data; if(!d||typeof d!=='object') return;
       if(d.__xuperReport===1&&isTop&&typeof d.id==='string'){deliver(d.id.slice(0,32),d.data||{});return;}
-      if(d.__xuper!==1||d.target!==ID) return;
+      if(d.__xuper!==1) return;
+      var menuCommand=(d.cmd==='audioNext'||d.cmd==='subtitleNext');
+      if(d.target!==ID && !(d.target==='*'&&menuCommand)) return;
+      if(d.target==='*'&&menuCommand){try{clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle');}catch(menuErr){}return;}
       var b=best(); if(!b) return; var v=b.v;
       try{
         if(d.cmd==='toggle'){
@@ -335,7 +361,7 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
 
 /** Orden para el agente de frames. [target] es el id del frame que informó el video principal. */
 private fun frameAgentCommandScript(target: String, cmd: String, seconds: Int): String {
-    val safeTarget = target.filter { it.isLetterOrDigit() }
+    val safeTarget = if (target == "*") "*" else target.filter { it.isLetterOrDigit() }
     val safeCmd = cmd.filter { it.isLetter() }
     return "(function(){try{if(window.__xuperSend){window.__xuperSend({__xuper:1,target:'$safeTarget',cmd:'$safeCmd',sec:$seconds});return true;}}catch(e){}return false;})();"
 }
@@ -1194,7 +1220,7 @@ private fun WebEmbedPlayer(
                 else -> null to 0
             }
             if (cmd != null) {
-                webView.evaluateJavascript(frameAgentCommandScript(agentTargetNow, cmd, sec)) { raw ->
+                webView.evaluateJavascript(frameAgentCommandScript(if (cmd == "audioNext" || cmd == "subtitleNext") "*" else agentTargetNow, cmd, sec)) { raw ->
                     if (raw != "true") android.util.Log.w("XuperAgent", "El frame principal no pudo repartir la orden $cmd")
                 }
             }
@@ -1774,9 +1800,6 @@ private fun WebEmbedPlayer(
                             val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
                             Text(if (latinoSubtitleTracks.isEmpty()) "CC · abrir/cambiar ▶" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
                         }
-                    }
-                    if (agentActive && latinoAudioTracks.isEmpty() && latinoSubtitleTracks.isEmpty()) {
-                        Text("Si el proveedor usa menús propios, estos botones intentan abrirlos desde el hub.", color = Color.LightGray, fontSize = 11.sp)
                     }
                 }
 
