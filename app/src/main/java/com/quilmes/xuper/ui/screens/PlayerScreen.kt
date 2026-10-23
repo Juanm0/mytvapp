@@ -10,8 +10,6 @@ import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
-import android.view.InputDevice
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -99,6 +97,15 @@ private fun isWebPageUrl(raw: String): Boolean {
     ).any(path::endsWith)
 }
 
+
+private fun vidzyLanguageUrl(raw: String, language: String): String {
+    val base = raw.substringBefore('?')
+    val existing = raw.substringAfter('?', "").split('&').filter(String::isNotBlank)
+        .filterNot { it.substringBefore('=').lowercase() in setOf("lang", "language") }
+    val lang = language.takeIf { it in setOf("auto", "vf", "vostfr") } ?: "auto"
+    return base + "?" + (existing + "lang=$lang").joinToString("&")
+}
+
 private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): String {
     val base = raw.substringBefore('?').trimEnd('/')
     val existing = raw.substringAfter('?', "").split('&').filter(String::isNotBlank)
@@ -113,127 +120,12 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
 private class HubAwareWebView(
     context: Context,
     private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
-    private val invisibleVidlyPointer: Boolean = false,
 ) : WebView(context) {
-    private var remoteX = -1f
-    private var remoteY = -1f
-
     /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
     fun dispatchInjectedKeyEvent(event: AndroidKeyEvent): Boolean = super.dispatchKeyEvent(event)
 
-    private fun moveInvisiblePointer(keyCode: Int) {
-        if (width <= 0 || height <= 0) return
-        if (remoteX < 0f || remoteY < 0f) {
-            remoteX = width * 0.5f
-            remoteY = height * 0.5f
-        }
-        // A D-pad press moves directly to the relevant edge, rather than crawling pixel by pixel.
-        // Pressing the same direction again wraps to the opposite edge, allowing a full sweep.
-        when (keyCode) {
-            AndroidKeyEvent.KEYCODE_DPAD_UP -> remoteY = if (remoteY <= 2f) height - 2f else 2f
-            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> remoteY = if (remoteY >= height - 2f) 2f else height - 2f
-            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> remoteX = if (remoteX <= 2f) width - 2f else 2f
-            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> remoteX = if (remoteX >= width - 2f) 2f else width - 2f
-        }
-        sendHover(remoteX, remoteY)
-    }
-
-    private fun sendHover(x: Float, y: Float) {
-        val now = SystemClock.uptimeMillis()
-        val event = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, x, y, 0).apply {
-            source = InputDevice.SOURCE_MOUSE
-        }
-        try { super.dispatchGenericMotionEvent(event) } finally { event.recycle() }
-    }
-
-    private fun clickInvisiblePointer() {
-        if (width <= 0 || height <= 0) return
-        if (remoteX < 0f || remoteY < 0f) {
-            remoteX = width * 0.5f
-            remoteY = height * 0.5f
-        }
-        sendHover(remoteX, remoteY)
-        val downTime = SystemClock.uptimeMillis()
-        val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, remoteX, remoteY, 0)
-        val up = MotionEvent.obtain(downTime, downTime + 65L, MotionEvent.ACTION_UP, remoteX, remoteY, 0)
-        try {
-            down.source = InputDevice.SOURCE_TOUCHSCREEN
-            up.source = InputDevice.SOURCE_TOUCHSCREEN
-            super.dispatchTouchEvent(down)
-            super.dispatchTouchEvent(up)
-        } finally {
-            down.recycle(); up.recycle()
-        }
-    }
-
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        if (invisibleVidlyPointer && event.keyCode in setOf(
-                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER,
-                AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
-            )) {
-            if (event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                when (event.keyCode) {
-                    AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> moveInvisiblePointer(event.keyCode)
-                    else -> clickInvisiblePointer()
-                }
-            }
-            return true
-        }
         if ((event.action == AndroidKeyEvent.ACTION_DOWN || event.action == AndroidKeyEvent.ACTION_UP) && onRemoteKey(event)) return true
-        return super.dispatchKeyEvent(event)
-    }
-}
-
-/**
- * Invisible D-pad pointer for Chromium's fullscreen custom view. It forwards hover and tap
- * events to the original fullscreen surface; it draws no cursor and adds no playback UI.
- */
-private class InvisibleHoverFullscreenFrame(context: Context, private val target: View) : FrameLayout(context) {
-    private var px = -1f
-    private var py = -1f
-
-    init {
-        isFocusable = true
-        isFocusableInTouchMode = true
-        setBackgroundColor(AndroidColor.TRANSPARENT)
-        addView(target, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-    }
-
-    private fun sendHover() {
-        if (width <= 0 || height <= 0) return
-        val now = SystemClock.uptimeMillis()
-        val e = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, px, py, 0).apply { source = InputDevice.SOURCE_MOUSE }
-        try { target.dispatchGenericMotionEvent(e) } finally { e.recycle() }
-    }
-
-    override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        val directional = event.keyCode in setOf(AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
-        val ok = event.keyCode in setOf(AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER, AndroidKeyEvent.KEYCODE_NUMPAD_ENTER)
-        if ((directional || ok) && event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            if (px < 0f || py < 0f) { px = width * .5f; py = height * .5f }
-            when (event.keyCode) {
-                AndroidKeyEvent.KEYCODE_DPAD_UP -> py = if (py <= 2f) height - 2f else 2f
-                AndroidKeyEvent.KEYCODE_DPAD_DOWN -> py = if (py >= height - 2f) 2f else height - 2f
-                AndroidKeyEvent.KEYCODE_DPAD_LEFT -> px = if (px <= 2f) width - 2f else 2f
-                AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> px = if (px >= width - 2f) 2f else width - 2f
-                else -> {
-                    sendHover()
-                    val t = SystemClock.uptimeMillis()
-                    val d = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, px, py, 0)
-                    val u = MotionEvent.obtain(t, t + 65L, MotionEvent.ACTION_UP, px, py, 0)
-                    try {
-                        d.source = InputDevice.SOURCE_TOUCHSCREEN; u.source = InputDevice.SOURCE_TOUCHSCREEN
-                        target.dispatchTouchEvent(d); target.dispatchTouchEvent(u)
-                    } finally { d.recycle(); u.recycle() }
-                }
-            }
-            if (directional) sendHover()
-            return true
-        }
-        if ((directional || ok) && event.action == AndroidKeyEvent.ACTION_UP) return true
         return super.dispatchKeyEvent(event)
     }
 }
@@ -520,7 +412,7 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
-    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
+    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) || WebSourceRegistry.isVidzyEmbedUrl(streamUrl) ||
         (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://framextv.cc/embed/")) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
@@ -1086,10 +978,10 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") || it == "framextv.cc" || it.endsWith(".framextv.cc") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
-    // Vidly (botón "Prueba"): se controla como Latino (agente de frames y hub solo si se confirma un <video>
-    // controlable), pero sin los extras propios de VideoAPI (parámetros de URL, idioma/CC, limpieza de bordes).
-    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
-    val isLatinoFamily = isVideoApi || isVidly
+    // Vidly (botón "Prueba") queda sin hub: el mando se entrega al reproductor original.
+    // Vidzy ("Prueba 2") usa el hub de Xuper y el agente HTML5 cuando el reproductor lo permite.
+    val isVidzy = remember(url) { runCatching { WebSourceRegistry.isVidzyHost(URI(url).host) }.getOrDefault(false) }
+    val isLatinoFamily = isVideoApi || isVidzy
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isLatinoFamily || isOkRu || isSimuladores
@@ -1336,7 +1228,7 @@ private fun WebEmbedPlayer(
 
         // Los menús de VideoAPI pueden estar en otro frame y no necesitan que la sonda haya
         // encontrado un <video>. Mandar CC/Idioma a todos los frames aunque agentTarget sea null.
-        if (isVideoApi && (action == "audioNext" || action == "subtitleNext") && agentInstalled) {
+        if ((isVideoApi || isVidzy) && (action == "audioNext" || action == "subtitleNext") && agentInstalled) {
             val menuCmd = if (action == "audioNext") "audioNext" else "subtitleNext"
             webView.evaluateJavascript(frameAgentCommandScript("*", menuCmd, 0)) { raw ->
                 if (raw != "true") android.util.Log.w("XuperAgent", "No se pudo repartir la orden de menú $menuCmd")
@@ -1525,14 +1417,6 @@ private fun WebEmbedPlayer(
     // Se lee siempre vía rememberUpdatedState: el lambda del `factory` del AndroidView se crea una sola
     // vez y, sin esto, vería valores viejos de showNextEpisodeCard/nextEpisode/hubActive.
     val onHubKey: (AndroidKeyEvent) -> Boolean = hubKey@{ ev ->
-        // Vidly uses the invisible edge-to-edge hover pointer in HubAwareWebView. Let its
-        // D-pad/OK events pass through Compose so they reach the WebView's native event handler.
-        if (isVidly && ev.keyCode in setOf(
-                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
-                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER,
-                AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
-            )) return@hubKey false
         if (!hubActive) return@hubKey false
         val key = when (ev.keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_UP -> HubKey.UP
@@ -1617,11 +1501,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(
-                    viewContext,
-                    onRemoteKey = { keyEvent -> onHubKeyState.value(keyEvent) },
-                    invisibleVidlyPointer = isVidly,
-                ).apply {
+                val webView = HubAwareWebView(viewContext) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1641,7 +1521,6 @@ private fun WebEmbedPlayer(
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     webChromeClient = object : WebChromeClient() {
                         private var fullscreenView: View? = null
-                        private var fullscreenFrame: InvisibleHoverFullscreenFrame? = null
                         private var fullscreenCallback: CustomViewCallback? = null
                         private var originalUi = 0
                         override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
@@ -1654,22 +1533,13 @@ private fun WebEmbedPlayer(
                             fullscreenView = view
                             fullscreenCallback = callback
                             originalUi = decor.systemUiVisibility
-                            if (isVidly) {
-                                val frame = InvisibleHoverFullscreenFrame(viewContext, view)
-                                fullscreenFrame = frame
-                                decor.addView(frame, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                                frame.requestFocus()
-                            } else {
-                                decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-                            }
+                            decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                             decor.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                         }
                         override fun onHideCustomView() {
                             val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
                             val decor = activity?.window?.decorView as? ViewGroup
-                            fullscreenFrame?.let { decor?.removeView(it) }
-                            if (fullscreenFrame == null) fullscreenView?.let { decor?.removeView(it) }
-                            fullscreenFrame = null
+                            fullscreenView?.let { decor?.removeView(it) }
                             fullscreenView = null
                             fullscreenCallback?.onCustomViewHidden()
                             fullscreenCallback = null
@@ -1944,7 +1814,7 @@ private fun WebEmbedPlayer(
                     }
                 }
 
-                if (isVideoApi) {
+                if (isVideoApi || isVidzy) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             enabled = true,
@@ -1960,6 +1830,14 @@ private fun WebEmbedPlayer(
                             val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
                             Text(if (latinoSubtitleTracks.isEmpty()) "CC · abrir/cambiar ▶" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
                         }
+                    }
+                }
+
+                if (isVidzy) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "auto")); frameInteraction++ }) { Text("Idioma · Auto") }
+                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "vf")); frameInteraction++ }) { Text("Idioma · VF") }
+                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "vostfr")); frameInteraction++ }) { Text("Idioma · VOSTFR") }
                     }
                 }
 
