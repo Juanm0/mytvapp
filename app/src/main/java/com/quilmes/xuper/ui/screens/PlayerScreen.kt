@@ -97,23 +97,6 @@ private fun isWebPageUrl(raw: String): Boolean {
     ).any(path::endsWith)
 }
 
-
-/** Pone el foco real del navegador en el iframe/vídeo para que el D-pad llegue al reproductor original de Vidly. */
-private val VIDLY_REMOTE_FOCUS_JS = """(function(){
-  try{
-    document.documentElement.setAttribute('tabindex','-1');
-    document.body && document.body.setAttribute('tabindex','-1');
-    var frames=Array.from(document.querySelectorAll('iframe')).filter(function(f){
-      try{var r=f.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}
-    });
-    // El iframe visible del reproductor debe tener el foco del navegador; no se simula un clic.
-    if(frames.length){frames.sort(function(a,b){var ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return br.width*br.height-ar.width*ar.height;});frames[0].focus();}
-    var videos=Array.from(document.querySelectorAll('video')).filter(function(v){try{var r=v.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}});
-    if(videos.length){videos.sort(function(a,b){var ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return br.width*br.height-ar.width*ar.height;});videos[0].setAttribute('tabindex','0');videos[0].focus();}
-    window.__xuperVidlyRefocus=function(){try{if(frames.length)frames[0].focus();else if(videos.length)videos[0].focus();}catch(e){}};
-  }catch(e){}
-})();"""
-
 private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): String {
     val base = raw.substringBefore('?').trimEnd('/')
     val existing = raw.substringAfter('?', "").split('&').filter(String::isNotBlank)
@@ -127,6 +110,8 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
 /** Keeps D-pad navigation from getting trapped inside a cross-origin iframe. */
 private class HubAwareWebView(
     context: Context,
+    /** true en Vidly: las flechas/OK se mandan a la página y no se dejan escapar a la navegación de foco de Android. */
+    private val consumeDpad: Boolean,
     private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
 ) : WebView(context) {
     /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
@@ -134,9 +119,191 @@ private class HubAwareWebView(
 
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
         if ((event.action == AndroidKeyEvent.ACTION_DOWN || event.action == AndroidKeyEvent.ACTION_UP) && onRemoteKey(event)) return true
-        return super.dispatchKeyEvent(event)
+        val handled = super.dispatchKeyEvent(event)
+        if (consumeDpad) {
+            when (event.keyCode) {
+                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER -> return true
+            }
+        }
+        return handled
     }
 }
+
+/**
+ * Navegación con el control remoto para páginas web "de fábrica" (hoy: Vidly / botón Prueba), sin hub propio.
+ * Se inyecta en todos los frames. Flechas: con los controles ocultos saltan ±10 s en el video; con controles a la
+ * vista (o al apretar ↑/↓) mueven un recuadro amarillo entre los botones de la pantalla; OK toca el elemento marcado
+ * (o pausa/reanuda si no hay nada marcado); un slider enfocado maneja él mismo ←/→. Las teclas de medios
+ * (play/pausa, retroceder/avanzar) también funcionan. Si el documento no tiene nada que manejar, la tecla pasa al
+ * iframe más grande.
+ */
+private val XUPER_REMOTE_NAV_JS = """(function(){
+  if(window.__xuperRemoteNav)return; window.__xuperRemoteNav=true;
+  var HL_ID='xuper-nav-hl';
+  var cur=null, hl=null, lastWake=0, lastSeekAt=0;
+  var ROLES={button:1,link:1,menuitem:1,menuitemradio:1,menuitemcheckbox:1,option:1,tab:1,slider:1,'switch':1,checkbox:1,radio:1};
+  function vw(){return window.innerWidth||document.documentElement.clientWidth||0;}
+  function vh(){return window.innerHeight||document.documentElement.clientHeight||0;}
+  function rectOf(e){try{return e.getBoundingClientRect();}catch(x){return null;}}
+  function faded(e){
+    try{for(var p=e,i=0;p&&i<8;i++,p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden'||parseFloat(s.opacity)<0.05||s.pointerEvents==='none')return true;}}catch(x){}
+    return false;
+  }
+  function shown(e){
+    var r=rectOf(e); if(!r||r.width<8||r.height<8)return false;
+    if(r.bottom<=0||r.right<=0||r.top>=vh()||r.left>=vw())return false;
+    return !faded(e);
+  }
+  function isInteractive(e){
+    var t=e.tagName;
+    if(t==='BUTTON'||t==='SELECT'||t==='TEXTAREA'||t==='SUMMARY')return true;
+    if(t==='A'&&e.hasAttribute('href'))return true;
+    if(t==='INPUT'&&e.type!=='hidden')return true;
+    var role=e.getAttribute('role'); if(role&&ROLES[role])return true;
+    var ti=e.getAttribute('tabindex'); if(ti!==null&&ti!=='-1')return true;
+    if(e.hasAttribute('onclick'))return true;
+    try{if(getComputedStyle(e).cursor==='pointer')return true;}catch(x){}
+    return false;
+  }
+  // Elementos "tocables" a la vista: se descartan contenedores (que traen varios hijos tocables) y anidados (queda el más externo).
+  function candidates(){
+    var area=vw()*vh(), out=[], all=document.querySelectorAll('body *'), n=Math.min(all.length,5000);
+    for(var i=0;i<n;i++){
+      var e=all[i], t=e.tagName;
+      if(t==='VIDEO'||t==='IFRAME'||t==='SCRIPT'||t==='STYLE'||t==='svg'||t==='path'||e.id===HL_ID)continue;
+      var r=rectOf(e); if(!r||r.width<8||r.height<8||r.width*r.height>area*0.35)continue;
+      if(!isInteractive(e)||!shown(e))continue;
+      out.push(e);
+    }
+    var leaves=out.filter(function(c){return out.filter(function(o){return o!==c&&c.contains(o);}).length<2;});
+    return leaves.filter(function(c){return !leaves.some(function(o){return o!==c&&o.contains(c);});});
+  }
+  function ensureHl(){
+    var host=document.fullscreenElement||document.documentElement;
+    if(host.tagName==='VIDEO')host=document.documentElement;
+    if(!hl){
+      hl=document.createElement('div'); hl.id=HL_ID;
+      hl.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;border:3px solid #FFD54F;border-radius:6px;box-shadow:0 0 0 2px rgba(0,0,0,.65),0 0 14px 3px rgba(255,213,79,.85);box-sizing:border-box;display:none;';
+    }
+    if(hl.parentNode!==host)host.appendChild(hl);
+  }
+  function clear(){cur=null; if(hl)hl.style.display='none';}
+  function paint(){
+    if(!cur||!document.contains(cur)||!shown(cur)){clear();return;}
+    ensureHl(); var r=rectOf(cur);
+    hl.style.display='block'; hl.style.left=(r.left-3)+'px'; hl.style.top=(r.top-3)+'px';
+    hl.style.width=(r.width+6)+'px'; hl.style.height=(r.height+6)+'px';
+  }
+  setInterval(function(){if(cur)paint();},300);
+  function setCur(e){
+    cur=e;
+    try{e.focus({preventScroll:true});}catch(x){}
+    try{e.scrollIntoView({block:'nearest',inline:'nearest'});}catch(x){}
+    paint();
+  }
+  function pick(dir){
+    var c=candidates(); if(!c.length)return false;
+    var active=cur&&document.contains(cur)&&shown(cur);
+    if(!active){
+      // Primera vez: arranca por lo más cercano al centro inferior (donde suele estar la barra de controles).
+      var bx=vw()/2, by=vh()*0.9, best=null, bd=1e12;
+      c.forEach(function(e){var r=rectOf(e),dx=r.left+r.width/2-bx,dy=r.top+r.height/2-by,d=dx*dx+dy*dy;if(d<bd){bd=d;best=e;}});
+      setCur(best); return true;
+    }
+    var rc=rectOf(cur), cx=rc.left+rc.width/2, cy=rc.top+rc.height/2, best2=null, bs=1e12;
+    c.forEach(function(e){
+      if(e===cur)return;
+      var r=rectOf(e), dx=r.left+r.width/2-cx, dy=r.top+r.height/2-cy, p, o;
+      if(dir==='Right'){p=dx;o=Math.abs(dy);}
+      else if(dir==='Left'){p=-dx;o=Math.abs(dy);}
+      else if(dir==='Down'){p=dy;o=Math.abs(dx);}
+      else{p=-dy;o=Math.abs(dx);}
+      if(p<=4)return;
+      var s=p+2.5*o; if(s<bs){bs=s;best2=e;}
+    });
+    if(best2){setCur(best2);return true;}
+    return false;
+  }
+  function video(){
+    var best=null, ba=0;
+    Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){var r=rectOf(v),a=r?r.width*r.height:0;if(a>ba){ba=a;best=v;}});
+    return best;
+  }
+  // Los controles del reproductor se ocultan solos: un "movimiento de mouse" falso los vuelve a mostrar.
+  function wake(){
+    var x=vw()/2, y=vh()/2, targets=[document.elementFromPoint(x,y),document.body,document.documentElement];
+    ['pointerover','pointermove','mouseover','mousemove'].forEach(function(n){
+      targets.forEach(function(t){if(t)try{t.dispatchEvent(new MouseEvent(n,{bubbles:true,clientX:x,clientY:y}));}catch(e){}});
+    });
+  }
+  function clickEl(e){
+    var r=rectOf(e), o={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,view:window};
+    ['pointerdown','mousedown','pointerup','mouseup'].forEach(function(n){
+      try{var C=(n.indexOf('pointer')===0&&window.PointerEvent)?window.PointerEvent:window.MouseEvent;e.dispatchEvent(new C(n,o));}catch(x){}
+    });
+    try{e.click();}catch(x){}
+  }
+  function togglePlay(v){try{if(v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){});}else v.pause();}catch(e){}}
+  function seek(v,delta){
+    try{var d=v.duration,t=v.currentTime+delta;t=isFinite(d)?Math.min(Math.max(0,t),Math.max(0,d-1)):Math.max(0,t);v.currentTime=t;}catch(e){}
+  }
+  function isSlider(e){return !!e&&((e.tagName==='INPUT'&&e.type==='range')||(e.getAttribute&&e.getAttribute('role')==='slider'));}
+  function stop(ev){ev.preventDefault();ev.stopImmediatePropagation();}
+  // Si este documento no tiene nada que manejar, la tecla pasa al iframe más grande (el reproductor suele estar adentro de uno).
+  function handoff(key,ev){
+    var fr=Array.prototype.filter.call(document.querySelectorAll('iframe'),function(f){var r=rectOf(f);return r&&r.width>100&&r.height>100&&shown(f);});
+    if(!fr.length)return false;
+    fr.sort(function(a,b){var ra=rectOf(a),rb=rectOf(b);return rb.width*rb.height-ra.width*ra.height;});
+    var f=fr[0]; stop(ev); clear();
+    try{f.focus();}catch(e){}
+    try{f.contentWindow.postMessage({__xuperNav:1,key:key},'*');}catch(e){}
+    return true;
+  }
+  window.addEventListener('message',function(ev){
+    var d=ev.data; if(!d||d.__xuperNav!==1)return;
+    try{window.dispatchEvent(new KeyboardEvent('keydown',{key:String(d.key||''),bubbles:true,cancelable:true}));}catch(e){}
+  });
+  window.addEventListener('keydown',function(ev){
+    var k=ev.key, now=Date.now();
+    var dir=(k==='ArrowRight'||k==='Right')?'Right':(k==='ArrowLeft'||k==='Left')?'Left':(k==='ArrowDown'||k==='Down')?'Down':(k==='ArrowUp'||k==='Up')?'Up':null;
+    var ok=(k==='Enter'||k==='Select'||ev.keyCode===13);
+    var media=(k==='MediaPlayPause'||k==='MediaRewind'||k==='MediaFastForward');
+    if(!dir&&!ok&&!media)return;
+    var t=ev.target;
+    if(t&&(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&t.type!=='range'&&t.type!=='button'&&t.type!=='checkbox')))return;
+    var v=video();
+    if(media){
+      if(!v)return;
+      stop(ev);
+      if(k==='MediaPlayPause')togglePlay(v); else seek(v,k==='MediaRewind'?-30:30);
+      return;
+    }
+    if(now-lastWake>500){lastWake=now;wake();}
+    var active=cur&&document.contains(cur)&&shown(cur);
+    if(ok){
+      if(active){stop(ev);clickEl(cur);setTimeout(paint,150);return;}
+      if(v){stop(ev);togglePlay(v);return;}
+      handoff('Enter',ev);
+      return;
+    }
+    // Un slider enfocado maneja solo Izquierda/Derecha (la barra de progreso o el volumen).
+    if(active&&isSlider(cur)&&(dir==='Left'||dir==='Right'))return;
+    // Con los controles ocultos, Izquierda/Derecha saltan en el video (manteniendo apretado, saltos más largos).
+    if(!active&&(dir==='Left'||dir==='Right')&&v){
+      stop(ev);
+      if(ev.repeat&&now-lastSeekAt<160)return;
+      lastSeekAt=now; seek(v,(dir==='Right'?1:-1)*(ev.repeat?30:10));
+      return;
+    }
+    stop(ev);
+    if(!pick(dir)){
+      // Los controles tardan un instante en aparecer tras el "mouse": se reintenta una vez.
+      if(!active){setTimeout(function(){if(!pick(dir))handoff(dir==='Left'||dir==='Right'||dir==='Up'||dir==='Down'?'Arrow'+dir:dir,ev);},260);}
+    }
+  },true);
+})();"""
 
 /**
  * Best-effort HTML5 controls. A cross-origin iframe is intentionally inaccessible by browser policy.
@@ -170,17 +337,11 @@ private fun videoApiCommandScript(action: String, index: Int, seconds: Int): Str
                 for(var i=0;i<tracks.length;i++)tracks[i].mode=i===selected?'showing':'disabled';
                 handled=true;
               }
-            }else if(action==='audioSpanish'){
-              var ats=v.audioTracks, found=false;
-              if(ats&&ats.length){for(var ai=0;ai<ats.length;ai++){var at=ats[ai], lab=(at.label||'')+' '+(at.language||'');var es=/spanish|español|espanol|castellano/i.test(lab)||/\bes\b|spa|es-\w+/i.test(String(at.language||''));at.enabled=es;if(es)found=true;}handled=found;}
-            }else if(action==='subtitleSpanish'||action==='subtitleOff'){
-              var sts=v.textTracks, sf=false;
-              if(sts&&sts.length){for(var si=0;si<sts.length;si++){var st=sts[si], sl=(st.label||'')+' '+(st.language||'');var se=/spanish|español|espanol|castellano/i.test(sl)||/\bes\b|spa|es-\w+/i.test(String(st.language||''));st.mode=action==='subtitleSpanish'&&se?'showing':'disabled';if(action==='subtitleSpanish'&&se)sf=true;}handled=action==='subtitleOff'||sf;}
             }
           }
-          if(!handled&&(action==='playPause'||action==='mute'||action==='subtitle'||action==='audioSpanish'||action==='subtitleSpanish'||action==='subtitleOff')){
+          if(!handled&&(action==='playPause'||action==='mute'||action==='subtitle')){
             var els=Array.from(d.querySelectorAll('button,[role=button],[aria-label],[title]'));
-            var re=action==='playPause'?/play|pause|reproducir|pausar/i:action==='mute'?/mute|volume|sonido|silencio/i:action==='audioSpanish'?/audio|idioma|language|settings|ajustes/i:action==='subtitleOff'?/off|none|desactivar|sin subtítulos|sin subtitulos/i:/subtitle|captions|closed caption|\bcc\b|subtitulos|subtítulos/i;
+            var re=action==='playPause'?/play|pause|reproducir|pausar/i:action==='mute'?/mute|volume|sonido|silencio/i:/subtitle|captions|closed caption|\bcc\b|subtitulos|subtítulos/i;
             var target=els.find(function(e){return re.test(((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+(e.innerText||'')).toLowerCase())});
             if(target){target.click();handled=true;}
           }
@@ -230,65 +391,57 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       return null;
     }
     function clickText(patterns){var el=findText(patterns);if(!el)return false;try{el.click();return true;}catch(e){return false;}}
-    function spanishLabel(s){return /(^|\b)(spanish|español|espanol|castellano|spanish\s*\(|español\s*\()/i.test(String(s||''));}
-    function findSpanishOption(){return findText([/^spanish$/i,/^español$/i,/^espanol$/i,/^castellano$/i,/spanish.*latin|español.*latino|espanol.*latino/i]);}
-    function findOffOption(){return findText([/^(off|none|disabled|desactivados?|ninguno|sin subtítulos|sin subtitulos)$/i,/subtitles?\s*off/i]);}
-    function setNativeSpanish(kind, enabled){
-      var b=best(); if(!b)return false; var v=b.v, found=false;
-      try{
-        if(kind==='audio'&&v.audioTracks&&v.audioTracks.length){
-          for(var i=0;i<v.audioTracks.length;i++){
-            var t=v.audioTracks[i], label=(t.label||'')+' '+(t.language||'');
-            if(spanishLabel(label)||/\bes\b|spa|es-\w+/i.test(String(t.language||''))){t.enabled=!!enabled;found=true;}
-            else if(enabled)t.enabled=false;
-          }
-          if(found)return true;
-        }
-        if(kind==='subtitle'&&v.textTracks&&v.textTracks.length){
-          for(var j=0;j<v.textTracks.length;j++){
-            var st=v.textTracks[j], sl=(st.label||'')+' '+(st.language||'');
-            var isSpanish=spanishLabel(sl)||/\bes\b|spa|es-\w+/i.test(String(st.language||''));
-            st.mode=enabled&&isSpanish?'showing':'disabled'; if(enabled&&isSpanish)found=true;
-          }
-          if(found||!enabled)return true;
-        }
-      }catch(e){}
+    function chooseSpanishSubtitle(){
+      if(clickText([/^spanish$/i]))return true;
       return false;
     }
-    function clickPlayerMenu(kind, command){
-      var audio=kind==='audio', enabled=command!=='subtitleOff';
-      if(!audio&&!enabled){
-        try{var b=best();if(b&&b.v.textTracks){for(var q=0;q<b.v.textTracks.length;q++)b.v.textTracks[q].mode='disabled';return true;}}catch(e){}
-        var off=findOffOption();if(off){try{off.click();return true;}catch(e){}}
-        if(clickText([/^cc$/i,/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i])){
-          setTimeout(function(){var option=findOffOption();if(option)try{option.click();}catch(e){}},400);return true;
+    function clickPlayerMenu(kind){
+      if(kind==='subtitle'){
+        // Flujo real de VideoAPI: CC -> Predeterminados -> Spanish. Cada paso espera a que
+        // el panel anterior se pinte; no damos por activado el subtítulo solo por tocar una pestaña.
+        if(findText([/^spanish$/i])) return chooseSpanishSubtitle();
+        if(findText([/^predeterminados$/i])){
+          if(clickText([/^predeterminados$/i])) setTimeout(function(){chooseSpanishSubtitle();},450);
+          return true;
+        }
+        if(clickText([/^cc$/i,/^subtítulos?$/i,/^captions?$/i,/^closed captions?$/i])){
+          setTimeout(function(){
+            if(findText([/^spanish$/i])){chooseSpanishSubtitle();return;}
+            if(clickText([/^predeterminados$/i]))setTimeout(function(){chooseSpanishSubtitle();},450);
+          },350);
+          return true;
         }
         return false;
       }
-      if((command==='audioSpanish'||command==='subtitleSpanish')&&setNativeSpanish(kind,enabled))return true;
-      // Si el proveedor expone las pistas mediante un menú propio, abrirlo y seleccionar Español.
-      var spanish=findSpanishOption();
-      if(spanish){try{spanish.click();return true;}catch(e){}}
-      if(audio){
-        if(clickText([/^audio$/i,/^idioma$/i,/^language$/i,/audio track/i])){
-          setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);return true;
+      // Audio: abrir Ajustes -> Idioma y elegir la opción contraria a la que figura seleccionada.
+      function chooseLanguage(){
+        var en=findText([/^english$/i]),es=findText([/^español$/i,/^espanol$/i]);
+        if(!en&&!es)return false;
+        function selected(el){
+          if(!el)return false;
+          var cur=el;
+          for(var i=0;i<4&&cur;i++,cur=cur.parentElement){
+            var a=(cur.getAttribute('aria-checked')||cur.getAttribute('aria-selected')||cur.getAttribute('data-state')||'').toLowerCase();
+            var c=String(cur.className||'').toLowerCase();
+            if(a==='true'||a==='checked'||a==='on'||/selected|active|checked|current/.test(c))return true;
+          }
+          return false;
         }
-        if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
-          setTimeout(function(){
-            if(clickText([/^audio$/i,/^idioma$/i,/^language$/i,/audio track/i]))setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);
-            else {var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}}
-          },350);return true;
-        }
-      }else{
-        if(clickText([/^cc$/i,/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i,/^closed captions?$/i])){
-          setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);return true;
-        }
-        if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
-          setTimeout(function(){
-            if(clickText([/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i,/^cc$/i]))setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);
-            else {var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}}
-          },350);return true;
-        }
+        var englishSelected=selected(en), spanishSelected=selected(es);
+        // Si no hay estado accesible, usar Español como predeterminado; después alternar según el estado visible.
+        var target=englishSelected?es:(spanishSelected?en:es);
+        if(!target)target=en;
+        try{target.click();return true;}catch(e){return false;}
+      }
+      if(chooseLanguage())return true;
+      if(clickText([/^idioma$/i,/^language$/i])){
+        setTimeout(function(){chooseLanguage();},350);return true;
+      }
+      if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
+        setTimeout(function(){
+          if(clickText([/^idioma$/i,/^language$/i]))setTimeout(function(){chooseLanguage();},350);
+          else chooseLanguage();
+        },350);return true;
       }
       return false;
     }
@@ -345,25 +498,13 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       var d=e.data; if(!d||typeof d!=='object') return;
       if(d.__xuperReport===1&&isTop&&typeof d.id==='string'){deliver(d.id.slice(0,32),d.data||{});return;}
       if(d.__xuper!==1) return;
-      var menuCommand=['audioNext','subtitleNext','audioSpanish','subtitleSpanish','subtitleOff'].indexOf(d.cmd)>=0;
+      var menuCommand=(d.cmd==='audioNext'||d.cmd==='subtitleNext');
       if(d.target!==ID && !(d.target==='*'&&menuCommand)) return;
       if(d.target==='*'&&menuCommand){
-        // Repartir a todos los frames: el menú de audio/CC puede vivir separado del <video>.
-        // En el frame que contiene vídeo usamos las pistas HTML5; en los demás buscamos el menú del proveedor.
-        try{
-          var local=best(), handled=false;
-          if(local&&(d.cmd==='audioNext'||d.cmd==='subtitleNext')){
-            var lv=local.v;
-            if(d.cmd==='audioNext'&&lv.audioTracks&&lv.audioTracks.length>1){var ac=-1;for(var ax=0;ax<lv.audioTracks.length;ax++)if(lv.audioTracks[ax].enabled)ac=ax;var an=(ac+1)%lv.audioTracks.length;for(var ay=0;ay<lv.audioTracks.length;ay++)lv.audioTracks[ay].enabled=ay===an;handled=true;}
-            if(d.cmd==='subtitleNext'&&lv.textTracks&&lv.textTracks.length){var sc=-1;for(var sx=0;sx<lv.textTracks.length;sx++)if(lv.textTracks[sx].mode==='showing')sc=sx;var sn=sc+1;if(sn>=lv.textTracks.length)sn=-1;for(var sy=0;sy<lv.textTracks.length;sy++)lv.textTracks[sy].mode=sy===sn?'showing':'disabled';handled=true;}
-          }
-          if(!handled){
-            if(d.cmd==='audioSpanish')clickPlayerMenu('audio','audioSpanish');
-            else if(d.cmd==='subtitleSpanish')clickPlayerMenu('subtitle','subtitleSpanish');
-            else if(d.cmd==='subtitleOff')clickPlayerMenu('subtitle','subtitleOff');
-            else clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle',d.cmd);
-          }
-        }catch(menuErr){}
+        // El menú puede vivir en un iframe distinto del que contiene el <video>.
+        // Cada frame prueba el menú local y reenvía la orden a sus propios hijos;
+        // así también alcanzamos iframes anidados de origen cruzado.
+        try{clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle');}catch(menuErr){}
         try{for(var fi=0;fi<window.frames.length;fi++){try{window.frames[fi].postMessage(d,'*');}catch(fe){}}}catch(ferr){}
         return;
       }
@@ -380,17 +521,11 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
         }else if(d.cmd==='audioNext'){
           var ats=v.audioTracks;
           if(ats&&ats.length>1){var current=-1;for(var ai=0;ai<ats.length;ai++)if(ats[ai].enabled)current=ai;var next=(current+1)%ats.length;for(var aj=0;aj<ats.length;aj++)ats[aj].enabled=(aj===next);}
-          else {clickPlayerMenu('audio','audioNext');}
+          else {clickPlayerMenu('audio');}
         }else if(d.cmd==='subtitleNext'){
           var tts=v.textTracks;
           if(tts&&tts.length){var current=-1;for(var ti=0;ti<tts.length;ti++)if(tts[ti].mode==='showing')current=ti;var next=current+1;if(next>=tts.length)next=-1;for(var tj=0;tj<tts.length;tj++)tts[tj].mode=(tj===next?'showing':'disabled');}
-          else {clickPlayerMenu('subtitle','subtitleNext');}
-        }else if(d.cmd==='audioSpanish'){
-          clickPlayerMenu('audio','audioSpanish');
-        }else if(d.cmd==='subtitleSpanish'){
-          clickPlayerMenu('subtitle','subtitleSpanish');
-        }else if(d.cmd==='subtitleOff'){
-          clickPlayerMenu('subtitle','subtitleOff');
+          else {clickPlayerMenu('subtitle');}
         }
       }catch(err){}
       setTimeout(function(){try{report(best());}catch(x){}},150);
@@ -452,7 +587,7 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
-    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) || WebSourceRegistry.isVidzyEmbedUrl(streamUrl) ||
+    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://framextv.cc/embed/")) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
@@ -1018,10 +1153,13 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") || it == "framextv.cc" || it.endsWith(".framextv.cc") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
-    // Vidly (botón "Prueba") queda sin hub: el mando se entrega al reproductor original.
-    // Vidzy ("Prueba 2") usa el hub de Xuper y el agente HTML5 cuando el reproductor lo permite.
-    val isVidzy = remember(url) { runCatching { WebSourceRegistry.isVidzyHost(URI(url).host) }.getOrDefault(false) }
-    val isLatinoFamily = isVideoApi || isVidzy
+    // Vidly (botón "Prueba"): reproductor "de fábrica", SIN hub ni agente propios. El control remoto lo maneja
+    // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
+    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
+    val isLatinoFamily = isVideoApi
+    val remoteNavSupported = remember {
+        isVidly && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
+    }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isLatinoFamily || isOkRu || isSimuladores
@@ -1268,8 +1406,8 @@ private fun WebEmbedPlayer(
 
         // Los menús de VideoAPI pueden estar en otro frame y no necesitan que la sonda haya
         // encontrado un <video>. Mandar CC/Idioma a todos los frames aunque agentTarget sea null.
-        if ((isVideoApi || isVidzy) && action in setOf("audioNext", "subtitleNext", "audioSpanish", "subtitleSpanish", "subtitleOff") && agentInstalled) {
-            val menuCmd = action
+        if (isVideoApi && (action == "audioNext" || action == "subtitleNext") && agentInstalled) {
+            val menuCmd = if (action == "audioNext") "audioNext" else "subtitleNext"
             webView.evaluateJavascript(frameAgentCommandScript("*", menuCmd, 0)) { raw ->
                 if (raw != "true") android.util.Log.w("XuperAgent", "No se pudo repartir la orden de menú $menuCmd")
             }
@@ -1287,13 +1425,10 @@ private fun WebEmbedPlayer(
                 "mute" -> "mute" to 0
                 "audioNext" -> "audioNext" to 0
                 "subtitleNext" -> "subtitleNext" to 0
-                "audioSpanish" -> "audioSpanish" to 0
-                "subtitleSpanish" -> "subtitleSpanish" to 0
-                "subtitleOff" -> "subtitleOff" to 0
                 else -> null to 0
             }
             if (cmd != null) {
-                webView.evaluateJavascript(frameAgentCommandScript(if (cmd in setOf("audioNext", "subtitleNext", "audioSpanish", "subtitleSpanish", "subtitleOff")) "*" else agentTargetNow, cmd, sec)) { raw ->
+                webView.evaluateJavascript(frameAgentCommandScript(if (cmd == "audioNext" || cmd == "subtitleNext") "*" else agentTargetNow, cmd, sec)) { raw ->
                     if (raw != "true") android.util.Log.w("XuperAgent", "El frame principal no pudo repartir la orden $cmd")
                 }
             }
@@ -1544,7 +1679,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1628,13 +1763,6 @@ private fun WebEmbedPlayer(
                                 Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               }catch(e){}
                             })();""", null)
-                            if (runCatching { WebSourceRegistry.isVidlyHost(URI(pageUrl.orEmpty()).host) }.getOrDefault(false)) {
-                                view?.requestFocus()
-                                view?.evaluateJavascript(VIDLY_REMOTE_FOCUS_JS, null)
-                                Handler(Looper.getMainLooper()).postDelayed({
-                                    if (webViewRef === view) view?.evaluateJavascript(VIDLY_REMOTE_FOCUS_JS, null)
-                                }, 1200L)
-                            }
                             if (nextEpisode != null) view?.evaluateJavascript("""(function(){
                               try{
                                 if(!window.__xuperEndDetector){
@@ -1647,6 +1775,8 @@ private fun WebEmbedPlayer(
                               }catch(e){}
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
+                            // Sin soporte de scripts de inicio de documento: al menos el documento principal.
+                            if (isVidly && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -1698,6 +1828,11 @@ private fun WebEmbedPlayer(
                         agentInstalled = runCatching {
                             WebViewCompat.addDocumentStartJavaScript(this, XUPER_FRAME_AGENT_JS, setOf("*"))
                         }.onFailure { android.util.Log.w("XuperAgent", "No se pudo instalar el agente de frames", it) }.isSuccess
+                    }
+                    // Vidly: navegación con el mando dentro de la página (debe registrarse ANTES de cargar para cubrir los iframes).
+                    if (remoteNavSupported) {
+                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_REMOTE_NAV_JS, setOf("*")) }
+                            .onFailure { android.util.Log.w("XuperRemoteNav", "No se pudo instalar la navegación con el mando", it) }
                     }
                     tag = url
                     if (nextEpisode != null) {
@@ -1880,14 +2015,6 @@ private fun WebEmbedPlayer(
                             val label = latinoSubtitleTracks.getOrNull(latinoSubtitleSelected).orEmpty()
                             Text(if (latinoSubtitleTracks.isEmpty()) "CC · abrir/cambiar ▶" else if (latinoSubtitleSelected < 0) "CC · Desactivados ▶" else "CC · ${label.take(18)} ▶")
                         }
-                    }
-                }
-
-                if (isVidzy) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { runWebCommand("audioSpanish", frameSubtitleIndex, 0) }) { Text("Audio español") }
-                        Button(onClick = { runWebCommand("subtitleSpanish", frameSubtitleIndex, 0) }) { Text("Subtítulos español") }
-                        Button(onClick = { runWebCommand("subtitleOff", frameSubtitleIndex, 0) }) { Text("CC desactivados") }
                     }
                 }
 
