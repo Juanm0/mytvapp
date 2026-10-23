@@ -1,0 +1,18 @@
+#EXTM3U
+# Películas de dominio público. Los videos están alojados por terceros; se necesita conexión para reproducir.
+#EXTINF:5753 group-title="Terror" tvg-logo="https://images.uncyc.org/commons/thumb/8/8c/Night_of_the_Living_Dead_poster.jpg/250px-Night_of_the_Living_Dead_poster.jpg",Night of the Living Dead (1968)
+https://archive.org/download/Night.Of.The.Living.Dead_1080p/NightOfTheLivingDead.mp4
+#EXTINF:4343 group-title="Misterio" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/d/df/The_Thirteenth_Chair_%281929_film%29_poster.jpg/250px-The_Thirteenth_Chair_%281929_film%29_poster.jpg",The Thirteenth Chair (1929)
+https://archive.org/download/the-thirteenth-chair_1929/the-thirteenth-chair_1929.mp4
+#EXTINF:966 group-title="Animación" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/4/45/Popeye_Meets_Sinbad.PNG/250px-Popeye_Meets_Sinbad.PNG",Popeye Meets Sinbad the Sailor (1936)
+https://archive.org/download/Popeye_meetsSinbadtheSailor/Popeye_meetsSinbadtheSailor_512kb.mp4
+#EXTINF:4483 group-title="Terror" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/2/24/House_on_Haunted_Hill.jpg/250px-House_on_Haunted_Hill.jpg",House on Haunted Hill (1959)
+https://archive.org/download/house_on_haunted_hill_ipod/house_on_haunted_hill_512kb.mp4
+#EXTINF:5128 group-title="Ciencia ficción" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/f/fd/Teenagersouterspace.jpg/250px-Teenagersouterspace.jpg",Teenagers from Outer Space (1959)
+https://archive.org/download/teenagers_from_outerspace/Teenagers_from_outerspace_512kb.mp4
+#EXTINF:3919 group-title="Terror" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/f/fe/White_Zombie_%281932_film%29_poster.jpg/250px-White_Zombie_%281932_film%29_poster.jpg",White Zombie (1932)
+https://archive.org/download/white_zombie/white_zombie_512kb.mp4
+#EXTINF:5012 group-title="Suspenso" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/9/9e/D.O.A._%281950_poster%29.jpg/250px-D.O.A._%281950_poster%29.jpg",D.O.A. (1949)
+https://archive.org/download/7.3-d.-o.-a.-1949/7.3%20D.O.A.%C2%A0%281950%29%C2%A0.ia.mp4
+#EXTINF:7371 group-title="Drama" tvg-logo="https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/Meet_John_Doe_poster.jpg/250px-Meet_John_Doe_poster.jpg",Meet John Doe (1941)
+https://archive.org/download/meet_john_doe/meet_john_doe_512kb.mp4
