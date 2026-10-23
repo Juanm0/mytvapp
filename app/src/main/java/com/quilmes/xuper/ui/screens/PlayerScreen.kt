@@ -972,7 +972,7 @@ private fun WebEmbedPlayer(
     // Vidly (botón "Prueba"): se controla como Latino (agente de frames y hub solo si se confirma un <video>
     // controlable), pero sin los extras propios de VideoAPI (parámetros de URL, idioma/CC, limpieza de bordes).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
-    val isLatinoFamily = isVideoApi || isVidly
+    val isLatinoFamily = isVideoApi
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isLatinoFamily || isOkRu || isSimuladores
@@ -1147,7 +1147,7 @@ private fun WebEmbedPlayer(
         }
     }
     LaunchedEffect(videoEnded, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered) {
-        if (videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+        if (!isVidly && videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
             delay(2_000)
             if (!nextEpisodeDismissed && !nextEpisodeTriggered) {
                 nextEpisodeTriggered = true
@@ -1162,7 +1162,7 @@ private fun WebEmbedPlayer(
     // para no confundir un pre-roll/publicidad corta con el final del capítulo.
     val showFrameCountdown = frameDuration > 0.0 && frameRemainingSeconds <= 30.0 &&
         (isFrameXtv || (hasCustomHub && frameDuration >= MIN_WEB_EPISODE_SECONDS))
-    val showNextEpisodeCard = nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
+    val showNextEpisodeCard = !isVidly && nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
 
     // Give the mini-hub real TV focus; otherwise the WebView keeps consuming remote input.
     LaunchedEffect(showNextEpisodeCard, nextEpisode?.id) {
@@ -1175,7 +1175,7 @@ private fun WebEmbedPlayer(
     // FrameXTV sometimes stops sending timeupdate before the final frame. Start a real
     // fallback timer when the displayed remaining time first reaches 30 seconds.
     LaunchedEffect(showFrameCountdown, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered, framePaused) {
-        if (showFrameCountdown && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+        if (!isVidly && showFrameCountdown && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
             val waitMs = (frameRemainingSeconds * 1_000.0).toLong().coerceIn(0L, 30_000L)
             var elapsedMs = 0L
             while (elapsedMs < waitMs) {
@@ -1568,7 +1568,11 @@ private fun WebEmbedPlayer(
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
                             pageFinished = true
-                            view?.evaluateJavascript("""(function(){
+                            // Vidly queda con su interfaz original: no hub ni agente de control.
+                            // Aseguramos que el WebView tenga el foco para que Android entregue el mando
+                            // al reproductor/página, en vez de dejarlo en un nodo Compose.
+                            if (isVidly) view?.requestFocus()
+                            if (!isVidly) view?.evaluateJavascript("""(function(){
                               try{
                                 var css='html,body{outline:0!important;box-shadow:none!important;background:#000!important} iframe:focus{outline:0!important;box-shadow:none!important;border:0!important}';
                                 var st=document.getElementById('xuper-tv-focus-style');
@@ -1576,7 +1580,7 @@ private fun WebEmbedPlayer(
                                 Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               }catch(e){}
                             })();""", null)
-                            if (nextEpisode != null) view?.evaluateJavascript("""(function(){
+                            if (!isVidly && nextEpisode != null) view?.evaluateJavascript("""(function(){
                               try{
                                 if(!window.__xuperEndDetector){
                                   window.__xuperEndDetector=true;
@@ -1587,7 +1591,7 @@ private fun WebEmbedPlayer(
                                 }
                               }catch(e){}
                             })();""", null)
-                            view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
+                            if (!isVidly) view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -1641,7 +1645,7 @@ private fun WebEmbedPlayer(
                         }.onFailure { android.util.Log.w("XuperAgent", "No se pudo instalar el agente de frames", it) }.isSuccess
                     }
                     tag = url
-                    if (nextEpisode != null) {
+                    if (!isVidly && nextEpisode != null) {
                         addJavascriptInterface(object {
                             @JavascriptInterface fun onVideoEnded() {
                                 Handler(Looper.getMainLooper()).post { videoEnded = true }
@@ -1733,7 +1737,7 @@ private fun WebEmbedPlayer(
             },
         )
 
-        if (showNextEpisodeCard && nextEpisode != null) {
+        if (!isVidly && showNextEpisodeCard && nextEpisode != null) {
             NextEpisodeOverlay(
                 episode = nextEpisode,
                 secondsLeft = if (isFrameXtv && frameDuration > 0.0) kotlin.math.ceil(frameRemainingSeconds).toInt().coerceIn(0, 30) else 0,
