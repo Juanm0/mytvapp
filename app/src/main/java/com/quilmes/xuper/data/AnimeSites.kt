@@ -20,5 +20,5 @@ object AnimeSites {
      *
      * Por ahora apunta al mismo JKanime para probar el flujo completo.
      */
-    const val ADULT_URL = "https://futbollibretvplus.com/"
+    const val ADULT_URL = "https://jkanime.net"
 }

@@ -10,6 +10,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -108,198 +109,132 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
     return "$base?${params.joinToString("&")}"
 }
 
-/** Remote pointer for HTML5 custom-fullscreen views. The fullscreen view is attached to the Activity's decor, above the WebView, so a pointer drawn by the WebView is hidden and its touch events hit the wrong surface. */
-private class RemotePointerFullscreenFrame(context: Context, content: View) : FrameLayout(context) {
-    private val target = content
-    private val density = resources.displayMetrics.density
-    private var px = -1f
-    private var py = -1f
-    private var pressed = false
-    private var downTime = 0L
-    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(230, 20, 190, 220); style = android.graphics.Paint.Style.FILL
-    }
-    private val stroke = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE; style = android.graphics.Paint.Style.STROKE; strokeWidth = 2.2f * density
-    }
-    init {
-        isFocusable = true
-        isFocusableInTouchMode = true
-        setBackgroundColor(android.graphics.Color.TRANSPARENT)
-        addView(content, LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-    }
-    override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        val down = event.action == AndroidKeyEvent.ACTION_DOWN
-        val up = event.action == AndroidKeyEvent.ACTION_UP
-        if (!down && !up) return super.dispatchKeyEvent(event)
-        when (event.keyCode) {
-            AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-            AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (up) return true
-                if (width <= 0 || height <= 0) return true
-                if (px < 0f || py < 0f) { px = width * .5f; py = height * .86f }
-                val step = (density * if (event.isLongPress || event.repeatCount > 0) 46f else 28f).coerceAtLeast(16f)
-                when (event.keyCode) {
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> px -= step
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> px += step
-                    AndroidKeyEvent.KEYCODE_DPAD_UP -> py -= step
-                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> py += step
-                }
-                px = px.coerceIn(2f, (width - 2).coerceAtLeast(2).toFloat())
-                py = py.coerceIn(2f, (height - 2).coerceAtLeast(2).toFloat())
-                invalidate(); return true
-            }
-            AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER, AndroidKeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                if (down && !pressed) { if (px < 0f || py < 0f) { px = width * .5f; py = height * .86f }; downTime = event.eventTime; sendTouch(MotionEvent.ACTION_DOWN, downTime, event.eventTime); pressed = true }
-                else if (up && pressed) { sendTouch(MotionEvent.ACTION_UP, downTime, event.eventTime); pressed = false }
-                invalidate(); return true
-            }
-            else -> return super.dispatchKeyEvent(event)
-        }
-    }
-    private fun sendTouch(action: Int, start: Long, time: Long) {
-        if (width <= 0 || height <= 0 || px < 0f || py < 0f) return
-        val ev = MotionEvent.obtain(start, time, action, px, py, 0).apply { source = android.view.InputDevice.SOURCE_TOUCHSCREEN }
-        try { super.dispatchTouchEvent(ev) } finally { ev.recycle() }
-    }
-    override fun dispatchDraw(canvas: android.graphics.Canvas) {
-        super.dispatchDraw(canvas)
-        if (px < 0f || py < 0f) return
-        val r = 8f * density
-        canvas.drawCircle(px, py, r, fill); canvas.drawCircle(px, py, r, stroke)
-        canvas.drawLine(px-r*1.7f, py, px+r*1.7f, py, stroke); canvas.drawLine(px, py-r*1.7f, px, py+r*1.7f, stroke)
-    }
-}
-
 /** Keeps D-pad navigation from getting trapped inside a cross-origin iframe. */
 private class HubAwareWebView(
     context: Context,
     private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
-    private val enableNativeRemotePointer: Boolean = false,
+    private val invisibleVidlyPointer: Boolean = false,
 ) : WebView(context) {
-    private val pointerPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE
-        style = android.graphics.Paint.Style.STROKE
-        strokeWidth = context.resources.displayMetrics.density * 2.2f
-    }
-    private val pointerFillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.argb(235, 20, 190, 220)
-        style = android.graphics.Paint.Style.FILL
-    }
-    private var pointerX = -1f
-    private var pointerY = -1f
-    private var pointerVisible = false
-    private var pressed = false
-    private var pointerDownTime = 0L
-    private var hoverEntered = false
+    private var remoteX = -1f
+    private var remoteY = -1f
 
     /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
     fun dispatchInjectedKeyEvent(event: AndroidKeyEvent): Boolean = super.dispatchKeyEvent(event)
 
+    private fun moveInvisiblePointer(keyCode: Int) {
+        if (width <= 0 || height <= 0) return
+        if (remoteX < 0f || remoteY < 0f) {
+            remoteX = width * 0.5f
+            remoteY = height * 0.5f
+        }
+        // A D-pad press moves directly to the relevant edge, rather than crawling pixel by pixel.
+        // Pressing the same direction again wraps to the opposite edge, allowing a full sweep.
+        when (keyCode) {
+            AndroidKeyEvent.KEYCODE_DPAD_UP -> remoteY = if (remoteY <= 2f) height - 2f else 2f
+            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> remoteY = if (remoteY >= height - 2f) 2f else height - 2f
+            AndroidKeyEvent.KEYCODE_DPAD_LEFT -> remoteX = if (remoteX <= 2f) width - 2f else 2f
+            AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> remoteX = if (remoteX >= width - 2f) 2f else width - 2f
+        }
+        sendHover(remoteX, remoteY)
+    }
+
+    private fun sendHover(x: Float, y: Float) {
+        val now = SystemClock.uptimeMillis()
+        val event = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, x, y, 0).apply {
+            source = InputDevice.SOURCE_MOUSE
+        }
+        try { super.dispatchGenericMotionEvent(event) } finally { event.recycle() }
+    }
+
+    private fun clickInvisiblePointer() {
+        if (width <= 0 || height <= 0) return
+        if (remoteX < 0f || remoteY < 0f) {
+            remoteX = width * 0.5f
+            remoteY = height * 0.5f
+        }
+        sendHover(remoteX, remoteY)
+        val downTime = SystemClock.uptimeMillis()
+        val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, remoteX, remoteY, 0)
+        val up = MotionEvent.obtain(downTime, downTime + 65L, MotionEvent.ACTION_UP, remoteX, remoteY, 0)
+        try {
+            down.source = InputDevice.SOURCE_TOUCHSCREEN
+            up.source = InputDevice.SOURCE_TOUCHSCREEN
+            super.dispatchTouchEvent(down)
+            super.dispatchTouchEvent(up)
+        } finally {
+            down.recycle(); up.recycle()
+        }
+    }
+
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
-        if (enableNativeRemotePointer && handleNativeRemotePointerKey(event)) return true
+        if (invisibleVidlyPointer && event.keyCode in setOf(
+                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER,
+                AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+            )) {
+            if (event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                when (event.keyCode) {
+                    AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                    AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> moveInvisiblePointer(event.keyCode)
+                    else -> clickInvisiblePointer()
+                }
+            }
+            return true
+        }
         if ((event.action == AndroidKeyEvent.ACTION_DOWN || event.action == AndroidKeyEvent.ACTION_UP) && onRemoteKey(event)) return true
         return super.dispatchKeyEvent(event)
     }
+}
 
-    /**
-     * Vidly's native controls can live inside a cross-origin iframe, where DOM focus/JS from the
-     * parent cannot reach them. Forward D-pad movement as WebView mouse-hover events and OK as a
-     * real Android touch sequence at the pointer position. Chromium then performs normal hit-testing
-     * (including iframe boundaries), so the site's own hover/focus/click UI remains in charge.
-     * This is deliberately a pointer, not a playback hub or a JavaScript control API.
-     */
-    private fun handleNativeRemotePointerKey(event: AndroidKeyEvent): Boolean {
-        val down = event.action == AndroidKeyEvent.ACTION_DOWN
-        val up = event.action == AndroidKeyEvent.ACTION_UP
-        if (!down && !up) return false
-        when (event.keyCode) {
-            AndroidKeyEvent.KEYCODE_DPAD_LEFT,
-            AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-            AndroidKeyEvent.KEYCODE_DPAD_UP,
-            AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (up) return true
-                if (width <= 0 || height <= 0) return true
-                if (pointerX < 0f || pointerY < 0f) {
-                    // Start where streaming-player controls normally live (play button / timeline),
-                    // not in the middle of the picture where OK often only toggles video overlays.
-                    pointerX = width * 0.075f
-                    pointerY = height * 0.90f
-                }
-                // Smaller, predictable steps make it possible to hit small native menu items on TV.
-                val step = (resources.displayMetrics.density * 30f).coerceAtLeast(18f)
-                when (event.keyCode) {
-                    AndroidKeyEvent.KEYCODE_DPAD_LEFT -> pointerX -= step
-                    AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> pointerX += step
-                    AndroidKeyEvent.KEYCODE_DPAD_UP -> pointerY -= step
-                    AndroidKeyEvent.KEYCODE_DPAD_DOWN -> pointerY += step
-                }
-                pointerX = pointerX.coerceIn(2f, (width - 2).coerceAtLeast(2).toFloat())
-                pointerY = pointerY.coerceIn(2f, (height - 2).coerceAtLeast(2).toFloat())
-                pointerVisible = true
-                dispatchPointerHover(event.eventTime)
-                invalidate()
-                return true
-            }
-            AndroidKeyEvent.KEYCODE_DPAD_CENTER,
-            AndroidKeyEvent.KEYCODE_ENTER,
-            AndroidKeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                if (down && !pressed) {
-                    if (pointerX < 0f || pointerY < 0f) {
-                        // A first OK is useful even before the user has moved the pointer.
-                        pointerX = width * 0.075f
-                        pointerY = height * 0.90f
-                    }
-                    pointerVisible = true
-                    dispatchPointerHover(event.eventTime)
-                    pointerDownTime = event.eventTime
-                    dispatchPointerTouch(MotionEvent.ACTION_DOWN, pointerDownTime, event.eventTime)
-                    pressed = true
-                } else if (up && pressed) {
-                    dispatchPointerTouch(MotionEvent.ACTION_UP, pointerDownTime, event.eventTime)
-                    pressed = false
-                }
-                invalidate()
-                return true
-            }
-            AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-            AndroidKeyEvent.KEYCODE_MEDIA_PLAY,
-            AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> {
-                // Media keys retain their normal delivery; some player skins support them natively.
-                return false
-            }
-            else -> return false
-        }
+/**
+ * Invisible D-pad pointer for Chromium's fullscreen custom view. It forwards hover and tap
+ * events to the original fullscreen surface; it draws no cursor and adds no playback UI.
+ */
+private class InvisibleHoverFullscreenFrame(context: Context, private val target: View) : FrameLayout(context) {
+    private var px = -1f
+    private var py = -1f
+
+    init {
+        isFocusable = true
+        isFocusableInTouchMode = true
+        setBackgroundColor(AndroidColor.TRANSPARENT)
+        addView(target, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
 
-    private fun dispatchPointerHover(time: Long) {
+    private fun sendHover() {
         if (width <= 0 || height <= 0) return
-        val action = if (hoverEntered) MotionEvent.ACTION_HOVER_MOVE else MotionEvent.ACTION_HOVER_ENTER
-        val event = MotionEvent.obtain(time, time, action, pointerX, pointerY, 0).apply {
-            source = android.view.InputDevice.SOURCE_MOUSE
-        }
-        try {
-            super.dispatchGenericMotionEvent(event)
-            hoverEntered = true
-        } finally { event.recycle() }
+        val now = SystemClock.uptimeMillis()
+        val e = MotionEvent.obtain(now, now, MotionEvent.ACTION_HOVER_MOVE, px, py, 0).apply { source = InputDevice.SOURCE_MOUSE }
+        try { target.dispatchGenericMotionEvent(e) } finally { e.recycle() }
     }
 
-    private fun dispatchPointerTouch(action: Int, downTime: Long, eventTime: Long) {
-        if (width <= 0 || height <= 0) return
-        val event = MotionEvent.obtain(downTime, eventTime, action, pointerX, pointerY, 0).apply {
-            source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+    override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
+        val directional = event.keyCode in setOf(AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN, AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT)
+        val ok = event.keyCode in setOf(AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER, AndroidKeyEvent.KEYCODE_NUMPAD_ENTER)
+        if ((directional || ok) && event.action == AndroidKeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            if (px < 0f || py < 0f) { px = width * .5f; py = height * .5f }
+            when (event.keyCode) {
+                AndroidKeyEvent.KEYCODE_DPAD_UP -> py = if (py <= 2f) height - 2f else 2f
+                AndroidKeyEvent.KEYCODE_DPAD_DOWN -> py = if (py >= height - 2f) 2f else height - 2f
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT -> px = if (px <= 2f) width - 2f else 2f
+                AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> px = if (px >= width - 2f) 2f else width - 2f
+                else -> {
+                    sendHover()
+                    val t = SystemClock.uptimeMillis()
+                    val d = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, px, py, 0)
+                    val u = MotionEvent.obtain(t, t + 65L, MotionEvent.ACTION_UP, px, py, 0)
+                    try {
+                        d.source = InputDevice.SOURCE_TOUCHSCREEN; u.source = InputDevice.SOURCE_TOUCHSCREEN
+                        target.dispatchTouchEvent(d); target.dispatchTouchEvent(u)
+                    } finally { d.recycle(); u.recycle() }
+                }
+            }
+            if (directional) sendHover()
+            return true
         }
-        try { super.dispatchTouchEvent(event) } finally { event.recycle() }
-    }
-
-    override fun onDraw(canvas: android.graphics.Canvas) {
-        super.onDraw(canvas)
-        if (!enableNativeRemotePointer || !pointerVisible || pointerX < 0f || pointerY < 0f) return
-        val radius = resources.displayMetrics.density * 8f
-        canvas.drawCircle(pointerX, pointerY, radius, pointerFillPaint)
-        canvas.drawCircle(pointerX, pointerY, radius, pointerPaint)
-        canvas.drawLine(pointerX - radius * 1.7f, pointerY, pointerX + radius * 1.7f, pointerY, pointerPaint)
-        canvas.drawLine(pointerX, pointerY - radius * 1.7f, pointerX, pointerY + radius * 1.7f, pointerPaint)
+        if ((directional || ok) && event.action == AndroidKeyEvent.ACTION_UP) return true
+        return super.dispatchKeyEvent(event)
     }
 }
 
@@ -1154,7 +1089,7 @@ private fun WebEmbedPlayer(
     // Vidly (botón "Prueba"): se controla como Latino (agente de frames y hub solo si se confirma un <video>
     // controlable), pero sin los extras propios de VideoAPI (parámetros de URL, idioma/CC, limpieza de bordes).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
-    val isLatinoFamily = isVideoApi
+    val isLatinoFamily = isVideoApi || isVidly
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isFrameXtv || isLatinoFamily || isOkRu || isSimuladores
@@ -1329,7 +1264,7 @@ private fun WebEmbedPlayer(
         }
     }
     LaunchedEffect(videoEnded, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered) {
-        if (!isVidly && videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+        if (videoEnded && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
             delay(2_000)
             if (!nextEpisodeDismissed && !nextEpisodeTriggered) {
                 nextEpisodeTriggered = true
@@ -1344,7 +1279,7 @@ private fun WebEmbedPlayer(
     // para no confundir un pre-roll/publicidad corta con el final del capítulo.
     val showFrameCountdown = frameDuration > 0.0 && frameRemainingSeconds <= 30.0 &&
         (isFrameXtv || (hasCustomHub && frameDuration >= MIN_WEB_EPISODE_SECONDS))
-    val showNextEpisodeCard = !isVidly && nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
+    val showNextEpisodeCard = nextEpisode != null && (videoEnded || showFrameCountdown) && !nextEpisodeDismissed && !nextEpisodeTriggered
 
     // Give the mini-hub real TV focus; otherwise the WebView keeps consuming remote input.
     LaunchedEffect(showNextEpisodeCard, nextEpisode?.id) {
@@ -1357,7 +1292,7 @@ private fun WebEmbedPlayer(
     // FrameXTV sometimes stops sending timeupdate before the final frame. Start a real
     // fallback timer when the displayed remaining time first reaches 30 seconds.
     LaunchedEffect(showFrameCountdown, nextEpisode?.id, nextEpisodeDismissed, nextEpisodeTriggered, framePaused) {
-        if (!isVidly && showFrameCountdown && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
+        if (showFrameCountdown && nextEpisode != null && !nextEpisodeDismissed && !nextEpisodeTriggered) {
             val waitMs = (frameRemainingSeconds * 1_000.0).toLong().coerceIn(0L, 30_000L)
             var elapsedMs = 0L
             while (elapsedMs < waitMs) {
@@ -1590,6 +1525,14 @@ private fun WebEmbedPlayer(
     // Se lee siempre vía rememberUpdatedState: el lambda del `factory` del AndroidView se crea una sola
     // vez y, sin esto, vería valores viejos de showNextEpisodeCard/nextEpisode/hubActive.
     val onHubKey: (AndroidKeyEvent) -> Boolean = hubKey@{ ev ->
+        // Vidly uses the invisible edge-to-edge hover pointer in HubAwareWebView. Let its
+        // D-pad/OK events pass through Compose so they reach the WebView's native event handler.
+        if (isVidly && ev.keyCode in setOf(
+                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER, AndroidKeyEvent.KEYCODE_ENTER,
+                AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+            )) return@hubKey false
         if (!hubActive) return@hubKey false
         val key = when (ev.keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_UP -> HubKey.UP
@@ -1674,7 +1617,11 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, { keyEvent -> onHubKeyState.value(keyEvent) }, enableNativeRemotePointer = isVidly).apply {
+                val webView = HubAwareWebView(
+                    viewContext,
+                    onRemoteKey = { keyEvent -> onHubKeyState.value(keyEvent) },
+                    invisibleVidlyPointer = isVidly,
+                ).apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1694,6 +1641,7 @@ private fun WebEmbedPlayer(
                     layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
                     webChromeClient = object : WebChromeClient() {
                         private var fullscreenView: View? = null
+                        private var fullscreenFrame: InvisibleHoverFullscreenFrame? = null
                         private var fullscreenCallback: CustomViewCallback? = null
                         private var originalUi = 0
                         override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
@@ -1703,20 +1651,25 @@ private fun WebEmbedPlayer(
                             val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
                             val decor = activity?.window?.decorView as? ViewGroup
                             if (decor == null) { callback?.onCustomViewHidden(); return }
+                            fullscreenView = view
                             fullscreenCallback = callback
                             originalUi = decor.systemUiVisibility
-                            // Vidly's fullscreen custom view lives above the WebView. Route TV remote
-                            // navigation there too; otherwise the old WebView cursor is invisible and
-                            // synthetic clicks never reach the visible fullscreen surface.
-                            val presentedView: View = if (isVidly) RemotePointerFullscreenFrame(viewContext, view).apply { requestFocus() } else view
-                            fullscreenView = presentedView
-                            decor.addView(presentedView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            if (isVidly) {
+                                val frame = InvisibleHoverFullscreenFrame(viewContext, view)
+                                fullscreenFrame = frame
+                                decor.addView(frame, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                                frame.requestFocus()
+                            } else {
+                                decor.addView(view, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                            }
                             decor.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                         }
                         override fun onHideCustomView() {
                             val activity = generateSequence(context) { (it as? ContextWrapper)?.baseContext }.filterIsInstance<Activity>().firstOrNull()
                             val decor = activity?.window?.decorView as? ViewGroup
-                            fullscreenView?.let { decor?.removeView(it) }
+                            fullscreenFrame?.let { decor?.removeView(it) }
+                            if (fullscreenFrame == null) fullscreenView?.let { decor?.removeView(it) }
+                            fullscreenFrame = null
                             fullscreenView = null
                             fullscreenCallback?.onCustomViewHidden()
                             fullscreenCallback = null
@@ -1754,10 +1707,7 @@ private fun WebEmbedPlayer(
                         override fun onPageFinished(view: WebView?, pageUrl: String?) {
                             progress = 100
                             pageFinished = true
-                            // Vidly queda con su interfaz original: no hub ni agente de control. El puntero del mando
-                            // se traduce a hover/clic del WebView y los controles nativos siguen siendo del sitio.
-                            if (isVidly) view?.requestFocus()
-                            if (!isVidly) view?.evaluateJavascript("""(function(){
+                            view?.evaluateJavascript("""(function(){
                               try{
                                 var css='html,body{outline:0!important;box-shadow:none!important;background:#000!important} iframe:focus{outline:0!important;box-shadow:none!important;border:0!important}';
                                 var st=document.getElementById('xuper-tv-focus-style');
@@ -1765,7 +1715,7 @@ private fun WebEmbedPlayer(
                                 Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               }catch(e){}
                             })();""", null)
-                            if (!isVidly && nextEpisode != null) view?.evaluateJavascript("""(function(){
+                            if (nextEpisode != null) view?.evaluateJavascript("""(function(){
                               try{
                                 if(!window.__xuperEndDetector){
                                   window.__xuperEndDetector=true;
@@ -1776,7 +1726,7 @@ private fun WebEmbedPlayer(
                                 }
                               }catch(e){}
                             })();""", null)
-                            if (!isVidly) view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
+                            view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -1830,7 +1780,7 @@ private fun WebEmbedPlayer(
                         }.onFailure { android.util.Log.w("XuperAgent", "No se pudo instalar el agente de frames", it) }.isSuccess
                     }
                     tag = url
-                    if (!isVidly && nextEpisode != null) {
+                    if (nextEpisode != null) {
                         addJavascriptInterface(object {
                             @JavascriptInterface fun onVideoEnded() {
                                 Handler(Looper.getMainLooper()).post { videoEnded = true }
@@ -1922,7 +1872,7 @@ private fun WebEmbedPlayer(
             },
         )
 
-        if (!isVidly && showNextEpisodeCard && nextEpisode != null) {
+        if (showNextEpisodeCard && nextEpisode != null) {
             NextEpisodeOverlay(
                 episode = nextEpisode,
                 secondsLeft = if (isFrameXtv && frameDuration > 0.0) kotlin.math.ceil(frameRemainingSeconds).toInt().coerceIn(0, 30) else 0,
