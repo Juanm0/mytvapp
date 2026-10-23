@@ -117,8 +117,45 @@ private class HubAwareWebView(
     /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
     fun dispatchInjectedKeyEvent(event: AndroidKeyEvent): Boolean = super.dispatchKeyEvent(event)
 
+    private var hoverEntered = false
+    private var hoverFlip = false
+    private var lastHoverAt = 0L
+
+    /**
+     * Mueve un "mouse" real sobre el centro del reproductor. Muchos reproductores web solo muestran sus controles con
+     * :hover o con movimiento de mouse, y eso no se puede simular con JavaScript; con el control remoto nunca hay mouse.
+     */
+    private fun nudgeHover() {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastHoverAt < 250L || width == 0 || height == 0) return
+        lastHoverAt = now
+        hoverFlip = !hoverFlip
+        val x = width / 2f + if (hoverFlip) 3f else -3f
+        val y = height * 0.5f
+        runCatching {
+            if (!hoverEntered) {
+                hoverEntered = true
+                val enter = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_HOVER_ENTER, x, y, 0)
+                enter.source = android.view.InputDevice.SOURCE_MOUSE
+                onHoverEvent(enter)
+                enter.recycle()
+            }
+            val move = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_HOVER_MOVE, x, y, 0)
+            move.source = android.view.InputDevice.SOURCE_MOUSE
+            onHoverEvent(move)
+            move.recycle()
+        }
+    }
+
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
         if ((event.action == AndroidKeyEvent.ACTION_DOWN || event.action == AndroidKeyEvent.ACTION_UP) && onRemoteKey(event)) return true
+        if (consumeDpad && event.action == AndroidKeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                AndroidKeyEvent.KEYCODE_DPAD_UP, AndroidKeyEvent.KEYCODE_DPAD_DOWN,
+                AndroidKeyEvent.KEYCODE_DPAD_LEFT, AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
+                AndroidKeyEvent.KEYCODE_DPAD_CENTER -> nudgeHover()
+            }
+        }
         val handled = super.dispatchKeyEvent(event)
         if (consumeDpad) {
             when (event.keyCode) {
@@ -147,8 +184,14 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
   function vw(){return window.innerWidth||document.documentElement.clientWidth||0;}
   function vh(){return window.innerHeight||document.documentElement.clientHeight||0;}
   function rectOf(e){try{return e.getBoundingClientRect();}catch(x){return null;}}
+  // pointer-events y visibility se miran solo en el propio elemento (los contenedores de controles suelen traer
+  // pointer-events:none con hijos en auto); display y opacity sí se heredan visualmente: se miran los ancestros.
   function faded(e){
-    try{for(var p=e,i=0;p&&i<8;i++,p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||s.visibility==='hidden'||parseFloat(s.opacity)<0.05||s.pointerEvents==='none')return true;}}catch(x){}
+    try{
+      var own=getComputedStyle(e);
+      if(own.pointerEvents==='none'||own.visibility==='hidden')return true;
+      for(var p=e,i=0;p&&i<8;i++,p=p.parentElement){var s=getComputedStyle(p);if(s.display==='none'||parseFloat(s.opacity)<0.05)return true;}
+    }catch(x){}
     return false;
   }
   function shown(e){
@@ -168,8 +211,17 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
     return false;
   }
   // Elementos "tocables" a la vista: se descartan contenedores (que traen varios hijos tocables) y anidados (queda el más externo).
+  function allEls(root,out,depth){
+    var list=root.querySelectorAll('*');
+    for(var i=0;i<list.length&&out.length<8000;i++){
+      var e=list[i]; out.push(e);
+      if(e.shadowRoot&&depth<4)allEls(e.shadowRoot,out,depth+1);
+    }
+  }
   function candidates(){
-    var area=vw()*vh(), out=[], all=document.querySelectorAll('body *'), n=Math.min(all.length,5000);
+    var area=vw()*vh(), out=[], all=[];
+    allEls(document.body||document.documentElement,all,0);
+    var n=Math.min(all.length,6000);
     for(var i=0;i<n;i++){
       var e=all[i], t=e.tagName;
       if(t==='VIDEO'||t==='IFRAME'||t==='SCRIPT'||t==='STYLE'||t==='svg'||t==='path'||e.id===HL_ID)continue;
@@ -191,7 +243,7 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
   }
   function clear(){cur=null; if(hl)hl.style.display='none';}
   function paint(){
-    if(!cur||!document.contains(cur)||!shown(cur)){clear();return;}
+    if(!cur||!cur.isConnected||!shown(cur)){clear();return;}
     ensureHl(); var r=rectOf(cur);
     hl.style.display='block'; hl.style.left=(r.left-3)+'px'; hl.style.top=(r.top-3)+'px';
     hl.style.width=(r.width+6)+'px'; hl.style.height=(r.height+6)+'px';
@@ -205,7 +257,7 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
   }
   function pick(dir){
     var c=candidates(); if(!c.length)return false;
-    var active=cur&&document.contains(cur)&&shown(cur);
+    var active=cur&&cur.isConnected&&shown(cur);
     if(!active){
       // Primera vez: arranca por lo más cercano al centro inferior (donde suele estar la barra de controles).
       var bx=vw()/2, by=vh()*0.9, best=null, bd=1e12;
@@ -281,7 +333,7 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
       return;
     }
     if(now-lastWake>500){lastWake=now;wake();}
-    var active=cur&&document.contains(cur)&&shown(cur);
+    var active=cur&&cur.isConnected&&shown(cur);
     if(ok){
       if(active){stop(ev);clickEl(cur);setTimeout(paint,150);return;}
       if(v){stop(ev);togglePlay(v);return;}
@@ -298,10 +350,10 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
       return;
     }
     stop(ev);
-    if(!pick(dir)){
-      // Los controles tardan un instante en aparecer tras el "mouse": se reintenta una vez.
-      if(!active){setTimeout(function(){if(!pick(dir))handoff(dir==='Left'||dir==='Right'||dir==='Up'||dir==='Down'?'Arrow'+dir:dir,ev);},260);}
-    }
+    if(active){pick(dir);return;}
+    // Arranque: la app mueve un "mouse" sobre el reproductor y los controles tardan un instante en aparecer;
+    // se espera antes de elegir para no quedarse con lo primero que haya a la vista (p. ej. la pantalla de pausa).
+    setTimeout(function(){if(!pick(dir))handoff('Arrow'+dir,ev);},320);
   },true);
 })();"""
 
