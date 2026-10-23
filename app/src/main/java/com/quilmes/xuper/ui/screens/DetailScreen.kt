@@ -143,6 +143,9 @@ fun DetailScreen(
                             if (!hasTmdbSeasons) {
                                 Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
+                                if (isTmdb && title.contentKind != ContentKind.LIVE) {
+                                    Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Prueba") }
+                                }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -214,6 +217,12 @@ fun DetailScreen(
                                     selectedEpisode = episode.number
                                     onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Latino") }
+                            }
+                            if (isTmdb && title.contentKind == ContentKind.SERIES) {
+                                Button(onClick = {
+                                    selectedEpisode = episode.number
+                                    onPlay("vidly:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  Prueba") }
                             }
                         }
                     }

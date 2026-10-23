@@ -337,16 +337,30 @@ class MainActivity : ComponentActivity() {
                             onPlay = { request ->
                                 val useFrameXtv = request.startsWith("framextv:")
                                 val useVideoApi = request.startsWith("videoapi:")
+                                val useVidly = request.startsWith("vidly:")
                                 val useSimuladores = request.startsWith("simuladores:")
                                 val requestedId = when {
                                     useFrameXtv -> request.removePrefix("framextv:")
                                     useVideoApi -> request.removePrefix("videoapi:")
+                                    useVidly -> request.removePrefix("vidly:")
                                     useSimuladores -> request.removePrefix("simuladores:")
                                     else -> request
                                 }
                                 val url = when {
                                     useFrameXtv -> WebSourceRegistry.frameXtvUrl(requestedId)
                                     useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
+                                    useVidly -> {
+                                        val episodeMatch = Regex("^(.+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)
+                                        val rawTitleId = episodeMatch?.groupValues?.get(1) ?: requestedId
+                                        val tmdbId = rawTitleId.substringAfterLast('-').toIntOrNull()
+                                        if (tmdbId == null) null else if (episodeMatch != null) {
+                                            val season = episodeMatch.groupValues[2].toIntOrNull() ?: 1
+                                            val episode = episodeMatch.groupValues[3].toIntOrNull() ?: 1
+                                            "https://vidly.pro/tv/$tmdbId/$season/$episode?theme=slate&audioPicker=1"
+                                        } else {
+                                            "https://vidly.pro/movie/$tmdbId?theme=slate&audioPicker=1"
+                                        }
+                                    }
                                     useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
                                         val season = match.groupValues[1].toIntOrNull() ?: 1
                                         val episode = match.groupValues[2].toIntOrNull() ?: 1
