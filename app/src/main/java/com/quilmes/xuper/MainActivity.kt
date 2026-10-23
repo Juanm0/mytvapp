@@ -26,6 +26,7 @@ import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.IptvAccountTextParser
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.TmdbCatalogService
+import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
@@ -230,7 +231,24 @@ class MainActivity : ComponentActivity() {
     private val pendingDetailTitle = mutableStateOf<Title?>(null)
     private val repository: ContentRepository by lazy { buildRepository(filesDir, assets) }
     private val tmdbCatalogService: TmdbCatalogService by lazy { TmdbCatalogService(filesDir) }
-    private val jkanimeService: JkanimeService by lazy { JkanimeService() }
+    private val jkanimeService: JkanimeService by lazy { JkanimeService(AnimeSites.MAIN_URL) }
+    /** null = no hay sitio +18 configurado (AnimeSites.ADULT_URL vacío o inválido): el botón no aparece. */
+    private val adultAnimeService: JkanimeService? by lazy {
+        AnimeSites.ADULT_URL.trim().takeIf { it.isNotEmpty() }?.let { url ->
+            runCatching { JkanimeService(url) }
+                .onFailure { android.util.Log.w("XuperAnime", "AnimeSites.ADULT_URL inválida: $url", it) }
+                .getOrNull()
+        }
+    }
+
+    /** Elige el servicio según el host de la URL del episodio (siguiente episodio y cabeceras del video). */
+    private fun serviceFor(episodeUrl: String): JkanimeService {
+        val host = runCatching { Uri.parse(episodeUrl).host }.getOrNull().orEmpty()
+        val mainHost = runCatching { Uri.parse(jkanimeService.base).host }.getOrNull().orEmpty()
+        val adult = adultAnimeService
+        val adultHost = adult?.let { runCatching { Uri.parse(it.base).host }.getOrNull() }.orEmpty()
+        return if (adult != null && !host.equals(mainHost, true) && host.equals(adultHost, true)) adult else jkanimeService
+    }
 
 
     /** Corre en un hilo de fondo (Dispatchers.IO). */
@@ -309,6 +327,7 @@ class MainActivity : ComponentActivity() {
                                 else navController.navigate("detail/$id")
                             },
                             jkanimeService = jkanimeService,
+                            adultAnimeService = adultAnimeService,
                             onPlayAnimeEpisode = { title, streamUrl, episodeUrl ->
                                 val encodedStream = Base64.encodeToString(
                                     streamUrl.toByteArray(StandardCharsets.UTF_8),
@@ -437,15 +456,16 @@ class MainActivity : ComponentActivity() {
                                     }.getOrDefault("")
                                     if (episodeUrl.isNotBlank() && episodeNumber != null && animeSlug.isNotBlank()) {
                                         runCatching {
-                                            val animeInfo = jkanimeService.getAnimeInfo("https://jkanime.net/$animeSlug/")
+                                            val episodeService = serviceFor(episodeUrl)
+                                            val animeInfo = episodeService.getAnimeInfo("${episodeService.base}/$animeSlug/")
                                             val pageNumber = ((episodeNumber - 1) / 16) + 1
-                                            val page = jkanimeService.getEpisodesPage(animeInfo.url, pageNumber)
+                                            val page = episodeService.getEpisodesPage(animeInfo.url, pageNumber)
                                             var nextEpisodeData = page.episodes.firstOrNull { it.number > episodeNumber }
                                             if (nextEpisodeData == null && page.totalPages > page.page) {
-                                                nextEpisodeData = jkanimeService.getEpisodesPage(animeInfo.url, page.page + 1).episodes.minByOrNull { it.number }
+                                                nextEpisodeData = episodeService.getEpisodesPage(animeInfo.url, page.page + 1).episodes.minByOrNull { it.number }
                                             }
                                             val nextEpisode = nextEpisodeData ?: return@runCatching
-                                            val nextStream = jkanimeService.getEpisodeStream(nextEpisode.url)
+                                            val nextStream = episodeService.getEpisodeStream(nextEpisode.url)
                                             val nextKey = "jkanime-" + Base64.encodeToString(
                                                 nextEpisode.url.toByteArray(StandardCharsets.UTF_8),
                                                 Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
@@ -538,7 +558,7 @@ class MainActivity : ComponentActivity() {
                             } else ""
                             val animeHeaders = if (animeEpisodeUrl.isNotBlank()) mapOf(
                                 "Referer" to animeEpisodeUrl,
-                                "Origin" to "https://jkanime.net",
+                                "Origin" to serviceFor(animeEpisodeUrl).base,
                                 "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                             ) else emptyMap()
                             PlayerScreen(

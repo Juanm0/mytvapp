@@ -49,6 +49,7 @@ fun MainScreen(
     onRequestIptv: () -> Unit = {},
     jkanimeService: JkanimeService,
     onPlayAnimeEpisode: (title: String, streamUrl: String, episodeUrl: String) -> Unit,
+    adultAnimeService: JkanimeService? = null,
 ) {
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
@@ -75,7 +76,7 @@ fun MainScreen(
                 "home" -> HomeScreen(repository = repository, onPlay = onPlay)
                 "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
-                "anime" -> AnimeScreen(service = jkanimeService, onPlayEpisode = onPlayAnimeEpisode)
+                "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
                 "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)

@@ -23,11 +23,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +45,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
+import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.JkanimeAnime
 import com.quilmes.xuper.data.JkanimeCard
 import com.quilmes.xuper.data.JkanimeEpisode
@@ -65,9 +68,16 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AnimeScreen(
     service: JkanimeService,
+    adultService: JkanimeService? = null,
     onPlayEpisode: (title: String, streamUrl: String, episodeUrl: String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    // +18: el modo adulto exige un sitio configurado (AnimeSites.ADULT_URL) Y el ajuste +18 activo.
+    // Se lee el estado al momento de llamar, así las funciones de abajo siempre usan el sitio vigente.
+    val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
+    var adultMode by rememberSaveable { mutableStateOf(false) }
+    fun adultActive(): Boolean = adultMode && adultEnabled && adultService != null
+    fun activeService(): JkanimeService = adultService?.takeIf { adultActive() } ?: service
     var query by remember { mutableStateOf("") }
     var heading by remember { mutableStateOf("Anime para descubrir") }
     var catalog by remember { mutableStateOf<List<JkanimeCard>>(emptyList()) }
@@ -85,9 +95,9 @@ fun AnimeScreen(
             selectedCard = null
             anime = null
             episodePage = null
-            heading = "Anime para descubrir"
+            heading = if (adultActive()) "Anime +18" else "Anime para descubrir"
             try {
-                catalog = withContext(Dispatchers.IO) { service.loadCatalog() }
+                catalog = withContext(Dispatchers.IO) { activeService().loadCatalog() }
                 if (catalog.isEmpty()) error = "JKanime no devolvió títulos. Revisá la conexión o probá buscar un anime."
             } catch (e: Exception) {
                 error = e.message ?: "No se pudo cargar el catálogo de JKanime."
@@ -111,7 +121,7 @@ fun AnimeScreen(
             episodePage = null
             heading = "Resultados para “$term”"
             try {
-                catalog = withContext(Dispatchers.IO) { service.searchAnime(term) }
+                catalog = withContext(Dispatchers.IO) { activeService().searchAnime(term) }
                 if (catalog.isEmpty()) error = "No encontramos resultados para “$term”."
             } catch (e: Exception) {
                 error = e.message ?: "No se pudo completar la búsqueda."
@@ -129,9 +139,9 @@ fun AnimeScreen(
             loading = true
             error = null
             try {
-                val info = withContext(Dispatchers.IO) { service.getAnimeInfo(card.url) }
+                val info = withContext(Dispatchers.IO) { activeService().getAnimeInfo(card.url) }
                 anime = info
-                episodePage = withContext(Dispatchers.IO) { service.getEpisodesPage(info.url, 1) }
+                episodePage = withContext(Dispatchers.IO) { activeService().getEpisodesPage(info.url, 1) }
             } catch (e: Exception) {
                 error = e.message ?: "No se pudo cargar la ficha del anime."
             } finally {
@@ -146,7 +156,7 @@ fun AnimeScreen(
             loading = true
             error = null
             try {
-                episodePage = withContext(Dispatchers.IO) { service.getEpisodesPage(current.url, page) }
+                episodePage = withContext(Dispatchers.IO) { activeService().getEpisodesPage(current.url, page) }
             } catch (e: Exception) {
                 error = e.message ?: "No se pudieron cargar los episodios."
             } finally {
@@ -162,7 +172,7 @@ fun AnimeScreen(
             loading = true
             error = null
             try {
-                val stream = withContext(Dispatchers.IO) { service.getEpisodeStream(episode.url) }
+                val stream = withContext(Dispatchers.IO) { activeService().getEpisodeStream(episode.url) }
                 onPlayEpisode("${current.title} · ${episode.title}", stream.streamUrl, stream.episodeUrl)
             } catch (e: Exception) {
                 error = e.message ?: "No se pudo extraer el enlace del episodio."
@@ -174,12 +184,20 @@ fun AnimeScreen(
     }
 
     LaunchedEffect(Unit) { loadCatalog() }
-    BackHandler(enabled = selectedCard != null) {
-        selectedCard = null
-        anime = null
-        episodePage = null
-        error = null
-        loading = false
+    // Si se apaga el ajuste +18 estando en el modo adulto, se vuelve al catálogo normal.
+    LaunchedEffect(adultEnabled) {
+        if (!adultEnabled && adultMode) { adultMode = false; query = ""; loadCatalog() }
+    }
+    BackHandler(enabled = selectedCard != null || adultMode) {
+        if (selectedCard != null) {
+            selectedCard = null
+            anime = null
+            episodePage = null
+            error = null
+            loading = false
+        } else {
+            adultMode = false; query = ""; loadCatalog()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(XuperBackground)) {
@@ -188,8 +206,14 @@ fun AnimeScreen(
                 modifier = Modifier.fillMaxSize().padding(start = 44.dp, end = 40.dp, top = 28.dp, bottom = 22.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Text("ANIME", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = XuperTextPrimary)
-                    Text("JKAnime · Catálogo, búsqueda y episodios", fontSize = 15.sp, color = XuperTextSecondary)
+                    // Arriba a la izquierda: solo existe con un sitio +18 configurado y el ajuste +18 activo.
+                    if (adultEnabled && adultService != null) {
+                        Button(onClick = { adultMode = !adultMode; query = ""; loadCatalog() }) {
+                            Text(if (adultMode) "← ANIME" else "+18 ANIME CONTENT")
+                        }
+                    }
+                    Text(if (adultActive()) "ANIME +18" else "ANIME", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = XuperTextPrimary)
+                    Text(if (adultActive()) "Contenido para adultos · Catálogo, búsqueda y episodios" else "JKAnime · Catálogo, búsqueda y episodios", fontSize = 15.sp, color = XuperTextSecondary)
                 }
                 Spacer(Modifier.height(16.dp))
                 Row(

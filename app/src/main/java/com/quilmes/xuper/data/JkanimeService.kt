@@ -61,8 +61,16 @@ data class JkanimeStream(
  * Las peticiones se ejecutan en Dispatchers.IO. Los resultados del catálogo y las fichas
  * se parsean en memoria; no se escribe contenido remoto en el almacenamiento de la app.
  */
-class JkanimeService {
-    private val base = "https://jkanime.net"
+class JkanimeService(baseUrl: String = "https://jkanime.net") {
+    /** URL base del sitio SIN barra final. Cada instancia trabaja con un solo sitio. */
+    val base: String = baseUrl.trim().trimEnd('/').also {
+        require(it.startsWith("https://") || it.startsWith("http://")) { "La URL del sitio debe empezar con https://" }
+    }
+    private val siteHost: String = (java.net.URI(base).host ?: error("URL de sitio inválida: $base")).lowercase(Locale.ROOT)
+    /** Nombre corto del sitio ("jkanime", "jkcarandmore"…) para limpiar títulos como "Anime - JKanime". */
+    private val siteName: String = Regex.escape(siteHost.removePrefix("www.").substringBeforeLast('.'))
+    private fun isSiteHost(host: String?): Boolean =
+        host != null && (host.equals(siteHost, true) || host.endsWith(".$siteHost", true))
     private val userAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
     private val metaCache = ConcurrentHashMap<String, CachedMeta>()
@@ -181,12 +189,12 @@ class JkanimeService {
 
     suspend fun getEpisodeStream(episodeUrl: String): JkanimeStream = withContext(Dispatchers.IO) {
         val parsed = java.net.URI(episodeUrl)
-        require(parsed.host.equals("jkanime.net", true) || parsed.host.endsWith(".jkanime.net", true)) {
-            "La URL del episodio debe pertenecer a jkanime.net."
+        require(isSiteHost(parsed.host)) {
+            "La URL del episodio debe pertenecer a $siteHost."
         }
         val episode = fetch(episodeUrl)
         val episodeDoc = Jsoup.parse(episode.body, episode.finalUrl)
-        val playerUrl = Regex("""(?:https?:)?\\?/\\?/jkanime\.net/jkplayer/um\?[^"'\s<>]+|/jkplayer/um\?[^"'\s<>]+""", RegexOption.IGNORE_CASE)
+        val playerUrl = Regex("""(?:https?:)?\\?/\\?/${Regex.escape(siteHost)}/jkplayer/um\?[^"'\s<>]+|/jkplayer/um\?[^"'\s<>]+""", RegexOption.IGNORE_CASE)
             .find(episode.body)?.value?.replace("\\/", "/")
             ?.let { if (it.startsWith("//")) "https:$it" else if (it.startsWith("/")) "$base$it" else it }
             ?: episodeDoc.select("iframe[src], a[href]").mapNotNull { element ->
@@ -311,7 +319,7 @@ class JkanimeService {
             val url = absoluteUrl(rawUrl)
             val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return
             val host = uri.host.orEmpty().lowercase(Locale.ROOT)
-            if (host != "jkanime.net" && !host.endsWith(".jkanime.net")) return
+            if (!isSiteHost(host)) return
             val segments = uri.path.orEmpty().split('/').filter(String::isNotBlank)
             if (segments.size != 1) return
             val slug = segments[0]
@@ -343,7 +351,7 @@ class JkanimeService {
                     val keys = value.keys()
                     while (keys.hasNext()) {
                         val child = value.opt(keys.next())
-                        if (child is String && (child.contains("<a", true) || child.contains("jkanime.net/"))) sources += child
+                        if (child is String && (child.contains("<a", true) || child.contains("$siteHost/"))) sources += child
                         else collectJson(child, depth + 1)
                     }
                 }
@@ -357,7 +365,7 @@ class JkanimeService {
                             if (text.startsWith("{")) collectJson(JSONObject(text), depth + 1)
                             else collectJson(org.json.JSONArray(text), depth + 1)
                         }
-                    } else if (text.contains("<a", true) || text.contains("jkanime.net/")) {
+                    } else if (text.contains("<a", true) || text.contains("$siteHost/")) {
                         sources += text
                     }
                 }
@@ -392,8 +400,8 @@ class JkanimeService {
 
     private fun normalizeAnimeUrl(raw: String): String {
         val uri = java.net.URI(raw.trim())
-        require(uri.scheme in listOf("https", "http") && (uri.host.equals("jkanime.net", true) || uri.host.endsWith(".jkanime.net", true))) {
-            "Usá una ficha de jkanime.net."
+        require(uri.scheme in listOf("https", "http") && isSiteHost(uri.host)) {
+            "Usá una ficha de $siteHost."
         }
         return "$base/${slugFromUrl(raw)}/"
     }
@@ -418,15 +426,15 @@ class JkanimeService {
         }
 
     private fun stripSiteName(value: String): String =
-        value.replace(Regex("\\s*[-–—|·•:]\\s*jkanime(?:\\.net)?\\s*$", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("^\\s*jkanime(?:\\.net)?\\s*[-–—|·•:]\\s*", RegexOption.IGNORE_CASE), "").trim()
+        value.replace(Regex("\\s*[-–—|·•:]\\s*(?:jkanime|$siteName)(?:\\.\\w+)?\\s*$", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("^\\s*(?:jkanime|$siteName)(?:\\.\\w+)?\\s*[-–—|·•:]\\s*", RegexOption.IGNORE_CASE), "").trim()
 
     private fun isSuspiciousTitle(value: String): Boolean {
         val t = value.trim()
         return t.isBlank() || t.length > 180 || t.matches(Regex("\\d+")) ||
             Regex("\\d+\\s*/\\s*\\d+").containsMatchIn(t) || t.contains("-->") || t.contains("<--") ||
             t.startsWith("<") || t.startsWith(">") ||
-            t.matches(Regex("(?i)(siguiente|anterior|next|prev(?:ious)?|ver ficha|ver m[aá]s|jkanime(?:\\.net)?)"))
+            t.matches(Regex("(?i)(siguiente|anterior|next|prev(?:ious)?|ver ficha|ver m[aá]s|(?:jkanime|$siteName)(?:\\.\\w+)?)"))
     }
 
     private fun urlEncode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
