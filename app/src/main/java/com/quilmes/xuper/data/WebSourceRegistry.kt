@@ -81,11 +81,11 @@ object WebSourceRegistry {
         url.startsWith("https://$VIDZY_HOST/movie/") || url.startsWith("https://$VIDZY_HOST/serie/")
 
     /**
-     * Embed de Vidzy por TMDb. La API documenta /movie/{id} y /serie/{id}/{season}/{episode}.
-     * El selector de idioma del playground ofrece Auto/VF/VOSTFR; `lang` es best-effort porque
-     * la referencia pública no especifica formalmente el nombre del parámetro de URL.
+     * Embed de Vidzy por TMDb. La API documenta /movie/{id}, /serie/{id}/{season}/{episode},
+     * autoplay, autonext y color. El idioma de audio/subtítulos se selecciona desde el menú del player;
+     * no se inventa un parámetro de idioma que la referencia pública no documenta.
      */
-    fun vidzyUrl(catalogId: String, language: String = "auto"): String? {
+    fun vidzyUrl(catalogId: String): String? {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         val base = when {
             episode != null -> {
@@ -96,8 +96,7 @@ object WebSourceRegistry {
                 ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let { "https://$VIDZY_HOST/serie/${it.groupValues[1]}/1/1" }
                 ?: return null
         }
-        val lang = language.lowercase().takeIf { it in setOf("auto", "vf", "vostfr") } ?: "auto"
-        return "$base?autoplay=1&autonext=1&color=2b7fff&lang=$lang"
+        return "$base?autoplay=1&autonext=1&color=2b7fff"
     }
 
     /** URL candidata de FrameXTV para películas y episodios. */

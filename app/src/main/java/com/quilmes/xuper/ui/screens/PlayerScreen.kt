@@ -98,13 +98,21 @@ private fun isWebPageUrl(raw: String): Boolean {
 }
 
 
-private fun vidzyLanguageUrl(raw: String, language: String): String {
-    val base = raw.substringBefore('?')
-    val existing = raw.substringAfter('?', "").split('&').filter(String::isNotBlank)
-        .filterNot { it.substringBefore('=').lowercase() in setOf("lang", "language") }
-    val lang = language.takeIf { it in setOf("auto", "vf", "vostfr") } ?: "auto"
-    return base + "?" + (existing + "lang=$lang").joinToString("&")
-}
+/** Pone el foco real del navegador en el iframe/vídeo para que el D-pad llegue al reproductor original de Vidly. */
+private val VIDLY_REMOTE_FOCUS_JS = """(function(){
+  try{
+    document.documentElement.setAttribute('tabindex','-1');
+    document.body && document.body.setAttribute('tabindex','-1');
+    var frames=Array.from(document.querySelectorAll('iframe')).filter(function(f){
+      try{var r=f.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}
+    });
+    // El iframe visible del reproductor debe tener el foco del navegador; no se simula un clic.
+    if(frames.length){frames.sort(function(a,b){var ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return br.width*br.height-ar.width*ar.height;});frames[0].focus();}
+    var videos=Array.from(document.querySelectorAll('video')).filter(function(v){try{var r=v.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}});
+    if(videos.length){videos.sort(function(a,b){var ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return br.width*br.height-ar.width*ar.height;});videos[0].setAttribute('tabindex','0');videos[0].focus();}
+    window.__xuperVidlyRefocus=function(){try{if(frames.length)frames[0].focus();else if(videos.length)videos[0].focus();}catch(e){}};
+  }catch(e){}
+})();"""
 
 private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): String {
     val base = raw.substringBefore('?').trimEnd('/')
@@ -162,11 +170,17 @@ private fun videoApiCommandScript(action: String, index: Int, seconds: Int): Str
                 for(var i=0;i<tracks.length;i++)tracks[i].mode=i===selected?'showing':'disabled';
                 handled=true;
               }
+            }else if(action==='audioSpanish'){
+              var ats=v.audioTracks, found=false;
+              if(ats&&ats.length){for(var ai=0;ai<ats.length;ai++){var at=ats[ai], lab=(at.label||'')+' '+(at.language||'');var es=/spanish|español|espanol|castellano/i.test(lab)||/\bes\b|spa|es-\w+/i.test(String(at.language||''));at.enabled=es;if(es)found=true;}handled=found;}
+            }else if(action==='subtitleSpanish'||action==='subtitleOff'){
+              var sts=v.textTracks, sf=false;
+              if(sts&&sts.length){for(var si=0;si<sts.length;si++){var st=sts[si], sl=(st.label||'')+' '+(st.language||'');var se=/spanish|español|espanol|castellano/i.test(sl)||/\bes\b|spa|es-\w+/i.test(String(st.language||''));st.mode=action==='subtitleSpanish'&&se?'showing':'disabled';if(action==='subtitleSpanish'&&se)sf=true;}handled=action==='subtitleOff'||sf;}
             }
           }
-          if(!handled&&(action==='playPause'||action==='mute'||action==='subtitle')){
+          if(!handled&&(action==='playPause'||action==='mute'||action==='subtitle'||action==='audioSpanish'||action==='subtitleSpanish'||action==='subtitleOff')){
             var els=Array.from(d.querySelectorAll('button,[role=button],[aria-label],[title]'));
-            var re=action==='playPause'?/play|pause|reproducir|pausar/i:action==='mute'?/mute|volume|sonido|silencio/i:/subtitle|captions|closed caption|\bcc\b|subtitulos|subtítulos/i;
+            var re=action==='playPause'?/play|pause|reproducir|pausar/i:action==='mute'?/mute|volume|sonido|silencio/i:action==='audioSpanish'?/audio|idioma|language|settings|ajustes/i:action==='subtitleOff'?/off|none|desactivar|sin subtítulos|sin subtitulos/i:/subtitle|captions|closed caption|\bcc\b|subtitulos|subtítulos/i;
             var target=els.find(function(e){return re.test(((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+(e.innerText||'')).toLowerCase())});
             if(target){target.click();handled=true;}
           }
@@ -216,57 +230,65 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       return null;
     }
     function clickText(patterns){var el=findText(patterns);if(!el)return false;try{el.click();return true;}catch(e){return false;}}
-    function chooseSpanishSubtitle(){
-      if(clickText([/^spanish$/i]))return true;
+    function spanishLabel(s){return /(^|\b)(spanish|español|espanol|castellano|spanish\s*\(|español\s*\()/i.test(String(s||''));}
+    function findSpanishOption(){return findText([/^spanish$/i,/^español$/i,/^espanol$/i,/^castellano$/i,/spanish.*latin|español.*latino|espanol.*latino/i]);}
+    function findOffOption(){return findText([/^(off|none|disabled|desactivados?|ninguno|sin subtítulos|sin subtitulos)$/i,/subtitles?\s*off/i]);}
+    function setNativeSpanish(kind, enabled){
+      var b=best(); if(!b)return false; var v=b.v, found=false;
+      try{
+        if(kind==='audio'&&v.audioTracks&&v.audioTracks.length){
+          for(var i=0;i<v.audioTracks.length;i++){
+            var t=v.audioTracks[i], label=(t.label||'')+' '+(t.language||'');
+            if(spanishLabel(label)||/\bes\b|spa|es-\w+/i.test(String(t.language||''))){t.enabled=!!enabled;found=true;}
+            else if(enabled)t.enabled=false;
+          }
+          if(found)return true;
+        }
+        if(kind==='subtitle'&&v.textTracks&&v.textTracks.length){
+          for(var j=0;j<v.textTracks.length;j++){
+            var st=v.textTracks[j], sl=(st.label||'')+' '+(st.language||'');
+            var isSpanish=spanishLabel(sl)||/\bes\b|spa|es-\w+/i.test(String(st.language||''));
+            st.mode=enabled&&isSpanish?'showing':'disabled'; if(enabled&&isSpanish)found=true;
+          }
+          if(found||!enabled)return true;
+        }
+      }catch(e){}
       return false;
     }
-    function clickPlayerMenu(kind){
-      if(kind==='subtitle'){
-        // Flujo real de VideoAPI: CC -> Predeterminados -> Spanish. Cada paso espera a que
-        // el panel anterior se pinte; no damos por activado el subtítulo solo por tocar una pestaña.
-        if(findText([/^spanish$/i])) return chooseSpanishSubtitle();
-        if(findText([/^predeterminados$/i])){
-          if(clickText([/^predeterminados$/i])) setTimeout(function(){chooseSpanishSubtitle();},450);
-          return true;
-        }
-        if(clickText([/^cc$/i,/^subtítulos?$/i,/^captions?$/i,/^closed captions?$/i])){
-          setTimeout(function(){
-            if(findText([/^spanish$/i])){chooseSpanishSubtitle();return;}
-            if(clickText([/^predeterminados$/i]))setTimeout(function(){chooseSpanishSubtitle();},450);
-          },350);
-          return true;
+    function clickPlayerMenu(kind, command){
+      var audio=kind==='audio', enabled=command!=='subtitleOff';
+      if(!audio&&!enabled){
+        try{var b=best();if(b&&b.v.textTracks){for(var q=0;q<b.v.textTracks.length;q++)b.v.textTracks[q].mode='disabled';return true;}}catch(e){}
+        var off=findOffOption();if(off){try{off.click();return true;}catch(e){}}
+        if(clickText([/^cc$/i,/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i])){
+          setTimeout(function(){var option=findOffOption();if(option)try{option.click();}catch(e){}},400);return true;
         }
         return false;
       }
-      // Audio: abrir Ajustes -> Idioma y elegir la opción contraria a la que figura seleccionada.
-      function chooseLanguage(){
-        var en=findText([/^english$/i]),es=findText([/^español$/i,/^espanol$/i]);
-        if(!en&&!es)return false;
-        function selected(el){
-          if(!el)return false;
-          var cur=el;
-          for(var i=0;i<4&&cur;i++,cur=cur.parentElement){
-            var a=(cur.getAttribute('aria-checked')||cur.getAttribute('aria-selected')||cur.getAttribute('data-state')||'').toLowerCase();
-            var c=String(cur.className||'').toLowerCase();
-            if(a==='true'||a==='checked'||a==='on'||/selected|active|checked|current/.test(c))return true;
-          }
-          return false;
+      if((command==='audioSpanish'||command==='subtitleSpanish')&&setNativeSpanish(kind,enabled))return true;
+      // Si el proveedor expone las pistas mediante un menú propio, abrirlo y seleccionar Español.
+      var spanish=findSpanishOption();
+      if(spanish){try{spanish.click();return true;}catch(e){}}
+      if(audio){
+        if(clickText([/^audio$/i,/^idioma$/i,/^language$/i,/audio track/i])){
+          setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);return true;
         }
-        var englishSelected=selected(en), spanishSelected=selected(es);
-        // Si no hay estado accesible, usar Español como predeterminado; después alternar según el estado visible.
-        var target=englishSelected?es:(spanishSelected?en:es);
-        if(!target)target=en;
-        try{target.click();return true;}catch(e){return false;}
-      }
-      if(chooseLanguage())return true;
-      if(clickText([/^idioma$/i,/^language$/i])){
-        setTimeout(function(){chooseLanguage();},350);return true;
-      }
-      if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
-        setTimeout(function(){
-          if(clickText([/^idioma$/i,/^language$/i]))setTimeout(function(){chooseLanguage();},350);
-          else chooseLanguage();
-        },350);return true;
+        if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
+          setTimeout(function(){
+            if(clickText([/^audio$/i,/^idioma$/i,/^language$/i,/audio track/i]))setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);
+            else {var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}}
+          },350);return true;
+        }
+      }else{
+        if(clickText([/^cc$/i,/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i,/^closed captions?$/i])){
+          setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);return true;
+        }
+        if(clickText([/^(settings|ajustes|configuración|configuracion|opciones)$/i,/settings|gear/i])){
+          setTimeout(function(){
+            if(clickText([/^subtítulos?$/i,/^subtitles?$/i,/^captions?$/i,/^cc$/i]))setTimeout(function(){var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}},450);
+            else {var opt=findSpanishOption();if(opt)try{opt.click();}catch(e){}}
+          },350);return true;
+        }
       }
       return false;
     }
@@ -323,13 +345,25 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
       var d=e.data; if(!d||typeof d!=='object') return;
       if(d.__xuperReport===1&&isTop&&typeof d.id==='string'){deliver(d.id.slice(0,32),d.data||{});return;}
       if(d.__xuper!==1) return;
-      var menuCommand=(d.cmd==='audioNext'||d.cmd==='subtitleNext');
+      var menuCommand=['audioNext','subtitleNext','audioSpanish','subtitleSpanish','subtitleOff'].indexOf(d.cmd)>=0;
       if(d.target!==ID && !(d.target==='*'&&menuCommand)) return;
       if(d.target==='*'&&menuCommand){
-        // El menú puede vivir en un iframe distinto del que contiene el <video>.
-        // Cada frame prueba el menú local y reenvía la orden a sus propios hijos;
-        // así también alcanzamos iframes anidados de origen cruzado.
-        try{clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle');}catch(menuErr){}
+        // Repartir a todos los frames: el menú de audio/CC puede vivir separado del <video>.
+        // En el frame que contiene vídeo usamos las pistas HTML5; en los demás buscamos el menú del proveedor.
+        try{
+          var local=best(), handled=false;
+          if(local&&(d.cmd==='audioNext'||d.cmd==='subtitleNext')){
+            var lv=local.v;
+            if(d.cmd==='audioNext'&&lv.audioTracks&&lv.audioTracks.length>1){var ac=-1;for(var ax=0;ax<lv.audioTracks.length;ax++)if(lv.audioTracks[ax].enabled)ac=ax;var an=(ac+1)%lv.audioTracks.length;for(var ay=0;ay<lv.audioTracks.length;ay++)lv.audioTracks[ay].enabled=ay===an;handled=true;}
+            if(d.cmd==='subtitleNext'&&lv.textTracks&&lv.textTracks.length){var sc=-1;for(var sx=0;sx<lv.textTracks.length;sx++)if(lv.textTracks[sx].mode==='showing')sc=sx;var sn=sc+1;if(sn>=lv.textTracks.length)sn=-1;for(var sy=0;sy<lv.textTracks.length;sy++)lv.textTracks[sy].mode=sy===sn?'showing':'disabled';handled=true;}
+          }
+          if(!handled){
+            if(d.cmd==='audioSpanish')clickPlayerMenu('audio','audioSpanish');
+            else if(d.cmd==='subtitleSpanish')clickPlayerMenu('subtitle','subtitleSpanish');
+            else if(d.cmd==='subtitleOff')clickPlayerMenu('subtitle','subtitleOff');
+            else clickPlayerMenu(d.cmd==='audioNext'?'audio':'subtitle',d.cmd);
+          }
+        }catch(menuErr){}
         try{for(var fi=0;fi<window.frames.length;fi++){try{window.frames[fi].postMessage(d,'*');}catch(fe){}}}catch(ferr){}
         return;
       }
@@ -346,11 +380,17 @@ private val XUPER_FRAME_AGENT_JS = """(function(){
         }else if(d.cmd==='audioNext'){
           var ats=v.audioTracks;
           if(ats&&ats.length>1){var current=-1;for(var ai=0;ai<ats.length;ai++)if(ats[ai].enabled)current=ai;var next=(current+1)%ats.length;for(var aj=0;aj<ats.length;aj++)ats[aj].enabled=(aj===next);}
-          else {clickPlayerMenu('audio');}
+          else {clickPlayerMenu('audio','audioNext');}
         }else if(d.cmd==='subtitleNext'){
           var tts=v.textTracks;
           if(tts&&tts.length){var current=-1;for(var ti=0;ti<tts.length;ti++)if(tts[ti].mode==='showing')current=ti;var next=current+1;if(next>=tts.length)next=-1;for(var tj=0;tj<tts.length;tj++)tts[tj].mode=(tj===next?'showing':'disabled');}
-          else {clickPlayerMenu('subtitle');}
+          else {clickPlayerMenu('subtitle','subtitleNext');}
+        }else if(d.cmd==='audioSpanish'){
+          clickPlayerMenu('audio','audioSpanish');
+        }else if(d.cmd==='subtitleSpanish'){
+          clickPlayerMenu('subtitle','subtitleSpanish');
+        }else if(d.cmd==='subtitleOff'){
+          clickPlayerMenu('subtitle','subtitleOff');
         }
       }catch(err){}
       setTimeout(function(){try{report(best());}catch(x){}},150);
@@ -1228,8 +1268,8 @@ private fun WebEmbedPlayer(
 
         // Los menús de VideoAPI pueden estar en otro frame y no necesitan que la sonda haya
         // encontrado un <video>. Mandar CC/Idioma a todos los frames aunque agentTarget sea null.
-        if ((isVideoApi || isVidzy) && (action == "audioNext" || action == "subtitleNext") && agentInstalled) {
-            val menuCmd = if (action == "audioNext") "audioNext" else "subtitleNext"
+        if ((isVideoApi || isVidzy) && action in setOf("audioNext", "subtitleNext", "audioSpanish", "subtitleSpanish", "subtitleOff") && agentInstalled) {
+            val menuCmd = action
             webView.evaluateJavascript(frameAgentCommandScript("*", menuCmd, 0)) { raw ->
                 if (raw != "true") android.util.Log.w("XuperAgent", "No se pudo repartir la orden de menú $menuCmd")
             }
@@ -1247,10 +1287,13 @@ private fun WebEmbedPlayer(
                 "mute" -> "mute" to 0
                 "audioNext" -> "audioNext" to 0
                 "subtitleNext" -> "subtitleNext" to 0
+                "audioSpanish" -> "audioSpanish" to 0
+                "subtitleSpanish" -> "subtitleSpanish" to 0
+                "subtitleOff" -> "subtitleOff" to 0
                 else -> null to 0
             }
             if (cmd != null) {
-                webView.evaluateJavascript(frameAgentCommandScript(if (cmd == "audioNext" || cmd == "subtitleNext") "*" else agentTargetNow, cmd, sec)) { raw ->
+                webView.evaluateJavascript(frameAgentCommandScript(if (cmd in setOf("audioNext", "subtitleNext", "audioSpanish", "subtitleSpanish", "subtitleOff")) "*" else agentTargetNow, cmd, sec)) { raw ->
                     if (raw != "true") android.util.Log.w("XuperAgent", "El frame principal no pudo repartir la orden $cmd")
                 }
             }
@@ -1585,6 +1628,13 @@ private fun WebEmbedPlayer(
                                 Array.from(document.querySelectorAll('iframe')).forEach(function(f){if(!f.getAttribute('title'))f.setAttribute('title','Reproductor de video');});
                               }catch(e){}
                             })();""", null)
+                            if (runCatching { WebSourceRegistry.isVidlyHost(URI(pageUrl.orEmpty()).host) }.getOrDefault(false)) {
+                                view?.requestFocus()
+                                view?.evaluateJavascript(VIDLY_REMOTE_FOCUS_JS, null)
+                                Handler(Looper.getMainLooper()).postDelayed({
+                                    if (webViewRef === view) view?.evaluateJavascript(VIDLY_REMOTE_FOCUS_JS, null)
+                                }, 1200L)
+                            }
                             if (nextEpisode != null) view?.evaluateJavascript("""(function(){
                               try{
                                 if(!window.__xuperEndDetector){
@@ -1814,7 +1864,7 @@ private fun WebEmbedPlayer(
                     }
                 }
 
-                if (isVideoApi || isVidzy) {
+                if (isVideoApi) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Button(
                             enabled = true,
@@ -1835,9 +1885,9 @@ private fun WebEmbedPlayer(
 
                 if (isVidzy) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "auto")); frameInteraction++ }) { Text("Idioma · Auto") }
-                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "vf")); frameInteraction++ }) { Text("Idioma · VF") }
-                        Button(onClick = { webViewRef?.loadUrl(vidzyLanguageUrl(url, "vostfr")); frameInteraction++ }) { Text("Idioma · VOSTFR") }
+                        Button(onClick = { runWebCommand("audioSpanish", frameSubtitleIndex, 0) }) { Text("Audio español") }
+                        Button(onClick = { runWebCommand("subtitleSpanish", frameSubtitleIndex, 0) }) { Text("Subtítulos español") }
+                        Button(onClick = { runWebCommand("subtitleOff", frameSubtitleIndex, 0) }) { Text("CC desactivados") }
                     }
                 }
 
