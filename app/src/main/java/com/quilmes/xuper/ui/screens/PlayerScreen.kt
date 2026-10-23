@@ -107,17 +107,6 @@ private fun videoApiEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): Str
     return "$base?${params.joinToString("&")}"
 }
 
-/** Vidly (botón "Prueba"): solo parámetros documentados — `autoplay` y `t` (posición inicial, en segundos). */
-private fun vidlyEmbedUrl(raw: String, resumePositionSeconds: Long = 0L): String {
-    val base = raw.substringBefore('?').trimEnd('/')
-    val existing = raw.substringAfter('?', "").split('&').filter(String::isNotBlank)
-        .filterNot { it.substringBefore('=').lowercase() in setOf("autoplay", "t") }
-    val params = mutableListOf("autoplay=1")
-    if (resumePositionSeconds > 0L) params += "t=$resumePositionSeconds"
-    params += existing
-    return "$base?${params.joinToString("&")}"
-}
-
 /** Keeps D-pad navigation from getting trapped inside a cross-origin iframe. */
 private class HubAwareWebView(
     context: Context,
@@ -414,8 +403,7 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
 ) {
-    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) ||
-        WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
+    val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         (streamUrl.startsWith("https://framextv.xyz/embed/") || streamUrl.startsWith("https://framextv.cc/embed/")) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
@@ -981,26 +969,26 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") || it == "framextv.cc" || it.endsWith(".framextv.cc") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
+    // Vidly (botón "Prueba"): se controla como Latino (agente de frames y hub solo si se confirma un <video>
+    // controlable), pero sin los extras propios de VideoAPI (parámetros de URL, idioma/CC, limpieza de bordes).
+    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
+    val isLatinoFamily = isVideoApi || isVidly
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
-    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
-    val hasCustomHub = isFrameXtv || isVideoApi || isVidly || isOkRu || isSimuladores
-    // Latino y Vidly (Prueba): su API pública no define comandos de control (Vidly solo emite eventos), así que el
-    // hub de Xuper aparece únicamente cuando el agente de frames confirma un <video> controlable.
-    val agentGatedHub = isVideoApi || isVidly
+    val hasCustomHub = isFrameXtv || isLatinoFamily || isOkRu || isSimuladores
     // Latino/VideoAPI: su API pública no documenta ningún canal de control (post_message/communication
     // figura como "bloqueado"). El hub de Xuper solo se ofrece cuando una sonda confirma que hay un
     // <video> accesible desde el documento; si no, el mando va directo al reproductor original.
     var latinoDomControl by remember(url) { mutableStateOf(false) }
     // Agente por frame (ver XUPER_FRAME_AGENT_JS): permite controlar el <video> aunque esté en un iframe de
     // otro origen. Latino, OK.ru y Simuladores lo usan; FrameXTV conserva su canal postMessage propio.
-    val useFrameAgent = isVideoApi || isVidly || isOkRu || isSimuladores
+    val useFrameAgent = isLatinoFamily || isOkRu || isSimuladores
     val agentSupported = remember { useFrameAgent && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false) }
     var agentInstalled by remember { mutableStateOf(false) }
     var agentTarget by remember { mutableStateOf<String?>(null) }
     val agentReports = remember { HashMap<String, AgentVideoReport>() }
     val agentActive = agentInstalled && agentTarget != null
-    val hubActive = hasCustomHub && (!agentGatedHub || latinoDomControl || agentActive)
+    val hubActive = hasCustomHub && (!isLatinoFamily || latinoDomControl || agentActive)
     var frameCurrentTime by remember(url) { mutableStateOf(savedResumePosition.toDouble()) }
     var frameDuration by remember(url) { mutableStateOf(0.0) }
     var nextEpisodeTriggered by remember(stableContentKey, nextEpisode?.id) { mutableStateOf(false) }
@@ -1016,7 +1004,7 @@ private fun WebEmbedPlayer(
     var frameServerIndex by remember(url, stableContentKey) { mutableStateOf(savedServerIndex) }
     var saveServerForContent by remember(url, stableContentKey) { mutableStateOf(playbackPrefs.getBoolean("web-save-server:$stableContentKey", true)) }
     // Latino arranca sin hub (solo aparece si la sonda confirma que puede controlarse).
-    var frameControlsVisible by remember(url) { mutableStateOf(!agentGatedHub) }
+    var frameControlsVisible by remember(url) { mutableStateOf(!isLatinoFamily) }
     var frameInteraction by remember(url) { mutableStateOf(0) }
     // A TV remote often sends only one key-down on long press. Keep seeking while held.
     var heldSeekAction by remember(url) { mutableStateOf<String?>(null) }
@@ -1115,9 +1103,9 @@ private fun WebEmbedPlayer(
     }
 
     // Latino: sonda periódica. Con 3 fallos seguidos se considera que ya no es controlable.
-    LaunchedEffect(agentGatedHub, pageFinished) {
+    LaunchedEffect(isLatinoFamily, pageFinished) {
         // Con el agente instalado la sonda del documento principal sobra (el agente también corre en él).
-        if (!agentGatedHub || !pageFinished || agentInstalled) return@LaunchedEffect
+        if (!isLatinoFamily || !pageFinished || agentInstalled) return@LaunchedEffect
         var misses = 0
         while (true) {
             webViewRef?.evaluateJavascript(videoApiCommandScript("probe", 0, 0)) { raw ->
@@ -1132,16 +1120,16 @@ private fun WebEmbedPlayer(
         }
     }
     // Latino sin control por DOM: el WebView conserva el foco para que el mando llegue al reproductor original.
-    LaunchedEffect(agentGatedHub, hubActive) {
-        if (agentGatedHub && !hubActive) {
+    LaunchedEffect(isLatinoFamily, hubActive) {
+        if (isLatinoFamily && !hubActive) {
             frameControlsVisible = false
             delay(150)
             runCatching { webViewRef?.requestFocus() }
         }
     }
     // Latino: cuando el video pasa a ser controlable el hub se muestra unos segundos (luego se oculta solo).
-    LaunchedEffect(agentGatedHub, hubActive) {
-        if (agentGatedHub && hubActive) frameControlsVisible = true
+    LaunchedEffect(isLatinoFamily, hubActive) {
+        if (isLatinoFamily && hubActive) frameControlsVisible = true
     }
     // El aviso de Latino se cuenta desde que la página terminó de cargar (antes podía vencer durante la carga).
     LaunchedEffect(url, pageFinished) {
@@ -1260,8 +1248,8 @@ private fun WebEmbedPlayer(
             return
         }
 
-        if (isVideoApi || isVidly) {
-            // Latino/VideoAPI y Vidly: solo control directo sobre el <video> accesible. NO se inyectan teclas:
+        if (isLatinoFamily) {
+            // Latino/VideoAPI (y Vidly): solo control directo sobre el <video> accesible. NO se inyectan teclas:
             // la API pública no define atajos y una flecha/Espacio inyectado puede terminar moviendo el
             // volumen o activando un control cualquiera del reproductor original.
             webView.evaluateJavascript(videoApiCommandScript(action, subtitleIndex, seconds)) { rawResult ->
@@ -1713,8 +1701,6 @@ private fun WebEmbedPlayer(
                     }
                     if (isFrameXtv) {
                         loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
-                    } else if (isVidly) {
-                        loadUrl(vidlyEmbedUrl(url, savedResumePosition))
                     } else if (isVideoApi) {
                         loadUrl(videoApiEmbedUrl(url, savedResumePosition))
                     } else if (isSimuladores || isOkRu) loadUrl(simuladoresAutoplayUrl(url)) else loadUrl(url)
@@ -1730,8 +1716,6 @@ private fun WebEmbedPlayer(
                     webView.tag = url
                     if (isFrameXtv) {
                         webView.loadDataWithBaseURL("https://xuper.local/", frameXtvWrapper(url, savedResumePosition, frameSubtitleIndex, frameServerIndex), "text/html", "UTF-8", null)
-                    } else if (isVidly) {
-                        webView.loadUrl(vidlyEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else if (isVideoApi) {
                         webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else if (isSimuladores || isOkRu) webView.loadUrl(simuladoresAutoplayUrl(url)) else webView.loadUrl(url)
@@ -1789,7 +1773,6 @@ private fun WebEmbedPlayer(
                         when {
                             isOkRu -> "OK.RU · controles"
                             isSimuladores -> "SIMULADORES · controles"
-                            isVidly -> "PRUEBA · controles"
                             else -> "LATINO · controles"
                         },
                         color = Color(0xFF65DCE8), fontSize = 13.sp, fontWeight = FontWeight.Bold

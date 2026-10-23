@@ -143,8 +143,7 @@ fun DetailScreen(
                             if (!hasTmdbSeasons) {
                                 Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
-                                // Reproductor de prueba (Vidly). Por ahora solo películas: la ruta de series no está confirmada.
-                                Button(onClick = { onPlay("vidly:${title.id}") }) { Text("▶  Prueba") }
+                                Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Prueba") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -216,6 +215,10 @@ fun DetailScreen(
                                     selectedEpisode = episode.number
                                     onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Latino") }
+                                Button(onClick = {
+                                    selectedEpisode = episode.number
+                                    onPlay("vidly:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  Prueba") }
                             }
                         }
                     }

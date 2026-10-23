@@ -510,6 +510,8 @@ class MainActivity : ComponentActivity() {
                                         okId?.let { "https://ok.ru/videoembed/$it" }
                                     } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
                                         WebSourceRegistry.videoApiUrl(nextKey)
+                                    } else if (runCatching { WebSourceRegistry.isVidlyHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
+                                        WebSourceRegistry.vidlyUrl(nextKey)
                                     } else {
                                         WebSourceRegistry.frameXtvUrl(nextKey)
                                     }

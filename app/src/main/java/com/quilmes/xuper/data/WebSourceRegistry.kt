@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes de reproducción separadas: FrameXTV para Reproducir, VideoAPI para Latino y Vidly para Prueba. */
+/** Fuentes de reproducción separadas: FrameXTV para Reproducir y VideoAPI para Latino. */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -37,27 +37,35 @@ object WebSourceRegistry {
         return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
     }
 
+    // ---- Vidly (botón "Prueba") ----
     private const val VIDLY_HOST = "vidly.pro"
 
-    /** true si [host] es de Vidly (reproductor del botón "Prueba"). */
     fun isVidlyHost(host: String?): Boolean {
         val h = host?.lowercase()?.trimEnd('.') ?: return false
         return h == VIDLY_HOST || h.endsWith(".$VIDLY_HOST")
     }
 
-    /**
-     * true si la URL es un embed de Vidly que esta app sabe armar. Vidly documenta (https://vidly.pro/#api)
-     * `GET /movie/{tmdb_id}`; las rutas de series y anime no se ven en esa página, así que todavía no se usan.
-     */
-    fun isVidlyEmbedUrl(url: String): Boolean = url.startsWith("https://$VIDLY_HOST/movie/")
+    /** true si la URL es un embed de Vidly (https://vidly.pro/movie/... o /tv/...). */
+    fun isVidlyEmbedUrl(url: String): Boolean =
+        url.startsWith("https://$VIDLY_HOST/movie/") || url.startsWith("https://$VIDLY_HOST/tv/")
 
     /**
-     * Embed de Vidly para películas (`/movie/{tmdb_id}`, sin API key). Devuelve null para todo lo demás (series
-     * incluidas) hasta confirmar su ruta en la documentación de Vidly.
+     * Embed de Vidly por id de TMDb: /movie/{id} y /tv/{id}/{temporada}/{episodio}.
+     * `autoplay=1` arranca solo (por defecto Vidly carga en pausa).
      */
     fun vidlyUrl(catalogId: String): String? {
-        val movie = Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId) ?: return null
-        return "https://$VIDLY_HOST/movie/${movie.groupValues[1]}?autoplay=1"
+        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        val base = when {
+            episode != null -> {
+                val (id, season, number) = episode.destructured
+                "https://$VIDLY_HOST/tv/$id/$season/$number"
+            }
+            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let { "https://$VIDLY_HOST/movie/${it.groupValues[1]}" }
+                // Serie sin episodio elegido: primer episodio.
+                ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let { "https://$VIDLY_HOST/tv/${it.groupValues[1]}/1/1" }
+                ?: return null
+        }
+        return "$base?autoplay=1"
     }
 
     /** URL candidata de FrameXTV para películas y episodios. */
