@@ -1,259 +1,74 @@
-# Xuper Quilmes TV — Android TV
+# Xuper — documentación única para futuras IAs
 
-## Botón "Prueba" (Vidly) — 23/10/2026
+> **Este archivo es la fuente de verdad del proyecto.** No reconstruir decisiones a partir de documentación antigua: los Markdown anteriores se consolidaron y eliminaron porque estaban desactualizados. Antes de cambiar código, inspeccionar el código actual y actualizar este README cuando cambie el comportamiento.
 
-Reproductor de prueba, al lado de **Latino** en la ficha de cada **película**: `▶  Prueba` → `https://vidly.pro/movie/{tmdb_id}?autoplay=1` (documentación: <https://vidly.pro/#api>, sin API key).
+## Objetivo del proyecto
 
-- **Qué usa de la API de Vidly:** solo parámetros documentados: `autoplay=1` y `t={segundos}` (retoma desde la posición guardada). Vidly además emite eventos `postMessage` (`VIDLY_PLAYER_EVENT`, `SYNC_HISTORY`) pensados para la página que lo incrusta; **no documenta ningún comando** para controlarlo desde afuera. La app lo carga como página principal del WebView, así que no hay página "padre" que reciba esos eventos.
-- **Control con el mando:** igual que Latino. El hub de Xuper (pausa, ±10 s con avance sostenido, silencio, barra de tiempo) aparece cuando el agente de frames detecta el `<video>`; hasta entonces el mando maneja el reproductor original de Vidly. Si el WebView no soporta el agente, queda siempre el reproductor original. No se inyectan teclas. Los botones de idioma/CC del hub son de VideoAPI y no se muestran en Prueba (Vidly trae sus propios menús).
-- **Series y anime: todavía no.** La página de Vidly solo muestra la ruta de películas; las rutas de series/anime están en pestañas que no pude leer. Hasta confirmarlas, los episodios no tienen botón Prueba y `WebSourceRegistry.vidlyUrl()` devuelve `null` para series.
-- **Archivos:** `data/WebSourceRegistry.kt` (`vidlyUrl`, `isVidlyHost`, `isVidlyEmbedUrl`), `ui/screens/DetailScreen.kt` (botón), `MainActivity.kt` (prefijo `vidly:`), `ui/screens/PlayerScreen.kt` (`isVidly`, `vidlyEmbedUrl`, hub con agente igual que Latino). Latino, FrameXTV, OK.ru, Simuladores, IPTV y la firma de `PlayerScreen` no cambian.
-- **Pendiente de probar en el televisor:** que Vidly cargue y reproduzca en el WebView, y si aparece el hub (`adb logcat -s XuperAgent:I` muestra si el agente vio un `<video>`).
-
-## Hub de reproductores web — iteración 2, según la prueba en el televisor (20/10/2026)
-
-Detalle en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen:
-
-- **Avance/retroceso sostenido (todos los reproductores con hub).** Mantener apretado ←/→ (hub oculto), `⏪/⏩` del mando, o OK sobre `↶ 10 s` / `10 s ↷` (hub visible) acumula un salto cada vez mayor (10 s → 20 → 30 → 60 → 120 → 180 s por paso) y lo aplica de una vez **al soltar**, con un indicador central (`⏩ +3:20 · 41:10`). Un toque sigue siendo 10 s. Constantes en `SeekRamp` (`WebHubKeyRouter.kt`).
-- **OK con el hub oculto pausa/reanuda** y vuelve a mostrar el hub (igual que el reproductor nativo).
-- **Latino, OK.ru y Simuladores: agente de control por frame.** El `<video>` de estos reproductores vive en un iframe de otro origen, al que `evaluateJavascript` no puede entrar y cuya API pública no define comandos (VideoAPI marca `post_message` como bloqueado). La app ahora inyecta un script propio en **todos** los frames con `WebViewCompat.addDocumentStartJavaScript` (dependencia nueva: `androidx.webkit:webkit:1.11.0`). Ese script ubica el `<video>` más grande de su frame, informa pausa/silencio/posición/duración y obedece pausa, ±N s y silencio. No envía teclas y no usa ninguna API de VideoAPI/ok.ru. Con el agente: el hub de Latino vuelve a aparecer (se muestra unos segundos al detectar el video), y los botones de Simuladores/OK.ru actúan sobre el video real. El estado "Pausar/Reproducir" y "Silencio" sale de lo que informa el video, no de una suposición.
-- **Límites que siguen:** necesita un *Android System WebView* con soporte `DOCUMENT_START_SCRIPT`; no ve un `<video>` en shadow DOM cerrado ni reproductores que no usen `<video>`; los subtítulos de Latino/OK.ru siguen sin control. Si el agente no está disponible, Latino vuelve a dejar el mando en el reproductor original y lo dice en pantalla; Simuladores/OK.ru usan el respaldo anterior (DOM + teclas, best-effort). FrameXTV mantiene su canal `postMessage` sin cambios (solo se suma el avance sostenido y OK = pausa).
-- **Logcat para diagnosticar:** `adb logcat -s XuperAgent:I XuperFrameXTV:I` (frames que informaron un `<video>` y cuál se eligió como principal).
-- **Pendiente de probar en el televisor** (nada de esto está verificado en dispositivo): hold de ←/→ en FrameXTV; hub de Latino y pausa; Simuladores (pausa, ±10 s, silencio, hold); que Gradle resuelva `androidx.webkit:webkit:1.11.0` con `compileSdk 34` (si falla, pasame el log).
-
-## Hub de reproductores web — control remoto, ocultamiento y subtítulos (20/10/2026)
-
-Detalle, hallazgos sobre las APIs y lo pendiente de probar en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen: un único manejador de teclas para el hub (nuevo `WebHubKeyRouter.kt`); con el hub oculto ↓ lo abre; con el hub visible las flechas se mueven dentro de él y el hub se oculta a los 5 s sin interacción; FrameXTV suma `◀ CC` / `CC · Pista N ▶` (la API no permite listar pistas ni nombres); Latino solo muestra el hub si el `<video>` es accesible, porque la API pública de VideoAPI no documenta ningún canal de control. **No se compiló** (sin Android SDK/Gradle en el entorno de edición): compilar y probar en el televisor. El `PlayerScreen.kt` de la raíz del repo es una copia vieja fuera de `src/`; la real está en `app/src/main/.../ui/screens/`.
-
-## Correcciones de listas argentinas y reproducción (19/10/2026)
-
-- Se vuelven a instalar desde `assets` y registrar en el catálogo las listas locales `iptv-extra.m3u`, `lista-extendida.m3u`, `mi-lista.m3u` y `peliculas-dominio-publico.m3u`, además de `argentina-extra.m3u` y `vod-original.m3u`.
-- La sección **Argentina** ya no desaparece cuando la lista pública `iptv-org` falla: se muestra igualmente con las señales locales de `argentina-extra.m3u`.
-- La actualización de listas se serializa para evitar dos descargas completas simultáneas cuando se abre una ficha y se pulsa **Buscar fuente**.
-- Las fichas sin enlace muestran **Buscar fuente** y permiten reintentar las listas; si se encuentra una coincidencia, se abre el reproductor.
-- Los enlaces se prueban primero como medios directos. Si un enlace sin extensión reconocida falla y parece una página web, Xuper intenta resolver la página; los enlaces directos HLS/DASH con parámetros conservan su tipo de medio.
-
-**Límite de verificación:** este entorno no tiene Android SDK ni Gradle instalados, así que no pude generar un APK real. La comprobación de sintaxis de Kotlin no mostró errores de análisis, pero la compilación definitiva debe ejecutarse en GitHub Actions o Android Studio. Que una URL se prepare no garantiza que el servidor permita reproducirla ni que el contenido corresponda al título esperado.
-
-
-## Cambios de esta entrega (por qué no se veía nada + reproductor tipo streaming grande)
-
-**1. "No pude ver ninguna película o serie" — causa real, confirmada en el código (no era la API de TMDB).**
-`HomeScreen.kt` (`buildHomeRows`) seguía agregando las filas de TMDB (`Tendencias · Películas`,
-`Películas populares`, etc.) a Inicio, a pesar de que el README de la entrega anterior decía que
-ya se habían sacado — el código y el README habían quedado desincronizados. El problema de fondo:
-esas fichas de TMDB traen **metadata de estrenos actuales** (Tendencias, Populares — lo que esté
-sonando ahora en streaming), mientras que nuestras listas M3U son **películas de dominio público
-viejas** (Night of the Living Dead, etc.) y un puñado de episodios sueltos. Un estreno de TMDB
-prácticamente nunca coincide por nombre con una película de dominio público de los años 40-60, así
-que el botón de reproducción quedaba deshabilitado ("Video no disponible") para casi todo lo que se
-mostraba en Inicio. Encima, el banner destacado (lo primero que se ve y lo más tentador de tocar)
-elegía preferentemente una ficha de TMDB — es decir, el usuario tocaba literalmente lo primero que
-veía y nunca andaba.
-
-Arreglo:
-- `HomeScreen.kt`: Inicio ya NO muestra filas de TMDB. Solo canales de Argentina + lo que
-  realmente viene de las listas M3U con video real (`streamUrl` no vacío). El catálogo de TMDB
-  sigue estando en el buscador (ahí sí tiene sentido: el usuario ya entiende que puede no tener
-  fuente, lo usa para descubrir, no es lo primero que ve).
-- El banner destacado ahora elige siempre un título reproducible de verdad.
-- `PosterCard.kt`: las fichas sin fuente de video (las que vas a seguir viendo en el buscador)
-  ahora muestran una etiqueta "SIN VIDEO" en la esquina, para que se note *antes* de tocarlas.
-
-
-
-**2. Reproductor: la flecha derecha no adelantaba — causa real.**
-Izquierda/derecha solo hacían seek cuando los controles estaban OCULTOS (`if (!showControls)`).
-Pero los controles arrancan VISIBLES por defecto, con foco en "Pausar" — así que la primera vez
-que el usuario tocaba derecha, en vez de adelantar, el foco intentaba moverse al botón "10 s ↷"
-(dos toques de derecha + OK para que de verdad avance). Se sentía roto.
-
-Arreglo — reproductor rehecho más parecido a Disney+/Netflix en las funciones que importan:
-- **Izquierda/derecha ahora SIEMPRE adelantan o atrasan 10 s**, se vean los controles o no y esté
-  el foco donde esté. No hace falta "entrar" a ningún botón primero.
-- Aparece un indicador central ("⏪ 10 s" / "10 s ⏩") que confirma el salto y se desvanece solo,
-  como en cualquier reproductor de streaming grande.
-- Como izquierda/derecha ahora están reservadas para el salto, la fila de botones (Reproducir/
-  Pausar, Cambiar reproductor, Audio, Subtítulos) se navega con **arriba/abajo** en vez de
-  izquierda/derecha — determinístico, sin depender de que Compose "adivine" el próximo foco.
-- Se sacaron los botones de "↶ 10 s" / "10 s ↷" (quedaban redundantes con el salto directo).
-- Soporte para teclas físicas de medios del control remoto si las tiene: play/pausa, rebobinar,
-  adelantar (además de lo anterior).
-- CH+/CH- siguen funcionando igual que antes (zapping de canales de Argentina).
+Xuper es una aplicación Android orientada a TV, desarrollada principalmente en Kotlin y Jetpack Compose. Usa TMDB para catálogo, fichas, temporadas, episodios y metadatos; integra reproducción web dentro de la app y también contempla fuentes IPTV/M3U. La experiencia debe funcionar con mando a distancia, mantener el vídeo dentro de Xuper cuando la fuente lo permita y mostrar errores reales en lugar de quedarse cargando indefinidamente.
 
-No es una copia literal del código de Disney+ (aunque si queres puedo hacer una) — es una implementación propia con el mismo comportamiento.
+## Orden y nombres oficiales de reproductores
 
+En la ficha de películas y en cada episodio, las opciones oficiales son, en este orden:
 
+1. **Reproducir** — Vidly (`vidly.pro`). Es el reproductor principal y reemplaza el antiguo botón llamado **Prueba**.
+2. **Latino** — VideoAPI (`videoapi.la`; para rutas de anime también puede usarse `videoapp.zip`).
+3. **Alternativo** — FrameXTV (`framextv.cc` / `framextv.xyz`). Antes se llamaba **Reproducir**; ahora es la tercera opción.
 
-**4. Verificación.** Este entorno sigue sin Android SDK/Gradle para compilar el APK real. Pasé los
-archivos tocados por el compilador de Kotlin (sin classpath de Android, por lo que no resuelve
-`androidx.*`/`media3.*` — eso da "unresolved reference" esperable) y comparé contra un archivo que
-no toqué (`DetailScreen.kt`) para confirmar que no hay errores de sintaxis *nuevos*: el nivel de
-ruido es idéntico en ambos. No reemplaza una compilación real en Android Studio o GitHub Actions.
+**Prueba 2 / Vidzy (`vidzy.org`) está eliminado** como opción de producto. No volver a agregarlo salvo pedido explícito del usuario. Las rutas, funciones y referencias a ese reproductor deben permanecer eliminadas.
 
-**Nota de seguridad:** el `local.properties` de este ZIP sigue trayendo la clave de TMDB en texto
-plano, y ya pasó por dos chats distintos. No es grave (es una API key gratuita de solo lectura),
-pero si en algún momento vas a subir el repo a algún lado público, regenerala antes en
-themoviedb.org.
+Los identificadores internos de petición que usa `DetailScreen` y resuelve `MainActivity` son:
 
----
+- `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
+- `videoapi:<id>` → `WebSourceRegistry.videoApiUrl(...)` → botón **Latino**.
+- `framextv:<id>` → `WebSourceRegistry.frameXtvUrl(...)` → botón **Alternativo**.
+- `simuladores:<id>|s<temporada>|e<episodio>` → ruta especial de Los Simuladores mediante OK.ru.
 
-## Cambios de esta entrega (arranque sin tildarse + Inicio con contenido)
+Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. Para películas se usa `tmdb-movie-<id>`. Las URLs de Vidly siguen `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`, con `autoplay=1`. VideoAPI y FrameXTV construyen sus URLs desde el ID de catálogo.
 
-**1. Se tildaba al abrir la app — causa real y arreglo.**
-La entrega anterior movió a un hilo de fondo el cálculo de las filas de Inicio, pero eso no era lo que
-congelaba la app. Había dos problemas más graves:
-- `MainActivity` hacía `lifecycleScope.launch { repository.refresh(); ...; setCatalogCategories(categories) }`.
-  `lifecycleScope` corre en el **hilo principal** (`Dispatchers.Main`), así que `setCatalogCategories()` se
-  ejecutaba ahí. Esa función vinculaba **cada una de las ~400 fichas de TMDB** con las listas M3U
-  (`resolveCatalogTitle` -> `findPlayableMovie` / `findFirstPlayableEpisode`), y cada vinculación recorría
-  **todas** las entradas M3U compilando ~10 expresiones regulares nuevas por entrada. Eran cientos de millones de
-  operaciones en el hilo de la interfaz, justo cuando terminaba de cargar: de ahí el congelamiento. El buscador
-  tenía el mismo problema (`registerCatalogTitles` en el hilo principal en cada búsqueda), y también abrir
-  una ficha de serie (`findPlayableEpisode` por cada episodio visible) y abrir el reproductor
-  (`getNextEpisode` / `getPlayableAlternatives`).
-- Las `Regex(...)` se compilaban de nuevo en cada llamada (clasificación, episodios, normalización, orden de
-  Argentina, etc.).
+## Archivos principales
 
-Arreglo (`data/M3uRepository.kt` reescrito, `MainActivity.kt`, `SearchScreen.kt`, `LibraryScreen.kt`):
-- Todas las `Regex` son constantes compiladas una sola vez.
-- Cada entrada M3U guarda precalculados su nombre normalizado (`norm`), su clave de título (`key`, con palabras ya
-  separadas) y su info de episodio (`episode`), una sola vez y en segundo plano.
-- Las fichas de TMDB **ya no se vinculan todas juntas**: se vinculan de forma perezosa (`find()` / `search()`), solo las
-  que se abren o aparecen en una búsqueda, con resultado cacheado.
-- `setCatalogCategories()` y `registerCatalogTitles()` ahora se llaman desde `Dispatchers.Default`, nunca desde el hilo principal.
-- La copia de archivos de `assets` y la limpieza de cachés (antes en `onCreate`, en el hilo principal) pasaron a `Dispatchers.IO`.
-- El catálogo TMDB se carga **en paralelo** con las listas M3U (sale del caché de disco casi al instante), así Inicio
-  muestra contenido enseguida en vez de esperar a que bajen las 6 listas.
-- El caché de disco de las 6 listas se publica **una sola vez** (antes 6 reconstrucciones seguidas).
-- La ruta del reproductor ya no escribe `SharedPreferences` ni recalcula colas/alternativas en cada recomposición.
-- Pestaña ARGENTINA: el nombre de cada canal se normaliza una sola vez (antes se normalizaba dentro del comparador del `sortedWith`).
+- `app/src/main/java/com/quilmes/xuper/MainActivity.kt`: navegación principal, resolución de solicitudes de reproducción y flujo del siguiente episodio.
+- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI y FrameXTV; también marca anime para elegir la ruta de VideoAPI.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, Alternativo.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`: reproductor web embebido, mandos/teclas, controles superpuestos, filtrado de solicitudes y tratamiento de errores.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/WebHubKeyRouter.kt`: enrutamiento de teclas del mando para controles web.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/XuperWebRequestFilter.kt` y `XuperBraveAdblock.kt`: filtrado de solicitudes y protección frente a publicidad/redirecciones.
+- `app/src/main/java/com/quilmes/xuper/data/TmdbCatalogService.kt`: metadatos TMDB de catálogo, temporadas, episodios y títulos relacionados.
+- `app/src/main/java/com/quilmes/xuper/data/M3uRepository.kt` e `IptvAccountTextParser.kt`: soporte de listas/fuentes IPTV y parsing de cuentas M3U.
 
-**2. Inicio ya no está vacío.** El filtro de VOD buscaba secciones llamadas `"vod general"`, `"agrupado por contenido"` y
-`"peliculas"`, que **no existen** con las fuentes actuales (`Películas gratis`, `Series gratis`, `VOD original`), por eso
-Inicio solo mostraba Argentina. Ahora `buildHomeRows` (`HomeScreen.kt`) arma:
-1. Argentina (canales), Gran Hermano y Deportes Argentina.
-2. **Algo de TMDB** (solo 4 filas de 14 títulos): Tendencias · Películas, Tendencias · Series, Películas populares, Series populares.
-   El resto del catálogo (plataformas, etc.) sigue estando solo en el buscador.
-3. Las primeras `homeRows` filas de cada fuente VOD (`Películas gratis` 2, `Series gratis` 1, `VOD original` 3), sin repetir URLs.
-El banner destacado usa la imagen de fondo (`backdropUrl`) de la primera ficha de TMDB.
+Hay un `PlayerScreen.kt` adicional en la raíz que es una copia antigua/no autoritativa. **Editar siempre** `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`.
 
-**3. Verificación.** Este entorno no tiene Android SDK ni Gradle: el código **no se compiló**. Se pasó por el compilador de
-Kotlin 1.9.24 solo para detectar errores de **sintaxis** (no hay ninguno); los errores de tipos/librerías no se pueden
-verificar acá. Si GitHub Actions marca un error, mandá el log.
+## Reproducción y mando a distancia
 
-**Regla para el futuro:** nada que recorra las listas completas ni compile `Regex` puede correr en el hilo principal ni dentro
-de una composición. `lifecycleScope.launch { }` y `LaunchedEffect { }` corren en Main por defecto: usar `withContext(Dispatchers.Default/IO)`.
+- La reproducción debe permanecer dentro de Xuper cuando sea posible; no abrir una aplicación externa ni dejar una página del proveedor navegable como experiencia final si se puede controlar el reproductor embebido.
+- Vidly usa una navegación de mando específica y el agente JavaScript de control por frames cuando WebView lo permite. Se intentan habilitar controles HTML5 y enviar comandos de reproducción/pausa al vídeo accesible. No asumir que un proveedor expone subtítulos/audio si la propia página no ofrece esas pistas.
+- VideoAPI/Latino utiliza el agente de frames y controles superpuestos propios cuando están disponibles.
+- FrameXTV tiene lógica específica de controles, progreso, subtítulos y selección de servidor; no asumir que sus APIs internas son iguales a las de los otros proveedores.
+- No interceptar indiscriminadamente OK/flechas: puede impedir navegar los controles originales del proveedor. Al modificar el mando, razonar por proveedor y verificar los eventos recibidos.
+- Los errores de carga o reproducción deben ser visibles y útiles. Evitar estados de carga infinitos, cierres de la app y falsos mensajes de éxito.
+- El siguiente episodio debe conservar el proveedor actual: VideoAPI continúa con VideoAPI, Vidly con Vidly y FrameXTV con FrameXTV, salvo que el usuario pida otro comportamiento.
 
----
+## Catálogo, episodios y contenido especial
 
-## Cambios de esta entrega (sobre la del fix de freeze)
+- TMDB es la fuente de metadatos; los IDs TMDB no deben confundirse con IDs IMDb.
+- Las series muestran temporadas y episodios con nombre y sinopsis, y el usuario selecciona el episodio que desea reproducir.
+- Los Simuladores usa una ruta especial y enlaces de vídeo de OK.ru, y debe conservar su comportamiento particular.
+- Xuper también contiene secciones de anime, contenido adulto, biblioteca/favoritos, búsqueda y fuentes IPTV. No eliminar esas funciones como parte de un cambio de reproductores.
+- Stremio ya no es parte de la ruta principal de reproducción deseada por el usuario. No reintroducir integración de Stremio como solución de reproducción sin una petición explícita.
 
-**1. Inicio ya no muestra el catálogo completo de TMDB — eso queda para el buscador.**
-Antes `HomeScreen` agregaba, después de los canales y el VOD real, las filas editoriales de TMDB (tendencias, populares, plataformas). Se sacaron: Inicio ahora solo muestra Argentina (con Gran Hermano y Deportes separados) y las películas/series que vienen de las listas M3U activas (`buildHomeRows` en `HomeScreen.kt` ya no agrega `tmdbRows`). El catálogo de TMDB se sigue pudiendo buscar por nombre desde el buscador, sin cambios ahí.
+## Entorno técnico y validación
 
-**2. "Breaking Bad" y "Prison Break" desaparecieron — causa real, no es un bug de interfaz.**
-Se verificaron las listas M3U activas (`vod-original.m3u`, `movies.m3u` y `series.m3u` de `onlinem3u/publicdomainm3u`, y `mickflix/Mickflix-IPTV`): ninguna contiene esos dos títulos ahora mismo. Lo más probable es que antes coincidían con una URL de las listas `jromero88/iptv` que se sacaron en la versión anterior por devolver 404. Además, el código descartaba por completo cualquier ficha de TMDB sin un enlace reproducible encontrado — ni siquiera se podía buscar. Se corrigió eso (`registerCatalogTitles` y `setCatalogCategories` en `M3uRepository.kt` ya no filtran por `streamUrl` no vacío), así que ahora **sí van a aparecer en el buscador** con su ficha completa, pero con el botón de reproducción deshabilitado ("Video no disponible") porque ninguna lista activa tiene un link real para ellos. Si el usuario consigue una URL real para alguno, se puede sumar como entrada nueva a `vod-original.m3u`.
+- Android/Kotlin, Jetpack Compose (incluyendo componentes TV), WebView/AndroidX WebKit y Media3/ExoPlayer para las rutas que correspondan.
+- El módulo de aplicación está en `app/`; el archivo Gradle de app es `app/build.gradle.kts`.
+- En el historial del proyecto se usó `gradle assembleRelease --no-daemon` para validar builds. Verificar siempre la configuración actual antes de tocar versiones o DSL de Gradle.
+- Tras cambios de fuentes, buscar referencias residuales a `vidzy`, `Prueba 2` y nombres viejos de botones; revisar tanto `DetailScreen.kt` como `MainActivity.kt` y `WebSourceRegistry.kt`.
+- Para cambios de JS incrustado en Kotlin, extraer el script y ejecutar una comprobación de sintaxis JS cuando sea posible. Para un ZIP de entrega, comprobar su integridad con `unzip -t`.
+- No declarar que el APK compila o que un mando funciona físicamente si no se verificó en el dispositivo. Diferenciar pruebas estáticas/simuladas de pruebas reales.
 
-**3. Gran Hermano desapareció — mismo tipo de causa, no hay fuente activa.**
-Se revisó `argentina-extra.m3u` (local) y `Mickflix-IPTV/playlist.m3u` (remota): ninguna de las dos trae un canal de Gran Hermano en vivo ahora mismo. El motor que arma la sección Argentina sí busca canales de Gran Hermano en **todas** las fuentes activas automáticamente (no hace falta tocar código para que aparezca si alguna lista llega a tenerlo), pero hoy ninguna lo tiene. No se agregó ninguna URL de Gran Hermano a mano porque no hay una fuente propia verificada para eso — si el usuario consigue un link que funcione, se agrega a `argentina-extra.m3u` y aparece solo.
+## Reglas de trabajo para futuras IAs
 
-**4. Reproductor: ergonomía del control remoto.**
-- Antes, cuando los controles del reproductor se ocultaban (a los 6 s) y volvían a aparecer con una tecla, el foco quedaba "perdido" fuera de los botones — por eso hacía falta tocar abajo dos veces y después OK para recién poder navegar entre Pausar/Avanzar/Subtítulos. Se corrigió: ahora el botón de Pausar/Reproducir se vuelve a enfocar automáticamente cada vez que los controles aparecen (`PlayerScreen.kt`), así que con un solo toque ya queda un botón enfocado y navegable.
-- CH+/CH- (`KEYCODE_CHANNEL_UP`/`KEYCODE_CHANNEL_DOWN`) estaban completamente sin implementar en el reproductor — los parámetros `channelQueue`/`onChangeChannel` llegaban desde `MainActivity` pero nunca se usaban. Se implementaron: cambian de canal dentro de la cola de la sección actual (la misma que ya arma `M3uRepository.getChannelQueue`) y dan la vuelta en bucle (del último canal pasa al primero y viceversa), funcionan se vean o no los controles en pantalla, igual que en cualquier TV.
-
-## Fix de esta entrega: la app se congelaba al abrir
-
-**Síntoma reportado:** al abrir la app, la interfaz se ponía muy lenta o directamente se congelaba (no respondía al control remoto) durante varios segundos.
-
-**Causa encontrada:** `HomeScreen` y `LibraryScreen` calculaban las filas de contenido (`rows`) dentro de un bloque `remember(sections) { ... }`, que se ejecuta de forma síncrona en el hilo principal durante la composición. Ese cálculo recorre **todas** las listas cargadas (Argentina, películas gratis, series gratis, Mickflix, VOD original — varios miles de ítems en conjunto), con filtros, `distinctBy`, `HashSet` y ordenamientos. El problema es que `M3uRepository.refresh()` publica el `StateFlow` de `sections` **una vez por cada una de las 6 fuentes** a medida que van terminando de descargar y parsear, así que ese recorrido pesado se repetía varias veces seguidas, en el hilo principal, justo en los primeros segundos después de abrir la app — exactamente el síntoma descripto.
-
-**Arreglo aplicado:** se movió ese cálculo fuera de la composición. Ahora `rows` es un `State` que se actualiza mediante un `LaunchedEffect(sections)` que ejecuta el cálculo con `withContext(Dispatchers.Default)` (hilo de fondo para trabajo de CPU) y solo publica el resultado cuando termina. La lógica es exactamente la misma que antes (no se cambió ningún criterio de orden ni de agrupación), solo se movió de hilo. Afecta:
-- `ui/screens/HomeScreen.kt` → función nueva `buildHomeRows(sections)`.
-- `ui/screens/LibraryScreen.kt` → función nueva `buildLibraryRows(...)` (mismo problema al entrar a Argentina / Mi lista / Continuar viendo).
-
-**No verificado por compilación real:** este entorno no tiene Android SDK/Gradle instalado, así que el cambio se revisó a mano (sintaxis, imports, balance de llaves) pero no se compiló. Si GitHub Actions marca error, mandalo para corregirlo.
-
-**Si después de este cambio la app sigue lenta/inestable:** lo más probable es que el cuello de botella esté en otro lado (por ejemplo, descargas de red muy lentas de alguna de las 6 listas M3U, o la cantidad de imágenes que Coil intenta cargar a la vez en las filas). Avisá qué se siente distinto (¿lenta todo el tiempo? ¿se congela en un momento puntual? ¿al reproducir?) para poder enfocar el diagnóstico ahí.
-
-
-App nativa en Kotlin + Jetpack Compose for TV + Media3/ExoPlayer. La experiencia visual ahora está organizada como una app de streaming: portada destacada, pósteres, búsqueda, fichas de contenido, temporadas/episodios, Mi lista y Continuar viendo. Se conserva la paleta azul noche/celeste original de Xuper.
-
-## Cambios de esta versión
-
-- **Barra lateral:** se conserva sin cambios: Inicio, Buscar, **ARGENTINA**, Mi lista, Continuar viendo y Perfil. Las tres listas M3U nuevas se integran al catálogo y al buscador, sin agregar accesos a la barra lateral.
-- **Inicio:** primera fila con los canales argentinos (respetando el orden curado), segunda fila Gran Hermano, tercera fila Deportes Argentina. A continuación aparecen las filas de películas y series reproducibles de las tres listas M3U, y después las tendencias, películas/series populares y filas de plataformas que TMDB devuelve para Argentina.
-- **Argentina y control remoto:** la sección conserva todos los canales argentinos configurados. Los nueve canales prioritarios quedan primero, después todos los streams de Gran Hermano y luego el resto. CH+/CH− recorre esa cola en bucle sin salir de Argentina.
-- **TMDB:** carga imágenes, pósteres, fondos, año, puntuación y sinopsis. El buscador consulta TMDB además de los canales y títulos locales. El catálogo se cachea localmente durante 18 horas para reducir llamadas y carga.
-- **Series:** las fichas de series TMDB cargan temporadas y episodios reales desde la API; permite cambiar de temporada y seleccionar episodios. Si una lista M3U contiene un episodio con serie, temporada y número coincidentes, aparece un botón para reproducir su URL real. Se muestran sinopsis, imágenes de episodios y duración cuando TMDB la ofrece.
-- **Reproductor estilo Disney+:** se reemplazó el controlador visual anterior por una interfaz propia con reproducción/pausa, saltos de 10 segundos, barra de progreso, tiempo restante, selección de audio/subtítulos cuando el stream ofrece esas pistas y controles que se ocultan solos. El botón “Cambiar reproductor” recorre enlaces alternativos; si una fuente falla, intenta automáticamente otra URL coincidente. En series, “Episodio siguiente” aparece abajo a la derecha cerca del final cuando se detecta el siguiente episodio reproducible. CH+/CH− sigue cambiando canales argentinos.
-- **Mi lista / Continuar viendo:** conserva favoritos e historial reciente local.
-- **Fuentes M3U activas:** Argentina (`iptv-org`), `argentina-extra.m3u`, películas de dominio público (`onlinem3u/publicdomainm3u/movies.m3u`), una lista de episodios de dominio público (`series.m3u`) y canales Mickflix. Las antiguas rutas `jromero88/iptv` devolvían 404 al verificarlas el 19/10/2026, por eso se reemplazaron por listas VOD que sí responden. El catálogo TMDB solo muestra títulos con un enlace real encontrado en las listas; TMDB aporta metadatos, nunca URLs de video. Mickflix se clasifica como televisión en vivo, no como VOD, y no agrega entradas a la barra lateral.
-
-## Importante: catálogo no significa video disponible
-
-TMDB es una base de datos de metadatos, imágenes, temporadas y episodios. **No entrega los videos de las películas ni de las series.** Por eso los títulos obtenidos solo de TMDB muestran fichas, temporadas y episodios, pero el botón de reproducción aparece deshabilitado mientras no exista una fuente de video real y autorizada. El buscador usa la búsqueda de TMDB y cada fila de plataforma muestra resultados que la API identifica para la región; no equivale a descargar el catálogo completo de cada servicio ni garantiza disponibilidad actual. No hay una API pública que permita copiar todo el catálogo interno de Netflix.
-
-Para reproducir contenido VOD real, la app usa las URLs que vienen en las listas M3U. Si una película del catálogo TMDB coincide por título con una película reproducible de las listas, se conecta esa URL manteniendo la ficha visual de TMDB. En las series, la ficha intenta vincular cada episodio por título, temporada y número. Si no hay coincidencia, el título conserva su ficha y no se inventa un enlace. Los enlaces de terceros pueden estar caídos, requerir autorización o dejar de funcionar. El reproductor prueba automáticamente otra URL coincidente cuando falla una fuente y ofrece “Cambiar reproductor” para recorrer manualmente las alternativas. Si un enlace abre una película incorrecta sin generar error, el usuario puede cambiar de fuente manualmente. La categoría `movies.m3u` puede incluir canales lineales de películas, no necesariamente películas bajo demanda.
-
-## Configuración de TMDB
-
-La clave ya está en el `local.properties` de este ZIP. Ese archivo está excluido de Git. En GitHub Actions configurá el secreto `TMDB_API_KEY` en **Settings → Secrets and variables → Actions**. No publiques este ZIP, el APK ni la clave: la clave se compila dentro de la app personal. Como fue compartida en el chat, lo más seguro es regenerarla antes de distribuir el proyecto.
-
-## Compilar
-
-1. Abrí la carpeta `proj` en Android Studio.
-2. Esperá a que Gradle sincronice el proyecto.
-3. Usá **Build → Build APK(s)**, o subí el proyecto a GitHub y ejecutá el workflow **Build APK**.
-4. Instalá el APK en Android TV y probá navegación con el control remoto.
-
-El entorno de edición no dispone de Gradle/Android SDK para compilar el APK completo; esta entrega fue revisada estáticamente, pero necesita una compilación en Android Studio o GitHub Actions para confirmar que no queden errores de compilación.
-
-## Archivos clave
-
-```text
-app/src/main/java/com/quilmes/xuper/
-  MainActivity.kt                      # navegación, fuentes activas y reproductor
-  data/M3uRepository.kt                # canales argentinos, caché, búsqueda y cola de episodios
-  data/TmdbCatalogService.kt           # filas TMDB, búsqueda, temporadas, episodios y títulos relacionados
-  data/TmdbMetadataService.kt          # metadata de títulos existentes de listas M3U
-  ui/screens/MainScreen.kt             # navegación lateral original y perfil
-  ui/screens/HomeScreen.kt             # portada y filas horizontales
-  ui/screens/DetailScreen.kt           # ficha, temporadas y selector de episodios
-  ui/screens/SearchScreen.kt           # búsqueda de TMDB y canales
-  ui/screens/PlayerScreen.kt           # reproductor, subtítulos/audio si la fuente los ofrece y CH+/CH-
-```
-
-## Prompt de continuidad para la próxima IA
-
-Continuá el proyecto Xuper Quilmes TV a partir del código de esta carpeta. El usuario quiere una experiencia tipo Netflix, pero con la paleta azul noche/celeste original, no roja. La barra lateral conserva únicamente Inicio, Buscar, ARGENTINA, Mi lista, Continuar viendo y Perfil. Las listas M3U de películas/series de dominio público y `https://raw.githubusercontent.com/mickflix/Mickflix-IPTV/master/playlist.m3u` alimentan las coincidencias y alternativas de reproducción sin agregar entradas laterales. No restaures rutas antiguas `jromero88/iptv` sin verificar que ya no devuelvan 404. CH+/CH− debe seguir cambiando canales dentro de la cola argentina; flecha arriba debe despejar el reproductor. No agregues otras listas internacionales salvo que el usuario lo pida.
-
-**Inicio NO debe mostrar filas de TMDB (Tendencias/Populares/plataformas) — esto ya se corrigió una vez porque se había desincronizado el README del código real; si lo tocás, verificá `HomeScreen.kt` directamente, no confíes en versiones viejas de este documento.** Inicio muestra, en este orden: canales argentinos, Gran Hermano, Deportes Argentina, y el VOD reproducible de las listas M3U (streamUrl no vacío). El catálogo completo de TMDB (incluidas Tendencias/Populares) solo aparece en el buscador, donde el usuario ya espera que algunas fichas no tengan video — esas se marcan con una etiqueta "SIN VIDEO" en `PosterCard.kt`. El banner destacado de Inicio siempre tiene que elegir un título con `streamUrl` real, nunca una ficha de TMDB sin resolver.
-
-TMDB aporta imágenes, sinopsis, búsqueda, temporadas y episodios, pero no streams. Si una película TMDB coincide por título con una URL M3U, conectar la URL a su ficha manteniendo metadatos TMDB. Para enlaces duplicados del mismo contenido, exponer alternativas con un botón “Cambiar reproductor” y avanzar automáticamente a la siguiente URL coincidente cuando ExoPlayer reporte un error. Para series, intentar vincular episodios por nombre de serie, temporada y número. No inventar URLs: si no hay coincidencia, dejar reproducción deshabilitada. Un error de reproducción no debe borrar permanentemente una entrada; mostrar reintento. Las temporadas/episodios se pueden seleccionar en la ficha; el reproductor usa Media3 y solo puede mostrar subtítulos/audio/episodio siguiente si el stream real ofrece esas pistas o URLs.
-
-**Reproductor:** izquierda/derecha están reservadas GLOBALMENTE para adelantar/atrasar 10 s (siempre, se vean los controles o no); no las uses para navegar foco entre botones. La fila de botones (`PlayerScreen.kt`) navega con arriba/abajo mediante `focusedButton` + `buttonFocusRequesters`, por índice explícito, no por búsqueda geométrica de foco. Si agregás o sacás botones de esa fila, actualizá `buttonCount` y la lista de `FocusRequester`.
-
-REGLAS DE RENDIMIENTO (obligatorias): no ejecutes en el hilo principal nada que recorra las listas completas, ni compiles `Regex` dentro de funciones que se llaman por cada entrada; usá las constantes y los campos precalculados de `Entry` (`norm`, `key`, `episode`) en `M3uRepository.kt`. `lifecycleScope.launch` y `LaunchedEffect` corren en Main: mové el trabajo pesado con `withContext(Dispatchers.Default/IO)`. Las fichas TMDB se vinculan a un stream de forma perezosa (`find()`/`search()`); no las vincules en bloque.
-
-Antes de cambiar, revisá el código real. Después de cada iteración actualizá este README, verificá referencias/imports y, si el entorno no tiene Android SDK/Gradle, decilo con claridad y no afirmes que compiló. Conservá el keystore local existente para que las actualizaciones firmadas puedan instalarse sobre el APK anterior; nunca publiques sus credenciales. Entregá un ZIP completo cuando sea posible.
-
-
-## Controles del reproductor Android TV
-
-- Flechas izquierda/derecha: salto de 10 segundos; al mantener pulsado, acelera progresivamente a 20, 30 y hasta 60 segundos por repetición del mando.
-- Arriba/abajo: muestra el panel y permite recorrer sus botones; Back oculta el panel y, si ya estaba oculto, sale del reproductor.
-- OK/Select: activa el botón enfocado; si el panel está oculto, reproduce/pausa y lo vuelve a mostrar.
-- Play/Pause y Stop: alterna reproducción/pausa; Stop detiene y vuelve a la pantalla anterior.
-- CH+/CH-: cambia de canal en la cola disponible.
-- Volumen +/− y Mute: controla el volumen multimedia del dispositivo.
-- El panel se oculta tras 5 segundos sin interacción.
-
-
-## Carga del catálogo y reproducción
-
-- Al iniciar, la app prepara archivos locales y carga el catálogo visual de TMDB; no descarga todas las listas M3U.
-- Las listas IPTV se consultan al abrir una ficha de contenido o al entrar en Argentina.
-- Cada fuente publica sus resultados cuando termina; si aparece una coincidencia, se puede reproducir sin esperar al resto.
-- Las fuentes restantes continúan cargando en segundo plano y sus coincidencias se agregan como alternativas de reproducción.
-- El catálogo visual usa caché de TMDB cuando está disponible. La disponibilidad real de una película depende de que alguna fuente IPTV tenga una coincidencia reproducible.
+1. Leer este README y luego inspeccionar el código actual antes de actuar; este archivo orienta, pero el código manda.
+2. Mantener los cambios acotados, explicar qué archivos se tocaron y por qué, y no revertir funciones no relacionadas.
+3. No volver a crear documentación Markdown paralela. Actualizar este `README.md` único cuando cambien decisiones, arquitectura o comportamiento.
+4. No afirmar que una función está arreglada por haber cambiado código: indicar con precisión qué se verificó y qué queda por probar en una TV/dispositivo.
+5. El usuario prefiere cambios concretos y comprobables, y trabaja pasando ZIPs entre distintas IAs. Cuando corresponda, entregar un ZIP del proyecto limpio sin `.git` ni archivos temporales.

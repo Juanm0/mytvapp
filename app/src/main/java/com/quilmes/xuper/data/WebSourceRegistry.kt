@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes de reproducción separadas: FrameXTV para Reproducir y VideoAPI para Latino. */
+/** Fuentes de reproducción: Vidly (Reproducir), VideoAPI (Latino) y FrameXTV (Alternativo). */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -37,7 +37,7 @@ object WebSourceRegistry {
         return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
     }
 
-    // ---- Vidly (botón "Prueba") ----
+    // ---- Vidly (reproductor principal: botón "Reproducir") ----
     private const val VIDLY_HOST = "vidly.pro"
 
     fun isVidlyHost(host: String?): Boolean {
@@ -68,36 +68,6 @@ object WebSourceRegistry {
         return "$base?autoplay=1"
     }
 
-
-    // ---- Vidzy (botón "Prueba 2") ----
-    private const val VIDZY_HOST = "vidzy.org"
-
-    fun isVidzyHost(host: String?): Boolean {
-        val h = host?.lowercase()?.trimEnd('.') ?: return false
-        return h == VIDZY_HOST || h.endsWith(".$VIDZY_HOST")
-    }
-
-    fun isVidzyEmbedUrl(url: String): Boolean =
-        url.startsWith("https://$VIDZY_HOST/movie/") || url.startsWith("https://$VIDZY_HOST/serie/")
-
-    /**
-     * Embed de Vidzy por TMDb. La API documenta /movie/{id}, /serie/{id}/{season}/{episode},
-     * autoplay, autonext y color. El idioma de audio/subtítulos se selecciona desde el menú del player;
-     * no se inventa un parámetro de idioma que la referencia pública no documenta.
-     */
-    fun vidzyUrl(catalogId: String): String? {
-        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
-        val base = when {
-            episode != null -> {
-                val (id, season, number) = episode.destructured
-                "https://$VIDZY_HOST/serie/$id/$season/$number"
-            }
-            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let { "https://$VIDZY_HOST/movie/${it.groupValues[1]}" }
-                ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let { "https://$VIDZY_HOST/serie/${it.groupValues[1]}/1/1" }
-                ?: return null
-        }
-        return "$base?autoplay=1&autonext=1&color=2b7fff"
-    }
 
     /** URL candidata de FrameXTV para películas y episodios. */
     fun frameXtvUrl(catalogId: String): String? {

@@ -141,10 +141,9 @@ fun DetailScreen(
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
                             if (!hasTmdbSeasons) {
-                                Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Reproducir") }
+                                Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
-                                Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Prueba") }
-                                Button(onClick = { onPlay("vidzy:$videoApiPlaybackId") }) { Text("▶  Prueba 2") }
+                                Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Alternativo") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -208,9 +207,9 @@ fun DetailScreen(
                                 if (isLosSimuladores) {
                                     onPlay("simuladores:${title.id}|s$seasonNumber|e${episode.number}")
                                 } else {
-                                    onPlay("framextv:${title.id}|s$seasonNumber|e${episode.number}")
+                                    onPlay("vidly:${title.id}|s$seasonNumber|e${episode.number}")
                                 }
-                            }) { Text(if (isLosSimuladores) "▶  Reproducir episodio" else "▶  Reproducir episodio") }
+                            }) { Text("▶  Reproducir episodio") }
                             if (!isLosSimuladores) {
                                 Button(onClick = {
                                     selectedEpisode = episode.number
@@ -218,12 +217,8 @@ fun DetailScreen(
                                 }) { Text("▶  Latino") }
                                 Button(onClick = {
                                     selectedEpisode = episode.number
-                                    onPlay("vidly:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                                }) { Text("▶  Prueba") }
-                                Button(onClick = {
-                                    selectedEpisode = episode.number
-                                    onPlay("vidzy:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                                }) { Text("▶  Prueba 2") }
+                                    onPlay("framextv:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  Alternativo") }
                             }
                         }
                     }

@@ -1205,7 +1205,7 @@ private fun WebEmbedPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     val isFrameXtv = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "framextv.xyz" || it.endsWith(".framextv.xyz") || it == "framextv.cc" || it.endsWith(".framextv.cc") } == true }.getOrDefault(false) }
     val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
-    // Vidly (botón "Prueba"): reproductor "de fábrica", SIN hub ni agente propios. El control remoto lo maneja
+    // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
