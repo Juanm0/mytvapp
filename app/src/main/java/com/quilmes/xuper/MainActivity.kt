@@ -356,9 +356,9 @@ class MainActivity : ComponentActivity() {
                                         if (tmdbId == null) null else if (episodeMatch != null) {
                                             val season = episodeMatch.groupValues[2].toIntOrNull() ?: 1
                                             val episode = episodeMatch.groupValues[3].toIntOrNull() ?: 1
-                                            "https://vidly.pro/tv/$tmdbId/$season/$episode?theme=slate&audioPicker=1"
+                                            "https://vidly.pro/tv/$tmdbId/$season/$episode?theme=aurora&audioPicker=1"
                                         } else {
-                                            "https://vidly.pro/movie/$tmdbId?theme=slate&audioPicker=1"
+                                            "https://vidly.pro/movie/$tmdbId?theme=aurora&audioPicker=1"
                                         }
                                     }
                                     useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
