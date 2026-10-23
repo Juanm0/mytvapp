@@ -1,5 +1,15 @@
 # Xuper Quilmes TV — Android TV
 
+## Botón "Prueba" (Vidly) — 23/10/2026
+
+Reproductor de prueba, al lado de **Latino** en la ficha de cada **película**: `▶  Prueba` → `https://vidly.pro/movie/{tmdb_id}?autoplay=1` (documentación: <https://vidly.pro/#api>, sin API key).
+
+- **Qué usa de la API de Vidly:** solo parámetros documentados: `autoplay=1` y `t={segundos}` (retoma desde la posición guardada). Vidly además emite eventos `postMessage` (`VIDLY_PLAYER_EVENT`, `SYNC_HISTORY`) pensados para la página que lo incrusta; **no documenta ningún comando** para controlarlo desde afuera. La app lo carga como página principal del WebView, así que no hay página "padre" que reciba esos eventos.
+- **Control con el mando:** igual que Latino. El hub de Xuper (pausa, ±10 s con avance sostenido, silencio, barra de tiempo) aparece cuando el agente de frames detecta el `<video>`; hasta entonces el mando maneja el reproductor original de Vidly. Si el WebView no soporta el agente, queda siempre el reproductor original. No se inyectan teclas. Los botones de idioma/CC del hub son de VideoAPI y no se muestran en Prueba (Vidly trae sus propios menús).
+- **Series y anime: todavía no.** La página de Vidly solo muestra la ruta de películas; las rutas de series/anime están en pestañas que no pude leer. Hasta confirmarlas, los episodios no tienen botón Prueba y `WebSourceRegistry.vidlyUrl()` devuelve `null` para series.
+- **Archivos:** `data/WebSourceRegistry.kt` (`vidlyUrl`, `isVidlyHost`, `isVidlyEmbedUrl`), `ui/screens/DetailScreen.kt` (botón), `MainActivity.kt` (prefijo `vidly:`), `ui/screens/PlayerScreen.kt` (`isVidly`, `vidlyEmbedUrl`, hub con agente igual que Latino). Latino, FrameXTV, OK.ru, Simuladores, IPTV y la firma de `PlayerScreen` no cambian.
+- **Pendiente de probar en el televisor:** que Vidly cargue y reproduzca en el WebView, y si aparece el hub (`adb logcat -s XuperAgent:I` muestra si el agente vio un `<video>`).
+
 ## Hub de reproductores web — iteración 2, según la prueba en el televisor (20/10/2026)
 
 Detalle en `CAMBIOS-HUB-REPRODUCTORES.md`. Resumen:

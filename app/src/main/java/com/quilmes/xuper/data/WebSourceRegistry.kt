@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes de reproducción separadas: FrameXTV para Reproducir y VideoAPI para Latino. */
+/** Fuentes de reproducción separadas: FrameXTV para Reproducir, VideoAPI para Latino y Vidly para Prueba. */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -35,6 +35,29 @@ object WebSourceRegistry {
             "https://videoapi.la/e/movie/${title.groupValues[1]}"
         }
         return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
+    }
+
+    private const val VIDLY_HOST = "vidly.pro"
+
+    /** true si [host] es de Vidly (reproductor del botón "Prueba"). */
+    fun isVidlyHost(host: String?): Boolean {
+        val h = host?.lowercase()?.trimEnd('.') ?: return false
+        return h == VIDLY_HOST || h.endsWith(".$VIDLY_HOST")
+    }
+
+    /**
+     * true si la URL es un embed de Vidly que esta app sabe armar. Vidly documenta (https://vidly.pro/#api)
+     * `GET /movie/{tmdb_id}`; las rutas de series y anime no se ven en esa página, así que todavía no se usan.
+     */
+    fun isVidlyEmbedUrl(url: String): Boolean = url.startsWith("https://$VIDLY_HOST/movie/")
+
+    /**
+     * Embed de Vidly para películas (`/movie/{tmdb_id}`, sin API key). Devuelve null para todo lo demás (series
+     * incluidas) hasta confirmar su ruta en la documentación de Vidly.
+     */
+    fun vidlyUrl(catalogId: String): String? {
+        val movie = Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId) ?: return null
+        return "https://$VIDLY_HOST/movie/${movie.groupValues[1]}?autoplay=1"
     }
 
     /** URL candidata de FrameXTV para películas y episodios. */
