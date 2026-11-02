@@ -170,7 +170,7 @@ class PlayerLabEngine(context: Context) {
         val th = handle ?: throw PlayerLabException("No se pudo agregar el torrent al motor de descarga.")
 
         th.setFlags(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-        val priorities = Array(info.numFiles()) { if (it == fileIndex) Priority.NORMAL else Priority.IGNORE }
+        val priorities = Array(info.numFiles()) { if (it == fileIndex) Priority.DEFAULT else Priority.IGNORE }
         th.prioritizeFiles(priorities)
         th.resume()
 
