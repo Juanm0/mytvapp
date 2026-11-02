@@ -150,5 +150,13 @@ dependencies {
     // frames del WebView (también iframes de otro origen) para Latino, OK.ru y Simuladores.
     implementation("androidx.webkit:webkit:1.11.0")
 
+    // PlayerLab: torrent en streaming (libtorrent). La librería Java + los binarios nativos de cada ABI de Android
+    // (TV boxes: arm de 32 bits y arm64; x86/x86_64 para emulador).
+    implementation("org.libtorrent4j:libtorrent4j:2.1.0-31")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-31")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-31")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86:2.1.0-31")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.1.0-31")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -137,13 +137,13 @@ fun DetailScreen(
                             val videoApiPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
                                 "${title.id}|s${selectedSeason}|e${selectedEpisode}"
                             } else title.id
-                            val frameXtvPlaybackId = if (hasTmdbSeasons && selectedSeason != null && selectedEpisode != null) {
-                                "${title.id}|s${selectedSeason}|e${selectedEpisode}"
-                            } else title.id
                             if (!hasTmdbSeasons) {
                                 Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
-                                Button(onClick = { onPlay("framextv:$frameXtvPlaybackId") }) { Text("▶  Alternativo") }
+                                // PlayerLab (torrent vía YTS): solo películas con ID de TMDB.
+                                if (Regex("^tmdb-movie-\\d+$").matches(title.id)) {
+                                    Button(onClick = { onPlay("playerlab:${title.id}") }) { Text("▶  PlayerLab") }
+                                }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -215,10 +215,6 @@ fun DetailScreen(
                                     selectedEpisode = episode.number
                                     onPlay("videoapi:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Latino") }
-                                Button(onClick = {
-                                    selectedEpisode = episode.number
-                                    onPlay("framextv:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                                }) { Text("▶  Alternativo") }
                             }
                         }
                     }

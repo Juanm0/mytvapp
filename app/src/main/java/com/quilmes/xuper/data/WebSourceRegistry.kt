@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes de reproducción: Vidly (Reproducir), VideoAPI (Latino) y FrameXTV (Alternativo). */
+/** Fuentes web de reproducción: Vidly (Reproducir) y VideoAPI (Latino). PlayerLab (torrent) vive en PlayerLabRepository. */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -66,23 +66,5 @@ object WebSourceRegistry {
                 ?: return null
         }
         return "$base?autoplay=1"
-    }
-
-
-    /** URL candidata de FrameXTV para películas y episodios. */
-    fun frameXtvUrl(catalogId: String): String? {
-        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
-        if (episode != null) {
-            val (id, season, number) = episode.destructured
-            return "https://framextv.cc/embed/$id/$season/$number"
-        }
-        Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
-            return "https://framextv.cc/embed/${it.groupValues[1]}"
-        }
-        // Si se pide una serie sin episodio elegido, abre el primer episodio como valor inicial.
-        Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
-            return "https://framextv.cc/embed/${it.groupValues[1]}/1/1"
-        }
-        return null
     }
 }

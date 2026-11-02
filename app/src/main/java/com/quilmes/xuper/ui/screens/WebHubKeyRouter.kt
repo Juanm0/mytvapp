@@ -1,7 +1,7 @@
 package com.quilmes.xuper.ui.screens
 
 /**
- * Lógica de teclas del hub de los reproductores web (FrameXTV, Latino/VideoAPI, OK.ru, Simuladores).
+ * Lógica de teclas del hub de los reproductores web (Latino/VideoAPI, OK.ru, Simuladores).
  *
  * Es Kotlin puro, sin dependencias de Android, a propósito: así la decisión "qué hace cada tecla
  * según el estado del hub" vive en UN solo lugar (antes había dos copias, una en Compose y otra en
@@ -69,24 +69,6 @@ internal object WebHubKeyRouter {
 }
 
 /**
- * Selector de subtítulos de FrameXTV.
- *
- * FrameXTV solo acepta `setSubtitle {index}` y no documenta ningún comando para listar las pistas ni
- * sus nombres, así que NO sabemos cuántas hay: se recorre un rango fijo de índices y la interfaz solo
- * puede mostrar "Pista N". Si el reproductor llegara a informar las pistas, [SLOTS] debería reemplazarse
- * por el número real.
- */
-internal object FrameXtvSubtitleSlots {
-    const val SLOTS = 32
-
-    /** Avanza y da la vuelta al llegar al final. */
-    fun next(current: Int): Int = (current.coerceIn(0, SLOTS - 1) + 1) % SLOTS
-
-    /** Retrocede sin dar la vuelta: desde la pista 1 no salta a un índice casi seguro inexistente. */
-    fun previous(current: Int): Int = (current.coerceIn(0, SLOTS - 1) - 1).coerceAtLeast(0)
-}
-
-/**
  * Avance/retroceso acelerado al mantener apretada una tecla (estilo plataforma de streaming).
  *
  * En vez de mandarle al reproductor un seek cada pocos milisegundos (no sabemos cómo reacciona cada
@@ -122,17 +104,6 @@ internal object SeekRamp {
     }
 
     fun clampPending(seconds: Int): Int = seconds.coerceIn(-MAX_PENDING_SECONDS, MAX_PENDING_SECONDS)
-
-    /**
-     * Limita un salto a lo que cabe entre el inicio y el final cuando se conocen posición y duración
-     * (FrameXTV informa ambas por `frameXTV:timeupdate`). Sin duración conocida no se toca.
-     */
-    fun clampDelta(delta: Int, currentSeconds: Double, durationSeconds: Double): Int {
-        if (durationSeconds <= 0.0 || currentSeconds.isNaN() || durationSeconds.isNaN()) return delta
-        val minDelta = -currentSeconds.toInt().coerceAtLeast(0)
-        val maxDelta = (durationSeconds - currentSeconds - 2.0).toInt().coerceAtLeast(0)
-        return delta.coerceIn(minDelta, maxDelta)
-    }
 
     /** "45 s", "1:30", "1:02:03" (siempre en positivo; el signo lo pone quien lo muestra). */
     fun formatDelta(seconds: Int): String {
