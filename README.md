@@ -23,6 +23,8 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 
 **Prueba 2 / Vidzy (`vidzy.org`) está eliminado** como opción de producto. No volver a agregarlo salvo pedido explícito del usuario. Las rutas, funciones y referencias a ese reproductor deben permanecer eliminadas.
 
+**CineSrc (`cinesrc.st`) NO es un botón de la ficha normal**: vive solo en la categoría **LAB** (ver sección "LAB"). El orden oficial de botones Reproducir, Latino, Alternativo, Prueba no cambia.
+
 Los identificadores internos de petición que usa `DetailScreen` y resuelve `MainActivity` son:
 
 - `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
@@ -42,6 +44,7 @@ Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. 
 - `app/src/main/java/com/quilmes/xuper/ui/screens/WebHubKeyRouter.kt`: enrutamiento de teclas del mando para controles web.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/XuperWebRequestFilter.kt` y `XuperBraveAdblock.kt`: filtrado de solicitudes y protección frente a publicidad/redirecciones.
 - `app/src/main/java/com/quilmes/xuper/data/TmdbCatalogService.kt`: metadatos TMDB de catálogo, temporadas, episodios y títulos relacionados.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/LabScreen.kt`: categoría **LAB** (catálogo TMDB completo + reproducción con CineSrc). Ver sección "LAB".
 - `app/src/main/java/com/quilmes/xuper/data/M3uRepository.kt` e `IptvAccountTextParser.kt`: soporte de listas/fuentes IPTV y parsing de cuentas M3U.
 
 La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se eliminó (tenía código de FrameXTV). **Editar siempre** `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`.
@@ -77,6 +80,20 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 - **Despeje de pantalla (solo Prueba)**: tras la carga con `skin=netflix` la transmisión dejó de trabarse, pero la pantalla no se despejaba del todo. Causas probables (hipótesis, sin verificar qué elemento exacto quedaba a la vista): (1) el "mouse" falso que Xuper pone sobre el reproductor para despertar los controles (`HubAwareWebView.nudgeHover` + `wake()` del script) nunca se retiraba, y muchos reproductores no ocultan los controles mientras creen que el mouse está encima; (2) el recuadro amarillo del script solo se borraba si el elemento marcado dejaba de verse. Solución, activa **solo en Prueba** para no mover Vidly/VidLux: `HubAwareWebView(hoverExitDelayMs = 4000)` manda un `ACTION_HOVER_EXIT` 4 s después de la última tecla, y el script recibe `window.__xuperIdleHideMs=4000` (`remoteNavScript` en `WebEmbedPlayer`), con lo que a los 4 s sin teclas borra el recuadro y dispara `pointerout/mouseout/pointerleave/mouseleave` sobre el reproductor. Probado con jsdom (sin reposo: nada cambia; con reposo: recuadro oculto y eventos de salida enviados); **falta verificar en la TV**. Si todavía queda algo a la vista, hay que identificar qué elemento es (control del skin, título, recuadro) antes de seguir.
 - El siguiente episodio conserva Prueba (`MainActivity`).
 - **Latino no se tocó**: sigue con su hub.
+
+## LAB (categoría nueva: catálogo TMDB + CineSrc)
+
+Pedido del usuario (03/11/2026): llevar a Xuper lo que se probó en `cinesrc-lab` como una categoría aparte, **sin tocar lo que ya existía**, para personalizarla después y, a futuro, dejarla como principal.
+
+- **Qué es**: ítem **LAB** (🧪) de la barra lateral, justo debajo de ANIME. Pantalla independiente (igual que ANIME: no usa el repositorio M3U ni `DetailScreen`).
+- **Catálogo**: `LabScreen.kt` → `TmdbCatalogService.loadLabPage(endpoint, page, forcedKind)`. Pestañas (`LAB_TABS`): Tendencias, Películas, Series, Top películas, Top series, En cartelera, Al aire. Búsqueda (`search/multi`, descarta personas) y botón **CARGAR MÁS** (paginación de TMDB, hasta 500 páginas). Siempre sin contenido adulto. Idioma `es-AR`. La clave es la misma de siempre (`BuildConfig.TMDB_API_KEY`, secret `TMDB_API_KEY` del workflow).
+- **Ficha**: póster, sinopsis, ★ y año. Películas: botón **▶ REPRODUCIR**. Series: temporadas (sin la 0 si hay otras) y lista de episodios con imagen y sinopsis; cada episodio abre CineSrc.
+- **Reproducción (Paso A del lab)**: `WebSourceRegistry.cineSrcUrl(catalogId)` → `https://cinesrc.st/embed/movie/{tmdbId}` o `https://cinesrc.st/embed/tv/{tmdbId}?s={T}&e={E}`. `MainActivity.onPlayLab` navega al mismo `external-player` que Vidly/Latino/Alternativo y `PlayerScreen` lo reconoce (`isCineSrcEmbedUrl`) y lo abre en `WebEmbedPlayer`. Se trata como Vidly: navegación de mando de Xuper (`XUPER_REMOTE_NAV_JS`, `consumeDpad`) vía `isCineSrc` (incluido en `isVidly`), más el script de arranque automático con sonido (`XUPER_VIDLUX_AUTOPLAY_JS`, que es genérico: toca el Play real o llama a `play()`).
+- **Siguiente episodio**: conserva CineSrc (rama `isCineSrcHost` en `MainActivity`). "Continuar viendo" guarda los títulos de LAB igual que los demás; al abrirlos desde ahí se llega a la ficha normal.
+- **Al volver del reproductor** LAB recuerda listado, pestaña, búsqueda, serie y temporada (`LabSession`, solo en memoria).
+- **Parámetros de CineSrc**: no se agregó ninguno (el lab no documenta ninguno). Si se consigue la documentación (autoplay, idioma, servidor), agregarlos en `cineSrcUrl`.
+- **NO portado todavía (Paso B)**: el truco de `cinesrc-lab` v0.3.0 (navegador oculto que atrapa el `.m3u8` y reproduce con nuestro reproductor). En Android sería un `WebView` oculto con `shouldInterceptRequest` que pase la URL (más `Referer`/`Origin` de CineSrc) a Media3 vía `PlayerScreen(streamHeaders = ...)`, con caída al embed si no aparece. Hacerlo solo si el embed en WebView no alcanza.
+- **Verificado**: sintaxis Kotlin de los archivos tocados (tree-sitter). **No verificado**: compilación del APK, la API de TMDB desde la app, que `cinesrc.st` cargue/reproduzca en el WebView de la TV, que el mando llegue a sus controles ni que el filtro de anuncios (`XuperBraveAdblock`) no bloquee algún recurso suyo. Probar en la TV y, si algo falla, mirar `adb logcat -s XuperVidLux XuperWebView`.
 
 ## Catálogo, episodios y contenido especial
 

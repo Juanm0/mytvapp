@@ -845,7 +845,7 @@ fun PlayerScreen(
     directOnly: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
-        WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) ||
+        WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
 
@@ -1384,7 +1384,10 @@ private fun WebEmbedPlayer(
     val isVideoApi = remember(url) { !isPrueba && runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
     // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
-    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
+    // CineSrc (categoría LAB) usa el mismo esquema web que Vidly: navegación de mando de Xuper sobre la página
+    // y consumo de las flechas (consumeDpad). Se agrupa acá para no duplicar ramas en el resto del reproductor.
+    val isCineSrc = remember(url) { runCatching { WebSourceRegistry.isCineSrcHost(URI(url).host) }.getOrDefault(false) }
+    val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) || isCineSrc }
     val isVidLux = remember(url) { runCatching { WebSourceRegistry.isVidLuxHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
     val remoteNavSupported = remember {
@@ -1982,7 +1985,7 @@ private fun WebEmbedPlayer(
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
                             if ((isVidly || isVidLux || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(remoteNavScript, null)
-                            if (isVidLux && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
+                            if ((isVidLux || isCineSrc) && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -2041,7 +2044,7 @@ private fun WebEmbedPlayer(
                             .onFailure { android.util.Log.w("XuperRemoteNav", "No se pudo instalar la navegación con el mando", it) }
                     }
                     // VidLux: arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDLUX_AUTOPLAY_JS).
-                    if (isVidLux && remoteNavSupported) {
+                    if ((isVidLux || isCineSrc) && remoteNavSupported) {
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDLUX_AUTOPLAY_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperVidLux", "No se pudo instalar el arranque automático", it) }
                     }

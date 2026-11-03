@@ -366,6 +366,14 @@ class MainActivity : ComponentActivity() {
                                 val key = "jkanime-$encodedEpisode"
                                 navController.navigate("external-player/${Uri.encode(title)}/$encodedStream/$key")
                             },
+                            // LAB: catálogo TMDB + CineSrc. Usa el mismo "external-player" que Vidly/Latino/Alternativo.
+                            onPlayLab = { labTitle, catalogId ->
+                                val labUrl = WebSourceRegistry.cineSrcUrl(catalogId)
+                                if (labUrl != null) {
+                                    val encodedLabUrl = Base64.encodeToString(labUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                    navController.navigate("external-player/${Uri.encode(labTitle)}/$encodedLabUrl/${Uri.encode(catalogId)}")
+                                }
+                            },
                         )
                     }
                     composable(
@@ -563,6 +571,9 @@ class MainActivity : ComponentActivity() {
                                         WebSourceRegistry.videoApiUrl(nextKey)
                                     } else if (runCatching { WebSourceRegistry.isVidlyHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
                                         WebSourceRegistry.vidlyUrl(nextKey)
+                                    } else if (runCatching { WebSourceRegistry.isCineSrcHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
+                                        // LAB: el siguiente episodio conserva CineSrc.
+                                        WebSourceRegistry.cineSrcUrl(nextKey)
                                     } else {
                                         null
                                     }

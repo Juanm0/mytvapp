@@ -227,6 +227,38 @@ class TmdbCatalogService(private val cacheDir: File) {
         )
     }
 
+    /**
+     * Categoría LAB: una página de cualquier listado de TMDB (tendencias, populares, búsqueda…).
+     * [endpoint] es la ruta de TMDB sin la clave (puede traer `?query=...`). Sin contenido adulto, siempre.
+     * [forcedKind] se usa cuando el listado es de un solo tipo (movie/popular → película); si es null se lee
+     * `media_type` de cada resultado (trending/all, search/multi) y se descartan las personas.
+     * Lanza excepción con un mensaje legible si falta la clave o TMDB no responde (la pantalla lo muestra).
+     */
+    suspend fun loadLabPage(endpoint: String, page: Int, forcedKind: ContentKind?): LabPage = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) error("Falta la clave de TMDB: cargá el secret TMDB_API_KEY en GitHub (Settings → Secrets → Actions) y volvé a compilar.")
+        val safePage = page.coerceIn(1, 500)
+        val separator = if (endpoint.contains('?')) "&" else "?"
+        val json = request("$endpoint${separator}page=$safePage", includeAdult = false)
+        val results = json.optJSONArray("results") ?: JSONArray()
+        val items = buildList {
+            for (i in 0 until results.length()) {
+                val item = results.optJSONObject(i) ?: continue
+                if (item.optBoolean("adult", false)) continue
+                val kind = forcedKind ?: when (item.optString("media_type")) {
+                    "movie" -> ContentKind.MOVIE
+                    "tv" -> ContentKind.SERIES
+                    else -> continue
+                }
+                runCatching { titleFromJson(item, kind) }.getOrNull()?.let { add(it) }
+            }
+        }.distinctBy { it.id }
+        LabPage(
+            items = items,
+            page = json.optInt("page", safePage),
+            totalPages = json.optInt("total_pages", safePage).coerceIn(1, 500),
+        )
+    }
+
     /** Recomendaciones y títulos similares de TMDB para mostrar debajo de la ficha. */
     suspend fun loadRelatedTitles(titleId: String): List<Title> = withContext(Dispatchers.IO) {
         if (apiKey.isBlank()) return@withContext emptyList()
@@ -413,3 +445,6 @@ class TmdbCatalogService(private val cacheDir: File) {
 
 data class TmdbSeason(val number: Int, val name: String, val episodeCount: Int, val overview: String, val posterUrl: String)
 data class TmdbEpisode(val number: Int, val name: String, val overview: String, val stillUrl: String, val runtime: Int?)
+
+/** Una página del catálogo de la categoría LAB. */
+data class LabPage(val items: List<Title>, val page: Int, val totalPages: Int)

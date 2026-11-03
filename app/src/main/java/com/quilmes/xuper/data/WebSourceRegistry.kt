@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo) y Prueba (VideoAPI con navegación de fábrica). */
+/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo), Prueba (VideoAPI con navegación de fábrica) y CineSrc (solo categoría LAB). */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -76,6 +76,33 @@ object WebSourceRegistry {
         }
         return "$base?autoplay=1"
     }
+    // ---- CineSrc (categoría LAB) ----
+    // Embed por ID de TMDB: /embed/movie/{id} y /embed/tv/{id}?s={temporada}&e={episodio} (ver cinesrc-lab).
+    // Se usa solo desde la sección LAB; los botones de la ficha normal no lo muestran.
+    private const val CINESRC_HOST = "cinesrc.st"
+
+    fun isCineSrcHost(host: String?): Boolean {
+        val h = host?.lowercase()?.trimEnd('.') ?: return false
+        return h == CINESRC_HOST || h.endsWith(".$CINESRC_HOST")
+    }
+
+    /** true si la URL es un embed de CineSrc (https://cinesrc.st/embed/movie/... o /embed/tv/...). */
+    fun isCineSrcEmbedUrl(url: String): Boolean =
+        url.startsWith("https://$CINESRC_HOST/embed/movie/") || url.startsWith("https://$CINESRC_HOST/embed/tv/")
+
+    /** Embed de CineSrc por ID de catálogo (`tmdb-movie-<id>` o `tmdb-tv-<id>|s<T>|e<E>`). Serie sin episodio: T1 E1. */
+    fun cineSrcUrl(catalogId: String): String? {
+        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        return when {
+            episode != null -> {
+                val (id, season, number) = episode.destructured
+                "https://$CINESRC_HOST/embed/tv/$id?s=$season&e=$number"
+            }
+            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let { "https://$CINESRC_HOST/embed/movie/${it.groupValues[1]}" }
+                ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let { "https://$CINESRC_HOST/embed/tv/${it.groupValues[1]}?s=1&e=1" }
+        }
+    }
+
     // ---- VidLux (reproductor alternativo embebido) ----
     private const val VIDLUX_HOST = "vidlux.xyz"
     // Dominios alternativos que publica VidLux (mismo servicio); solo se usan para reconocer el host.

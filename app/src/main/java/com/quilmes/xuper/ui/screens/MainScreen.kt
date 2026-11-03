@@ -50,6 +50,8 @@ fun MainScreen(
     jkanimeService: JkanimeService,
     onPlayAnimeEpisode: (title: String, streamUrl: String, episodeUrl: String) -> Unit,
     adultAnimeService: JkanimeService? = null,
+    /** LAB: (nombre a mostrar, ID de catálogo `tmdb-movie-<id>` / `tmdb-tv-<id>|s<T>|e<E>`). */
+    onPlayLab: (title: String, catalogId: String) -> Unit = { _, _ -> },
 ) {
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
@@ -61,6 +63,7 @@ fun MainScreen(
         add(NavItem("search", "⌕", "BUSCAR"))
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
         add(NavItem("anime", "🎌", "ANIME"))
+        add(NavItem("lab", "🧪", "LAB"))
         add(NavItem("favorites", "♡", "MI LISTA"))
         add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
         if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
@@ -77,6 +80,7 @@ fun MainScreen(
                 "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
                 "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
+                "lab" -> LabScreen(catalogService = catalogService, onPlay = onPlayLab)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
                 "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
