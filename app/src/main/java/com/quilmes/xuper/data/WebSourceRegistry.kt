@@ -67,38 +67,37 @@ object WebSourceRegistry {
         }
         return "$base?autoplay=1"
     }
-    // ---- VidFast (reproductor alternativo embebido) ----
-    private const val VIDFAST_HOST = "vidfast.vc"
+    // ---- VidLux (reproductor alternativo embebido) ----
+    private const val VIDLUX_HOST = "vidlux.xyz"
+    // Dominios alternativos que publica VidLux (mismo servicio); solo se usan para reconocer el host.
+    private val VIDLUX_HOSTS = listOf(VIDLUX_HOST, "vidlux.top", "vidlux.site", "vidlux.online")
 
-    fun isVidFastHost(host: String?): Boolean {
+    fun isVidLuxHost(host: String?): Boolean {
         val h = host?.lowercase()?.trimEnd('.') ?: return false
-        return h == VIDFAST_HOST || h.endsWith(".$VIDFAST_HOST")
+        return VIDLUX_HOSTS.any { h == it || h.endsWith(".$it") }
     }
 
-    fun isVidFastEmbedUrl(url: String): Boolean =
-        url.startsWith("https://$VIDFAST_HOST/movie/") || url.startsWith("https://$VIDFAST_HOST/tv/")
+    fun isVidLuxEmbedUrl(url: String): Boolean =
+        VIDLUX_HOSTS.any { url.startsWith("https://$it/embed/movie/") || url.startsWith("https://$it/embed/tv/") }
 
-    /** VidFast recibe IDs TMDB: /movie/{id} o /tv/{id}/{season}/{episode}. */
-    fun vidFastUrl(catalogId: String): String? {
+    /** VidLux recibe IDs TMDB: /embed/movie/{id} o /embed/tv/{id}/{season}/{episode} (season y episode obligatorios). */
+    fun vidLuxUrl(catalogId: String): String? {
         val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
         val base = when {
             episode != null -> {
                 val (id, season, number) = episode.destructured
-                "https://$VIDFAST_HOST/tv/$id/$season/$number"
+                "https://$VIDLUX_HOST/embed/tv/$id/$season/$number"
             }
             else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
-                "https://$VIDFAST_HOST/movie/${it.groupValues[1]}"
+                "https://$VIDLUX_HOST/embed/movie/${it.groupValues[1]}"
             } ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
-                "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
+                "https://$VIDLUX_HOST/embed/tv/${it.groupValues[1]}/1/1"
             } ?: return null
         }
-        // - SIN `autoPlay`: el autoplay nativo de VidFast arranca el video muteado. El arranque con sonido lo
-        //   hace Xuper desde el WebView (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
-        // - `theme=16A085` (verde), `title`/`poster` visibles, `hideServer=false` (selector de servidores
-        //   visible) y `fullscreenButton=false` (sin botón de pantalla completa).
-        // - `sub=es` pide español como subtítulo predeterminado; la disponibilidad depende de las pistas que
-        //   ofrezca VidFast para cada título.
-        return "$base?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
+        // - `color=16A085` (sin #): color de marca del reproductor (único parámetro documentado que usamos).
+        // - Sin parámetros de autoplay: su nombre no está confirmado en la documentación consultada. El arranque con
+        //   sonido lo hace Xuper desde el WebView (ver XUPER_VIDLUX_AUTOPLAY_JS en PlayerScreen.kt).
+        return "$base?color=16A085"
     }
 
 }

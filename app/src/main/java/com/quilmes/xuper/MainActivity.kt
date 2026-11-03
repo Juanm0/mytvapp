@@ -388,19 +388,19 @@ class MainActivity : ComponentActivity() {
                               } else {
                                 val useVideoApi = request.startsWith("videoapi:")
                                 val useVidly = request.startsWith("vidly:")
-                                val useVidFast = request.startsWith("vidfast:")
+                                val useVidLux = request.startsWith("vidlux:")
                                 val useSimuladores = request.startsWith("simuladores:")
                                 val requestedId = when {
                                     useVideoApi -> request.removePrefix("videoapi:")
                                     useVidly -> request.removePrefix("vidly:")
-                                    useVidFast -> request.removePrefix("vidfast:")
+                                    useVidLux -> request.removePrefix("vidlux:")
                                     useSimuladores -> request.removePrefix("simuladores:")
                                     else -> request
                                 }
                                 val url = when {
                                     useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
                                     useVidly -> WebSourceRegistry.vidlyUrl(requestedId)
-                                    useVidFast -> WebSourceRegistry.vidFastUrl(requestedId)
+                                    useVidLux -> WebSourceRegistry.vidLuxUrl(requestedId)
                                     useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
                                         val season = match.groupValues[1].toIntOrNull() ?: 1
                                         val episode = match.groupValues[2].toIntOrNull() ?: 1

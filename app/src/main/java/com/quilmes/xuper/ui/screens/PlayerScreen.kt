@@ -359,17 +359,17 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
 })();"""
 
 /**
- * Arranque automático CON SONIDO de VidFast (botón Alternativo). La URL de VidFast va sin `autoPlay`: con el
- * autoplay nativo el video arranca muteado. En su lugar, este script (inyectado en todos los frames, antes de
+ * Arranque automático CON SONIDO de VidLux (botón Alternativo). La URL de VidLux no usa parámetros de autoplay
+ * (no documentados); en su lugar, este script (inyectado en todos los frames, antes de
  * que cargue la página) espera a que el reproductor esté listo y lo inicia con la API del <video>
  * (`muted=false` + `play()`) y/o tocando el botón Play real de la página, sin dibujar nada encima. Una vez
  * que reproduce, verifica unos segundos que el audio siga activo y deja el resultado en Logcat
- * (etiqueta XuperVidFast, vía onConsoleMessage). No agrega botones de volumen/mute: el volumen es del TV.
+ * (etiqueta XuperVidLux, vía onConsoleMessage). No agrega botones de volumen/mute: el volumen es del TV.
  * Si la persona aprieta una tecla del mando antes de que arranque, se cancela y no pelea con ella.
  */
-private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
-  if(window.__xuperVidFastAutoplay) return; window.__xuperVidFastAutoplay=true;
-  var TAG='[XuperVidFast] ';
+private val XUPER_VIDLUX_AUTOPLAY_JS = """(function(){
+  if(window.__xuperVidLuxAutoplay) return; window.__xuperVidLuxAutoplay=true;
+  var TAG='[XuperVidLux] ';
   function log(m){try{console.log(TAG+m);}catch(e){}}
   var isTop=(window===window.top);
   var bootAt=Date.now();
@@ -415,7 +415,7 @@ private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
   function findPlayButton(){
     var list=document.querySelectorAll('button,[role=button],[class*=play i],[aria-label],[title]');
     var best=null,ba=-1;
-    for(var i=0;i<list.length&&i<2500;i++){
+    for(var i=0;i<list.length&&i<800;i++){
       var e=list[i],t=e.tagName;
       if(t==='VIDEO'||t==='IFRAME'||t==='SCRIPT'||t==='STYLE'||t==='A'&&!e.getAttribute('role'))continue;
       var lab=labelOf(e);
@@ -429,7 +429,7 @@ private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
   }
   function findUnmuteButton(){
     var list=document.querySelectorAll('button,[role=button],[aria-label],[title]');
-    for(var i=0;i<list.length&&i<2500;i++){
+    for(var i=0;i<list.length&&i<800;i++){
       var e=list[i],lab=((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')).toLowerCase();
       if(UNMUTE_RE.test(lab)&&shown(e))return e;
     }
@@ -462,7 +462,7 @@ private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
     var now=Date.now();
     var v=bestVideo();
     if(state.started){
-      // Fase de verificación: el audio tiene que estar activo (VidFast puede arrancar muteado).
+      // Fase de verificación: el audio tiene que estar activo (un reproductor puede arrancar muteado).
       if(!v)return;
       if(v.muted||!(v.volume>0)){
         forceSound(v);
@@ -508,7 +508,7 @@ private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
   window.addEventListener('keydown',function(ev){
     if(ev.isTrusted&&Date.now()-bootAt>3000&&!state.started){state.cancelled=true;clearInterval(timer);log('cancelado: el usuario tomó el control');}
   },true);
-  var timer=setInterval(tick,400);
+  var timer=setInterval(tick,800);
   tick();
 })();"""
 
@@ -796,7 +796,7 @@ fun PlayerScreen(
     directOnly: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
-        WebSourceRegistry.isVidFastEmbedUrl(streamUrl) ||
+        WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
 
@@ -1340,10 +1340,10 @@ private fun WebEmbedPlayer(
     // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
-    val isVidFast = remember(url) { runCatching { WebSourceRegistry.isVidFastHost(URI(url).host) }.getOrDefault(false) }
+    val isVidLux = remember(url) { runCatching { WebSourceRegistry.isVidLuxHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
     val remoteNavSupported = remember {
-        (isVidly || isVidFast) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
+        (isVidly || isVidLux) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
     }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
@@ -1832,7 +1832,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidFast) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1857,7 +1857,7 @@ private fun WebEmbedPlayer(
                         override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
                         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                             val text = consoleMessage?.message()
-                            if (text != null && text.startsWith("[XuperVidFast]")) android.util.Log.i("XuperVidFast", text.take(300))
+                            if (text != null && text.startsWith("[XuperVidLux]")) android.util.Log.i("XuperVidLux", text.take(300))
                             return super.onConsoleMessage(consoleMessage)
                         }
                         override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean = false
@@ -1934,8 +1934,8 @@ private fun WebEmbedPlayer(
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
-                            if ((isVidly || isVidFast) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
-                            if (isVidFast && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDFAST_AUTOPLAY_JS, null)
+                            if ((isVidly || isVidLux) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if (isVidLux && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -1993,10 +1993,10 @@ private fun WebEmbedPlayer(
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_REMOTE_NAV_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperRemoteNav", "No se pudo instalar la navegación con el mando", it) }
                     }
-                    // VidFast: arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDFAST_AUTOPLAY_JS).
-                    if (isVidFast && remoteNavSupported) {
-                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDFAST_AUTOPLAY_JS, setOf("*")) }
-                            .onFailure { android.util.Log.w("XuperVidFast", "No se pudo instalar el arranque automático", it) }
+                    // VidLux: arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDLUX_AUTOPLAY_JS).
+                    if (isVidLux && remoteNavSupported) {
+                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDLUX_AUTOPLAY_JS, setOf("*")) }
+                            .onFailure { android.util.Log.w("XuperVidLux", "No se pudo instalar el arranque automático", it) }
                     }
                     tag = url
                     if (nextEpisode != null) {

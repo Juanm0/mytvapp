@@ -12,7 +12,7 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 
 1. **Reproducir** — Vidly (`vidly.pro`). Es el reproductor principal y reemplaza el antiguo botón llamado **Prueba**.
 2. **Latino** — VideoAPI (`videoapi.la`; para rutas de anime también puede usarse `videoapp.zip`).
-3. **Alternativo** — VidFast (`vidfast.vc`), embed web por ID TMDB para películas y episodios.
+3. **Alternativo** — VidLux (`vidlux.xyz`), embed web por ID TMDB para películas y episodios (reemplazó a VidFast, que andaba bien en PC pero mal en la TV).
 4. **PlayerLab** — reproductor de pruebas por torrent (solo **películas** con ID de TMDB; ver sección "PlayerLab").
 
 **FrameXTV (`framextv.cc` / `framextv.xyz`, botón "Alternativo") está eliminado** por pedido del usuario: no quedan rutas, hub, selector de proveedor/pistas ni funciones suyas. No volver a agregarlo salvo pedido explícito.
@@ -23,7 +23,7 @@ Los identificadores internos de petición que usa `DetailScreen` y resuelve `Mai
 
 - `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
 - `videoapi:<id>` → `WebSourceRegistry.videoApiUrl(...)` → botón **Latino**.
-- `vidfast:<id>` → `WebSourceRegistry.vidFastUrl(...)` → `https://vidfast.vc/movie/{id}` o `/tv/{id}/{season}/{episode}` → botón **Alternativo**.
+- `vidlux:<id>` → `WebSourceRegistry.vidLuxUrl(...)` → `https://vidlux.xyz/embed/movie/{id}` o `/embed/tv/{id}/{season}/{episode}` → botón **Alternativo**.
 - `playerlab:<id>` → no pasa por `WebSourceRegistry`: `MainActivity` navega a la ruta `playerlab/{titleId}/{titleName}` → `PlayerLabScreen` → botón **PlayerLab** (solo `tmdb-movie-<id>`).
 - `simuladores:<id>|s<temporada>|e<episodio>` → ruta especial de Los Simuladores mediante OK.ru.
 
@@ -32,7 +32,7 @@ Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. 
 ## Archivos principales
 
 - `app/src/main/java/com/quilmes/xuper/MainActivity.kt`: navegación principal, resolución de solicitudes de reproducción y flujo del siguiente episodio.
-- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI y VidFast; también marca anime para elegir la ruta de VideoAPI.
+- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI y VidLux; también marca anime para elegir la ruta de VideoAPI.
 - `app/src/main/java/com/quilmes/xuper/data/PlayerLabRepository.kt`, `data/PlayerLabEngine.kt` y `ui/screens/PlayerLabScreen.kt`: PlayerLab (ver sección propia).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, PlayerLab (este último solo en películas, no en episodios).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`: reproductor web embebido, mandos/teclas, controles superpuestos, filtrado de solicitudes y tratamiento de errores.
@@ -46,23 +46,31 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 ## Reproducción y mando a distancia
 
 - La reproducción debe permanecer dentro de Xuper cuando sea posible; no abrir una aplicación externa ni dejar una página del proveedor navegable como experiencia final si se puede controlar el reproductor embebido.
-- Vidly y VidFast usan WebView embebido. Ambos reciben la navegación de mando específica de Xuper cuando AndroidX WebKit permite inyectar JavaScript al inicio del documento; VidFast conserva también los controles originales del proveedor. VidFast usa `sub=es` como preferencia de subtítulo. No asumir que el proveedor tiene subtítulos disponibles para todos los títulos.
+- Vidly y VidLux usan WebView embebido. Ambos reciben la navegación de mando específica de Xuper cuando AndroidX WebKit permite inyectar JavaScript al inicio del documento; VidLux conserva también los controles originales del proveedor. VidLux carga subtítulos automáticamente (incluye español según el título), sin parámetro de idioma conocido: no asumir que haya subtítulos en español para todos los títulos.
 - VideoAPI/Latino utiliza el agente de frames y controles superpuestos propios cuando están disponibles.
 - No interceptar indiscriminadamente OK/flechas: puede impedir navegar los controles originales del proveedor. Al modificar el mando, razonar por proveedor y verificar los eventos recibidos.
 - Los errores de carga o reproducción deben ser visibles y útiles. Evitar estados de carga infinitos, cierres de la app y falsos mensajes de éxito.
 - El siguiente episodio debe conservar el proveedor actual: VideoAPI continúa con VideoAPI y Vidly con Vidly, salvo que el usuario pida otro comportamiento.
 
-## VidFast (reproductor alternativo)
+## VidLux (reproductor alternativo)
 
-- Se abre desde el botón **Alternativo** en películas y episodios.
-- `WebSourceRegistry.vidFastUrl(...)` construye el embed a partir del ID TMDB: `/movie/{id}` o `/tv/{id}/{season}/{episode}`.
+- Se abre desde el botón **Alternativo** en películas y episodios (id interno `vidlux:<id>`; `DetailScreen` → `MainActivity` → `WebSourceRegistry.vidLuxUrl(...)`).
+- URL: `https://vidlux.xyz/embed/movie/{tmdbId}?color=16A085`; series: `https://vidlux.xyz/embed/tv/{tmdbId}/{season}/{episode}?color=16A085` (season y episode son obligatorios; sin temporada se usa `1/1`). VidLux publica dominios alternativos (`vidlux.top`, `.site`, `.online`) con la misma ruta; el código los reconoce pero genera siempre `vidlux.xyz`.
 - Se carga dentro del WebView de Xuper, no abre otra aplicación.
-- Parámetros configurados (URL completa: `https://vidfast.vc/movie/{id}?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false`): tema verde `16A085`, título y póster visibles, selector de servidores visible (`hideServer=false`), botón de pantalla completa oculto (`fullscreenButton=false`) y español como subtítulo preferido. **`autoPlay` está desactivado a propósito**: el autoplay nativo de VidFast arranca el video muteado (probado a mano). No volver a agregarlo.
-- **Arranque automático con sonido** (`XUPER_VIDFAST_AUTOPLAY_JS` en `PlayerScreen.kt`): `WebEmbedPlayer` ya fija `settings.mediaPlaybackRequiresUserGesture = false`; además inyecta el script con `addDocumentStartJavaScript` en todos los frames (respaldo: `evaluateJavascript` en `onPageFinished` si el WebView no soporta scripts de inicio). El script espera a que el reproductor esté listo y lo inicia con la API estándar del `<video>` (`muted=false` + `play()`) y/o tocando el botón Play real de la página (sin resaltados ni UI propia). Si `play()` es rechazado **no** cae a modo muteado: reintenta. Una vez que reproduce, durante ~12 s fuerza `muted=false`/`volume>0` y, como último recurso, toca el botón real de "activar sonido" si sigue muteado. Se cancela si la persona aprieta una tecla del mando antes de que arranque. Deja el resultado en Logcat (etiqueta `XuperVidFast`, vía `onConsoleMessage`): `estado final: ... OK con sonido` o `ADVERTENCIA: sigue muteado`. No hay botones propios de volumen/mute (el volumen es el del televisor).
-- **Documentación de VidFast**: en la sesión que hizo este cambio no se pudo abrir la documentación oficial (`vidfast.pro`); los parámetros se contrastaron con una réplica de su documentación (`theme`, `title`, `poster`, `autoPlay`, `nextButton`, `autoNext`), con un sitio hermano con la misma API (`hideServer`, `fullscreenButton`, `startAt`, eventos hacia la ventana padre) y con la URL que el usuario probó a mano (`sub=es`, que no se pudo confirmar en la doc). Ninguna de esas fuentes documenta un comando para iniciar la reproducción desde la página que embebe, por eso el arranque usa el DOM del reproductor y no un `postMessage` inventado. Cuando se pueda, **validar contra la doc oficial**. Si VidFast cambia su DOM (etiquetas de botones, estructura del póster), revisar los patrones `PLAY_RE`/`NOT_RE`/`UNMUTE_RE` del script.
-- Verificación: la lógica del script se probó con jsdom (video presente que arranca muteado, póster con botón Play que crea el `<video>`, `play()` rechazado) y su sintaxis con `node --check`. **No se compiló el APK ni se probó en una TV**: falta confirmar en dispositivo que VidFast arranca solo y con sonido, que el mando sigue navegando y qué muestra Logcat.
-- `sub=es` solicita español como pista/subtítulo predeterminado de VidFast. No equivale a descargar subtítulos externos ni garantiza que exista una pista en todos los títulos.
-- La navegación del mando usa el agente remoto ya utilizado por Vidly cuando AndroidX WebKit admite scripts al inicio del documento; si no, se inyecta como respaldo al terminar la carga.
+- **Parámetros**: solo se usa `color` (hex sin `#`; verde `16A085`), que es el único que figura en el ejemplo de integración de VidLux. VidLux menciona además "autoplay toggle" y "server pinning", pero **no se conoce el nombre de esos parámetros** (la página `vidlux.xyz/docs` no se pudo abrir en la sesión): no se inventaron. Los parámetros de VidFast (`theme`, `title`, `poster`, `sub`, `hideServer`, `fullscreenButton`) **no aplican** a VidLux. Si se consigue la doc oficial, revisar: autoplay, servidor fijo, idioma de subtítulos/audio y botón de pantalla completa.
+- **Arranque automático con sonido** (`XUPER_VIDLUX_AUTOPLAY_JS` en `PlayerScreen.kt`): `WebEmbedPlayer` ya fija `settings.mediaPlaybackRequiresUserGesture = false`; además inyecta el script con `addDocumentStartJavaScript` en todos los frames (respaldo: `evaluateJavascript` en `onPageFinished` si el WebView no soporta scripts de inicio). El script espera a que el reproductor esté listo y lo inicia con la API estándar del `<video>` (`muted=false` + `play()`) y/o tocando el botón Play real de la página (sin UI propia). Si `play()` es rechazado **no** cae a modo muteado: reintenta. Una vez que reproduce, durante ~12 s fuerza `muted=false`/`volume>0` y, como último recurso, toca el botón real de "activar sonido". Se cancela si la persona aprieta una tecla del mando antes de que arranque. Deja el resultado en Logcat (`adb logcat -s XuperVidLux`): `estado final: ... OK con sonido` o `ADVERTENCIA: sigue muteado`. Sin botones propios de volumen/mute (el volumen es el del televisor). El script espera cada 800 ms y recorre pocos elementos para no cargar la TV.
+- **Popups**: VidLux declara ~2 popups publicitarios cada 30 minutos. El WebView ya los bloquea (`setSupportMultipleWindows(false)`, `onCreateWindow = false`, `window.open` anulado por el ad guard).
+- La navegación del mando usa el agente remoto ya utilizado por Vidly cuando AndroidX WebKit admite scripts al inicio del documento (`XUPER_REMOTE_NAV_JS`, `HubAwareWebView`); VidLux conserva sus controles originales. Los selectores del agente son genéricos: **verificar en la TV** que el mando llega al selector de servidores y a los controles de VidLux.
+- Servidores internos de VidLux (según su presentación): Star, Rocket, Quilox, Spider, Nova, Magic, Aura, Dubai, Astra, con fallback automático; también calidad (144p–1080p) y pistas de audio/subtítulos seleccionables dentro del reproductor.
+- Verificación hecha: lógica del script probada con jsdom (video que arranca muteado, póster con botón Play que crea el `<video>`, `play()` rechazado) y sintaxis con `node --check`. **No se compiló el APK ni se probó en una TV.**
+
+### Referencia archivada: VidFast, eventos y progreso (ya NO está en el código)
+
+VidFast envía eventos de reproducción a la ventana principal con `postMessage`. Orígenes válidos (siempre verificar `event.origin`): `https://vidfast.pro`, `.in`, `.to`, `.me`, `.net`, `.xyz`, `.vc`, `.bz`.
+
+- **`PLAYER_EVENT`**: `{ type: "PLAYER_EVENT", data: { event, currentTime, duration, tmdbId, mediaType ("movie"|"tv"), season, episodeId, playing, muted, volume } }`, con `event` = `play` (empieza), `pause`, `seeked` (cambia la posición), `ended`, `timeupdate` (periódico) o `playerstatus` (respuesta a la consulta `getStatus`).
+- **`MEDIA_DATA`**: `{ type: "MEDIA_DATA", data: {...} }` con el progreso completo; la doc sugiere guardarlo en `localStorage` bajo la clave `vidfastProgress`. Estructura, indexada por ID TMDB: `{ "<id>": { id, type ("movie"|"tv"), title, poster_path, backdrop_path, progress: { watched, duration }, last_updated, last_season_watched?, last_episode_watched?, show_progress?: { "s1e1": { season, episode, progress: { watched, duration }, last_updated } } } }` (tiempos en segundos; `last_updated` en ms epoch). Las películas solo traen `progress`; las series suman `last_season_watched`, `last_episode_watched` y `show_progress` por episodio. Conservar esta estructura y sus campos si se la usa.
+- **Uso que tuvo en Xuper (eliminado al pasar a VidLux)**: solo `PLAYER_EVENT`, dentro de `XUPER_VIDFAST_AUTOPLAY_JS`: se loguea el primer `play`/`timeupdate`/`playerstatus` con `muted`/`volume`/`playing` (Logcat, etiqueta `XuperVidFast`) y, durante el arranque, si el reproductor informa `muted=true` se fuerza el audio. Se ignoran mensajes de orígenes que no estén en la lista. `MEDIA_DATA` **no se usa**: el progreso/resume de Xuper sigue con su propio seguimiento (`webPlaybackResumeScript`); podría aprovecharse a futuro para retomar donde se dejó. En el WebView la página de VidFast es el documento principal, por lo que no está confirmado que estos mensajes lleguen: verificarlo en Logcat.
 
 ## PlayerLab (reproductor de pruebas por torrent)
 
