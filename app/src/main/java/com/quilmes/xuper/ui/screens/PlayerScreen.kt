@@ -640,6 +640,7 @@ fun PlayerScreen(
     directOnly: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
+        WebSourceRegistry.isVidFastEmbedUrl(streamUrl) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
 
@@ -1183,9 +1184,10 @@ private fun WebEmbedPlayer(
     // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
+    val isVidFast = remember(url) { runCatching { WebSourceRegistry.isVidFastHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
     val remoteNavSupported = remember {
-        isVidly && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
+        (isVidly || isVidFast) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
     }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
@@ -1674,7 +1676,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidFast) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1771,7 +1773,7 @@ private fun WebEmbedPlayer(
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
-                            if (isVidly && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if ((isVidly || isVidFast) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }

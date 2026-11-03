@@ -51,9 +51,9 @@ data class PlayerLabStatus(
 
 private val VIDEO_EXT = Regex("\\.(mp4|webm|m4v|mov|mkv)$", RegexOption.IGNORE_CASE)
 /** Cuánto se espera descargar antes de abrir el reproductor. */
-private const val PREBUFFER_BYTES = 10L * 1024 * 1024
-/** Cuántas piezas por delante de la posición de lectura se piden con prioridad. */
-private const val READ_AHEAD_PIECES = 16
+private const val PREBUFFER_BYTES = 15L * 1024 * 1024
+/** Ventana máxima de prioridad por delante del punto de lectura (no es una cuota de disco). */
+private const val READ_AHEAD_BYTES = 50L * 1024 * 1024
 
 /**
  * PlayerLab, paso 2 (port del motor WebTorrent de `server.js`): descarga el .torrent, lo agrega a libtorrent,
@@ -408,7 +408,9 @@ class PlayerLabEngine(context: Context) {
         }
 
         private fun prioritizeFrom(piece: Int) {
-            for (i in 0 until READ_AHEAD_PIECES) {
+            val readAheadPieces = ((READ_AHEAD_BYTES + pieceLength - 1) / pieceLength)
+                .toInt().coerceAtLeast(1)
+            for (i in 0 until readAheadPieces) {
                 val p = piece + i
                 if (p > lastPiece) break
                 if (p < firstPiece) continue

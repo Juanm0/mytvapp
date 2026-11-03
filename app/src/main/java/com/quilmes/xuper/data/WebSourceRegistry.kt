@@ -67,4 +67,34 @@ object WebSourceRegistry {
         }
         return "$base?autoplay=1"
     }
+    // ---- VidFast (reproductor alternativo embebido) ----
+    private const val VIDFAST_HOST = "vidfast.vc"
+
+    fun isVidFastHost(host: String?): Boolean {
+        val h = host?.lowercase()?.trimEnd('.') ?: return false
+        return h == VIDFAST_HOST || h.endsWith(".$VIDFAST_HOST")
+    }
+
+    fun isVidFastEmbedUrl(url: String): Boolean =
+        url.startsWith("https://$VIDFAST_HOST/movie/") || url.startsWith("https://$VIDFAST_HOST/tv/")
+
+    /** VidFast recibe IDs TMDB: /movie/{id} o /tv/{id}/{season}/{episode}. */
+    fun vidFastUrl(catalogId: String): String? {
+        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        val base = when {
+            episode != null -> {
+                val (id, season, number) = episode.destructured
+                "https://$VIDFAST_HOST/tv/$id/$season/$number"
+            }
+            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
+                "https://$VIDFAST_HOST/movie/${it.groupValues[1]}"
+            } ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
+                "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
+            } ?: return null
+        }
+        // `sub=es` establece español como idioma de subtítulos predeterminado; la disponibilidad
+        // depende de las pistas que ofrezca VidFast para cada título.
+        return "$base?autoPlay=true&title=true&poster=true&sub=es&hideServer=true&fullscreenButton=true"
+    }
+
 }

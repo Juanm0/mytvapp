@@ -16,6 +16,7 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.NavHostController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.ContentKind
@@ -215,6 +216,30 @@ private fun loadCustomM3uSources(cacheDir: File): List<M3uSource> {
 }
 
 class MainActivity : ComponentActivity() {
+    private var appNavController: NavHostController? = null
+    private var resetToHomeOnNextResume = false
+
+    override fun onStop() {
+        super.onStop()
+        // Al volver desde otra app/pantalla del sistema, Xuper arranca de nuevo en Inicio.
+        // La limpieza de sesiones de reproductores ocurre al desmontar sus pantallas.
+        resetToHomeOnNextResume = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (resetToHomeOnNextResume) {
+            resetToHomeOnNextResume = false
+            appNavController?.let { nav ->
+                runCatching {
+                    nav.navigate("main") {
+                        popUpTo("main") { inclusive = false }
+                        launchSingleTop = true
+                    }
+                }.onFailure { android.util.Log.w("XuperLifecycle", "No se pudo reiniciar la navegación a Inicio", it) }
+            }
+        }
+    }
 
     @Volatile private var iptvRefreshStarted = false
     private val localFilesReady = CompletableDeferred<Unit>()
@@ -303,6 +328,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             XuperTheme {
                 val navController = rememberNavController()
+                appNavController = navController
                 val observedSections by repository.sections.collectAsState()
                 NavHost(navController = navController, startDestination = "main") {
                     composable("main") {
@@ -362,16 +388,19 @@ class MainActivity : ComponentActivity() {
                               } else {
                                 val useVideoApi = request.startsWith("videoapi:")
                                 val useVidly = request.startsWith("vidly:")
+                                val useVidFast = request.startsWith("vidfast:")
                                 val useSimuladores = request.startsWith("simuladores:")
                                 val requestedId = when {
                                     useVideoApi -> request.removePrefix("videoapi:")
                                     useVidly -> request.removePrefix("vidly:")
+                                    useVidFast -> request.removePrefix("vidfast:")
                                     useSimuladores -> request.removePrefix("simuladores:")
                                     else -> request
                                 }
                                 val url = when {
                                     useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
                                     useVidly -> WebSourceRegistry.vidlyUrl(requestedId)
+                                    useVidFast -> WebSourceRegistry.vidFastUrl(requestedId)
                                     useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
                                         val season = match.groupValues[1].toIntOrNull() ?: 1
                                         val episode = match.groupValues[2].toIntOrNull() ?: 1

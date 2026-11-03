@@ -12,7 +12,8 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 
 1. **Reproducir** — Vidly (`vidly.pro`). Es el reproductor principal y reemplaza el antiguo botón llamado **Prueba**.
 2. **Latino** — VideoAPI (`videoapi.la`; para rutas de anime también puede usarse `videoapp.zip`).
-3. **PlayerLab** — reproductor de pruebas por torrent (solo **películas** con ID de TMDB; ver sección "PlayerLab"). Reemplazó al antiguo botón **Alternativo**.
+3. **Alternativo** — VidFast (`vidfast.vc`), embed web por ID TMDB para películas y episodios.
+4. **PlayerLab** — reproductor de pruebas por torrent (solo **películas** con ID de TMDB; ver sección "PlayerLab").
 
 **FrameXTV (`framextv.cc` / `framextv.xyz`, botón "Alternativo") está eliminado** por pedido del usuario: no quedan rutas, hub, selector de proveedor/pistas ni funciones suyas. No volver a agregarlo salvo pedido explícito.
 
@@ -22,15 +23,16 @@ Los identificadores internos de petición que usa `DetailScreen` y resuelve `Mai
 
 - `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
 - `videoapi:<id>` → `WebSourceRegistry.videoApiUrl(...)` → botón **Latino**.
+- `vidfast:<id>` → `WebSourceRegistry.vidFastUrl(...)` → `https://vidfast.vc/movie/{id}` o `/tv/{id}/{season}/{episode}` → botón **Alternativo**.
 - `playerlab:<id>` → no pasa por `WebSourceRegistry`: `MainActivity` navega a la ruta `playerlab/{titleId}/{titleName}` → `PlayerLabScreen` → botón **PlayerLab** (solo `tmdb-movie-<id>`).
 - `simuladores:<id>|s<temporada>|e<episodio>` → ruta especial de Los Simuladores mediante OK.ru.
 
-Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. Para películas se usa `tmdb-movie-<id>`. Las URLs de Vidly siguen `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`, con `autoplay=1`. VideoAPI construye su URL desde el ID de catálogo.
+Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. Para películas se usa `tmdb-movie-<id>`. Las URLs de Vidly siguen `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`, con `autoplay=1`. VideoAPI construye su URL desde el ID de catálogo. VidFast sigue `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`; se configura `autoPlay=true`, `title=true`, `poster=true`, `sub=es`, `hideServer=true` y `fullscreenButton=true`. `sub=es` solicita español como subtítulo predeterminado, pero la disponibilidad y selección efectiva dependen de las pistas que entregue VidFast; Xuper no descarga ni genera subtítulos externos en esta integración.
 
 ## Archivos principales
 
 - `app/src/main/java/com/quilmes/xuper/MainActivity.kt`: navegación principal, resolución de solicitudes de reproducción y flujo del siguiente episodio.
-- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly y VideoAPI; también marca anime para elegir la ruta de VideoAPI.
+- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI y VidFast; también marca anime para elegir la ruta de VideoAPI.
 - `app/src/main/java/com/quilmes/xuper/data/PlayerLabRepository.kt`, `data/PlayerLabEngine.kt` y `ui/screens/PlayerLabScreen.kt`: PlayerLab (ver sección propia).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, PlayerLab (este último solo en películas, no en episodios).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`: reproductor web embebido, mandos/teclas, controles superpuestos, filtrado de solicitudes y tratamiento de errores.
@@ -44,11 +46,20 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 ## Reproducción y mando a distancia
 
 - La reproducción debe permanecer dentro de Xuper cuando sea posible; no abrir una aplicación externa ni dejar una página del proveedor navegable como experiencia final si se puede controlar el reproductor embebido.
-- Vidly usa una navegación de mando específica y el agente JavaScript de control por frames cuando WebView lo permite. Se intentan habilitar controles HTML5 y enviar comandos de reproducción/pausa al vídeo accesible. No asumir que un proveedor expone subtítulos/audio si la propia página no ofrece esas pistas.
+- Vidly y VidFast usan WebView embebido. Ambos reciben la navegación de mando específica de Xuper cuando AndroidX WebKit permite inyectar JavaScript al inicio del documento; VidFast conserva también los controles originales del proveedor. VidFast usa `sub=es` como preferencia de subtítulo. No asumir que el proveedor tiene subtítulos disponibles para todos los títulos.
 - VideoAPI/Latino utiliza el agente de frames y controles superpuestos propios cuando están disponibles.
 - No interceptar indiscriminadamente OK/flechas: puede impedir navegar los controles originales del proveedor. Al modificar el mando, razonar por proveedor y verificar los eventos recibidos.
 - Los errores de carga o reproducción deben ser visibles y útiles. Evitar estados de carga infinitos, cierres de la app y falsos mensajes de éxito.
 - El siguiente episodio debe conservar el proveedor actual: VideoAPI continúa con VideoAPI y Vidly con Vidly, salvo que el usuario pida otro comportamiento.
+
+## VidFast (reproductor alternativo)
+
+- Se abre desde el botón **Alternativo** en películas y episodios.
+- `WebSourceRegistry.vidFastUrl(...)` construye el embed a partir del ID TMDB: `/movie/{id}` o `/tv/{id}/{season}/{episode}`.
+- Se carga dentro del WebView de Xuper, no abre otra aplicación.
+- Parámetros configurados: `autoPlay=true`, `title=true`, `poster=true`, `sub=es`, `hideServer=true` y `fullscreenButton=true`.
+- `sub=es` solicita español como pista/subtítulo predeterminado de VidFast. No equivale a descargar subtítulos externos ni garantiza que exista una pista en todos los títulos.
+- La navegación del mando usa el agente remoto ya utilizado por Vidly cuando AndroidX WebKit admite scripts al inicio del documento; si no, se inyecta como respaldo al terminar la carga.
 
 ## PlayerLab (reproductor de pruebas por torrent)
 
@@ -57,7 +68,7 @@ Port a Android del proyecto "Xuper Player Lab" (Node + WebTorrent). Flujo, igual
 1. `PlayerLabRepository`: pide `external_ids` a TMDB (reusa `TmdbExternalIdResolver`, con caché) y consulta `list_movies.json?query_term=<imdb>` en la API compatible con YTS (`https://movies-api.accel.li/api/v2`, respaldo `https://yts.mx/api/v2`). **Exige coincidencia exacta de `imdb_code`**; nunca se elige por parecido de título. Devuelve las variantes (calidad, tipo, tamaño, códec, audio, seeds, peers, `url` del .torrent). Solo se usan variantes con URL `https://` del .torrent.
 2. `PlayerLabScreen`: lista de calidades (botón ▶ Reproducir por cada una), pantalla de preparación (pre-buffer, velocidad, peers) y, cuando está listo, `PlayerScreen(directOnly = true)` con la URL local. Atrás vuelve a la lista de calidades; salir de la pantalla detiene todo y **borra lo descargado** (`externalCacheDir/playerlab`).
 3. `PlayerLabEngine`: baja el `.torrent` (HTTPS, 20 B–5 MB), elige el video más grande (mp4/webm/m4v/mov/mkv), lo agrega a **libtorrent4j** (`org.libtorrent4j:*:2.1.0-31`, binarios de arm, arm64, x86, x86_64), descarga solo ese archivo en modo secuencial con `setPieceDeadline` (principio, final y ventana de 16 piezas por delante de la posición de lectura) y lo sirve por un HTTP mínimo en `127.0.0.1:<puerto>` con soporte de `Range` (equivale al `createServer` de WebTorrent). Abre el reproductor cuando hay ~10 MB de pre-buffer.
-4. `NativePlayerScreen` usa timeouts de 30 s/120 s solo para URLs `http://127.0.0.1:` (un tramo sin piezas puede tardar más que los 8 s por defecto).
+4. `NativePlayerScreen` usa timeouts de 30 s/120 s solo para URLs `http://127.0.0.1:` (un tramo sin piezas puede tardar más que los 8 s por defecto). El pre-buffer inicial se configuró en 15 MiB y la ventana de prioridad de lectura en 50 MiB. Esta ventana limita qué piezas se priorizan por delante del reproductor; **no es un límite de almacenamiento en disco**. Libtorrent sigue escribiendo las piezas recibidas en `externalCacheDir/playerlab/data`, y PlayerLab borra esa carpeta al cerrar la sesión/salir de la pantalla. No se implementó una caché circular de 100 MiB porque borrar piezas anteriores sin un sistema de almacenamiento por bloques puede romper búsquedas hacia atrás y peticiones HTTP Range.
 
 Clave de TMDB: `BuildConfig.TMDB_API_KEY`, que el workflow toma del secret de GitHub `TMDB_API_KEY` (ya estaba configurado para el resto de la app). Sin clave, PlayerLab muestra un mensaje que lo indica.
 
