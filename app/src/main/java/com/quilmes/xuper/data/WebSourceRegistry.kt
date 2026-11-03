@@ -92,9 +92,13 @@ object WebSourceRegistry {
                 "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
             } ?: return null
         }
-        // `sub=es` establece español como idioma de subtítulos predeterminado; la disponibilidad
-        // depende de las pistas que ofrezca VidFast para cada título.
-        return "$base?autoPlay=true&title=true&poster=true&sub=es&hideServer=true&fullscreenButton=true"
+        // - SIN `autoPlay`: el autoplay nativo de VidFast arranca el video muteado. El arranque con sonido lo
+        //   hace Xuper desde el WebView (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
+        // - `theme=16A085` (verde), `title`/`poster` visibles, `hideServer=false` (selector de servidores
+        //   visible) y `fullscreenButton=false` (sin botón de pantalla completa).
+        // - `sub=es` pide español como subtítulo predeterminado; la disponibilidad depende de las pistas que
+        //   ofrezca VidFast para cada título.
+        return "$base?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
     }
 
 }

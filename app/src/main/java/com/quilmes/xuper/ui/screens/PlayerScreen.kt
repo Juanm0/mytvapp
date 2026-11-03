@@ -12,6 +12,7 @@ import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -356,6 +357,161 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
     setTimeout(function(){if(!pick(dir))handoff('Arrow'+dir,ev);},320);
   },true);
 })();"""
+
+/**
+ * Arranque automático CON SONIDO de VidFast (botón Alternativo). La URL de VidFast va sin `autoPlay`: con el
+ * autoplay nativo el video arranca muteado. En su lugar, este script (inyectado en todos los frames, antes de
+ * que cargue la página) espera a que el reproductor esté listo y lo inicia con la API del <video>
+ * (`muted=false` + `play()`) y/o tocando el botón Play real de la página, sin dibujar nada encima. Una vez
+ * que reproduce, verifica unos segundos que el audio siga activo y deja el resultado en Logcat
+ * (etiqueta XuperVidFast, vía onConsoleMessage). No agrega botones de volumen/mute: el volumen es del TV.
+ * Si la persona aprieta una tecla del mando antes de que arranque, se cancela y no pelea con ella.
+ */
+private val XUPER_VIDFAST_AUTOPLAY_JS = """(function(){
+  if(window.__xuperVidFastAutoplay) return; window.__xuperVidFastAutoplay=true;
+  var TAG='[XuperVidFast] ';
+  function log(m){try{console.log(TAG+m);}catch(e){}}
+  var isTop=(window===window.top);
+  var bootAt=Date.now();
+  var state={started:false,cancelled:false,gaveUp:false,clicks:0,centerClicks:0,lastClickAt:0,lastPlayAt:0,startedAt:0,unmuteClicked:false,reported:false};
+  var MAX_WAIT_MS=90000, VERIFY_MS=12000, CLICK_GAP_MS=1500, MAX_CLICKS=10;
+  var PLAY_RE=/(^|[^a-z])(play|reproducir|reanudar|resume)(?![a-z])/i;
+  var NOT_RE=/pause|pausa|next|siguiente|prev|anterior|episod|server|servidor|mute|silenc|sound|sonido|volum|subtit|caption|setting|config|quality|calidad|speed|velocidad|full|pantalla|close|cerrar|download|descarg|cast|pip|picture|audio|lang|idioma|trailer|replay/i;
+  var UNMUTE_RE=/unmute|activar (el )?sonido|reactivar (el )?sonido|quitar (el )?silencio|desilenciar/i;
+  function rectOf(e){try{return e.getBoundingClientRect();}catch(x){return null;}}
+  function vw(){return window.innerWidth||document.documentElement.clientWidth||0;}
+  function vh(){return window.innerHeight||document.documentElement.clientHeight||0;}
+  function shown(e){
+    var r=rectOf(e); if(!r||r.width<8||r.height<8)return false;
+    if(r.bottom<=0||r.right<=0||r.top>=vh()||r.left>=vw())return false;
+    try{var s=getComputedStyle(e);if(s.display==='none'||s.visibility==='hidden'||parseFloat(s.opacity)<0.05)return false;}catch(x){}
+    return true;
+  }
+  // En iframes solo actúa el que ocupa casi toda la pantalla (el reproductor), no anuncios ni widgets.
+  function frameEligible(){
+    if(isTop)return true;
+    try{return vw()>=screen.width*0.6&&vh()>=screen.height*0.4;}catch(e){return true;}
+  }
+  function bestVideo(){
+    var best=null,ba=-1;
+    Array.prototype.forEach.call(document.querySelectorAll('video'),function(v){
+      var r=rectOf(v),a=r?r.width*r.height:0;
+      if(a>ba){ba=a;best=v;}
+    });
+    return best;
+  }
+  function labelOf(e){
+    var cn='';try{cn=(typeof e.className==='string')?e.className:'';}catch(x){}
+    return ((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')+' '+(e.getAttribute('data-tip')||'')+' '+(e.innerText||'')+' '+cn).toLowerCase();
+  }
+  function clickEl(e){
+    var r=rectOf(e); if(!r)return;
+    var o={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,view:window};
+    ['pointerdown','mousedown','pointerup','mouseup'].forEach(function(n){
+      try{var C=(n.indexOf('pointer')===0&&window.PointerEvent)?window.PointerEvent:window.MouseEvent;e.dispatchEvent(new C(n,o));}catch(x){}
+    });
+    try{e.click();}catch(x){}
+  }
+  function findPlayButton(){
+    var list=document.querySelectorAll('button,[role=button],[class*=play i],[aria-label],[title]');
+    var best=null,ba=-1;
+    for(var i=0;i<list.length&&i<2500;i++){
+      var e=list[i],t=e.tagName;
+      if(t==='VIDEO'||t==='IFRAME'||t==='SCRIPT'||t==='STYLE'||t==='A'&&!e.getAttribute('role'))continue;
+      var lab=labelOf(e);
+      if(!PLAY_RE.test(lab)||NOT_RE.test(lab))continue;
+      if(!shown(e))continue;
+      var r=rectOf(e),a=r.width*r.height;
+      if(a>vw()*vh()*0.6)continue; // un contenedor gigante no es el botón
+      if(a>ba){ba=a;best=e;} // el botón Play grande del póster gana al chico de la barra
+    }
+    return best;
+  }
+  function findUnmuteButton(){
+    var list=document.querySelectorAll('button,[role=button],[aria-label],[title]');
+    for(var i=0;i<list.length&&i<2500;i++){
+      var e=list[i],lab=((e.getAttribute('aria-label')||'')+' '+(e.getAttribute('title')||'')).toLowerCase();
+      if(UNMUTE_RE.test(lab)&&shown(e))return e;
+    }
+    return null;
+  }
+  function forceSound(v){
+    try{v.defaultMuted=false;}catch(e){}
+    try{v.removeAttribute('muted');}catch(e){}
+    try{if(v.muted)v.muted=false;}catch(e){}
+    try{if(!(v.volume>0))v.volume=1;}catch(e){}
+  }
+  function isPlaying(v){return !!v&&!v.paused&&!v.ended&&(v.currentTime>0.05||v.readyState>=3);}
+  function markStarted(v){
+    if(state.started)return;
+    state.started=true; state.startedAt=Date.now();
+    log('reproduciendo; muted='+v.muted+' volume='+v.volume);
+  }
+  function tryPlay(v){
+    var now=Date.now(); if(now-state.lastPlayAt<700)return;
+    state.lastPlayAt=now;
+    forceSound(v);
+    try{
+      var p=v.play();
+      if(p&&p.catch)p.catch(function(err){log('play() rechazado: '+(err&&err.name?err.name:err));});
+    }catch(e){log('play() lanzó: '+e);}
+  }
+  function tick(){
+    if(state.cancelled||state.gaveUp)return;
+    if(!frameEligible())return;
+    var now=Date.now();
+    var v=bestVideo();
+    if(state.started){
+      // Fase de verificación: el audio tiene que estar activo (VidFast puede arrancar muteado).
+      if(!v)return;
+      if(v.muted||!(v.volume>0)){
+        forceSound(v);
+        if(v.muted&&!state.unmuteClicked&&now-state.startedAt>2500){
+          var ub=findUnmuteButton(); if(ub){state.unmuteClicked=true;clickEl(ub);log('se tocó el botón real de sonido');}
+        }
+      }
+      if(now-state.startedAt>VERIFY_MS){
+        if(!state.reported){state.reported=true;
+          log('estado final: paused='+v.paused+' muted='+v.muted+' volume='+v.volume+' t='+(v.currentTime||0).toFixed(1)+(v.muted?' ADVERTENCIA: sigue muteado':' OK con sonido'));
+        }
+        clearInterval(timer);
+      }
+      return;
+    }
+    if(now-bootAt>MAX_WAIT_MS){state.gaveUp=true;clearInterval(timer);log('no se pudo iniciar la reproducción en '+(MAX_WAIT_MS/1000)+' s');return;}
+    if(v&&isPlaying(v)){forceSound(v);markStarted(v);return;}
+    // 1) API del elemento <video> en cuanto tiene datos.
+    if(v&&(v.readyState>=2||v.currentSrc||v.src))tryPlay(v);
+    // 2) Botón Play real del reproductor (el video suele cargarse recién al tocarlo).
+    if(now-state.lastClickAt>=CLICK_GAP_MS&&state.clicks<MAX_CLICKS&&(!v||v.paused)){
+      var b=findPlayButton();
+      if(b){state.lastClickAt=now;state.clicks++;clickEl(b);log('botón Play tocado (#'+state.clicks+')');}
+      else if(state.clicks===0&&state.centerClicks<2&&now-bootAt>3000&&shown(document.documentElement)){
+        // Último recurso: el centro del reproductor (pósters sin etiqueta accesible).
+        var c=document.elementFromPoint(vw()/2,vh()/2);
+        if(c&&!(c.closest&&c.closest('a[href]'))&&!(c.closest&&c.closest('[role=menu],[role=dialog]'))){
+          state.lastClickAt=now;state.centerClicks++;clickEl(c);log('centro del reproductor tocado (#'+state.centerClicks+')');
+        }
+      }
+    }
+  }
+  // Reacciona apenas el reproductor avisa que está listo / empezó (los eventos de media no burbujean: captura).
+  ['loadedmetadata','canplay','playing'].forEach(function(n){
+    document.addEventListener(n,function(ev){
+      if(state.cancelled||state.started||!frameEligible())return;
+      var v=ev.target; if(!v||v.tagName!=='VIDEO')return;
+      if(n==='playing'){forceSound(v);markStarted(v);}
+      else{tryPlay(v);}
+    },true);
+  });
+  // Si la persona toma el control con el mando antes de que arranque, no se pelea con ella.
+  window.addEventListener('keydown',function(ev){
+    if(ev.isTrusted&&Date.now()-bootAt>3000&&!state.started){state.cancelled=true;clearInterval(timer);log('cancelado: el usuario tomó el control');}
+  },true);
+  var timer=setInterval(tick,400);
+  tick();
+})();"""
+
 
 /**
  * Best-effort HTML5 controls. A cross-origin iframe is intentionally inaccessible by browser policy.
@@ -1699,6 +1855,11 @@ private fun WebEmbedPlayer(
                         private var fullscreenCallback: CustomViewCallback? = null
                         private var originalUi = 0
                         override fun onProgressChanged(view: WebView?, newProgress: Int) { progress = newProgress }
+                        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                            val text = consoleMessage?.message()
+                            if (text != null && text.startsWith("[XuperVidFast]")) android.util.Log.i("XuperVidFast", text.take(300))
+                            return super.onConsoleMessage(consoleMessage)
+                        }
                         override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean = false
                         override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
                             if (view == null || fullscreenView != null) { callback?.onCustomViewHidden(); return }
@@ -1774,6 +1935,7 @@ private fun WebEmbedPlayer(
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
                             if ((isVidly || isVidFast) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if (isVidFast && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDFAST_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -1830,6 +1992,11 @@ private fun WebEmbedPlayer(
                     if (remoteNavSupported) {
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_REMOTE_NAV_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperRemoteNav", "No se pudo instalar la navegación con el mando", it) }
+                    }
+                    // VidFast: arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDFAST_AUTOPLAY_JS).
+                    if (isVidFast && remoteNavSupported) {
+                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDFAST_AUTOPLAY_JS, setOf("*")) }
+                            .onFailure { android.util.Log.w("XuperVidFast", "No se pudo instalar el arranque automático", it) }
                     }
                     tag = url
                     if (nextEpisode != null) {
