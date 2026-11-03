@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes web de reproducción: Vidly (Reproducir) y VideoAPI (Latino). PlayerLab (torrent) vive en PlayerLabRepository. */
+/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo) y VidFast (Alternativo 2). */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -100,4 +100,35 @@ object WebSourceRegistry {
         return "$base?color=16A085"
     }
 
+    // ---- VidFast (reproductor "Alternativo 2") ----
+    private const val VIDFAST_HOST = "vidfast.pro"
+    // Dominios que publica VidFast (mismo servicio); solo se usan para reconocer el host.
+    private val VIDFAST_HOSTS = listOf(VIDFAST_HOST, "vidfast.in", "vidfast.to", "vidfast.me", "vidfast.net", "vidfast.xyz", "vidfast.vc", "vidfast.bz")
+
+    fun isVidFastHost(host: String?): Boolean {
+        val h = host?.lowercase()?.trimEnd('.') ?: return false
+        return VIDFAST_HOSTS.any { h == it || h.endsWith(".$it") }
+    }
+
+    fun isVidFastEmbedUrl(url: String): Boolean =
+        VIDFAST_HOSTS.any { url.startsWith("https://$it/movie/") || url.startsWith("https://$it/tv/") }
+
+    /** VidFast recibe IDs TMDB: /movie/{id} o /tv/{id}/{season}/{episode}. */
+    fun vidFastUrl(catalogId: String): String? {
+        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
+        val base = when {
+            episode != null -> {
+                val (id, season, number) = episode.destructured
+                "https://$VIDFAST_HOST/tv/$id/$season/$number"
+            }
+            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
+                "https://$VIDFAST_HOST/movie/${it.groupValues[1]}"
+            } ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
+                "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
+            } ?: return null
+        }
+        // Sin `autoPlay`: el arranque con sonido lo hace Xuper desde el WebView (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
+        // `sub=es` pide español como subtítulo predeterminado; depende de las pistas que entregue VidFast.
+        return "$base?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
+    }
 }

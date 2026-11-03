@@ -12,8 +12,10 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 
 1. **Reproducir** — Vidly (`vidly.pro`). Es el reproductor principal y reemplaza el antiguo botón llamado **Prueba**.
 2. **Latino** — VideoAPI (`videoapi.la`; para rutas de anime también puede usarse `videoapp.zip`).
-3. **Alternativo** — VidLux (`vidlux.xyz`), embed web por ID TMDB para películas y episodios (reemplazó a VidFast, que andaba bien en PC pero mal en la TV).
-4. **PlayerLab** — reproductor de pruebas por torrent (solo **películas** con ID de TMDB; ver sección "PlayerLab").
+3. **Alternativo** — VidLux (`vidlux.xyz`), embed web por ID TMDB para películas y episodios.
+4. **Alternativo 2** — VidFast (`vidfast.pro`), embed web por ID TMDB para películas y episodios (volvió a agregarse como cuarta opción; antes había sido reemplazado por VidLux porque en la TV andaba peor que en PC).
+
+**PlayerLab (torrent con libtorrent4j/YTS) está eliminado** por pedido del usuario (se sospechaba que trababa toda la app): no quedan archivos, ruta `playerlab/...`, botón, dependencias `libtorrent4j` ni timeouts especiales para `127.0.0.1`. No volver a agregarlo salvo pedido explícito.
 
 **FrameXTV (`framextv.cc` / `framextv.xyz`, botón "Alternativo") está eliminado** por pedido del usuario: no quedan rutas, hub, selector de proveedor/pistas ni funciones suyas. No volver a agregarlo salvo pedido explícito.
 
@@ -24,7 +26,7 @@ Los identificadores internos de petición que usa `DetailScreen` y resuelve `Mai
 - `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
 - `videoapi:<id>` → `WebSourceRegistry.videoApiUrl(...)` → botón **Latino**.
 - `vidlux:<id>` → `WebSourceRegistry.vidLuxUrl(...)` → `https://vidlux.xyz/embed/movie/{id}` o `/embed/tv/{id}/{season}/{episode}` → botón **Alternativo**.
-- `playerlab:<id>` → no pasa por `WebSourceRegistry`: `MainActivity` navega a la ruta `playerlab/{titleId}/{titleName}` → `PlayerLabScreen` → botón **PlayerLab** (solo `tmdb-movie-<id>`).
+- `vidfast:<id>` → `WebSourceRegistry.vidFastUrl(...)` → `https://vidfast.pro/movie/{id}` o `/tv/{id}/{season}/{episode}` → botón **Alternativo 2**.
 - `simuladores:<id>|s<temporada>|e<episodio>` → ruta especial de Los Simuladores mediante OK.ru.
 
 Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. Para películas se usa `tmdb-movie-<id>`. Las URLs de Vidly siguen `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`, con `autoplay=1`. VideoAPI construye su URL desde el ID de catálogo. VidFast sigue `/movie/{tmdbId}` y `/tv/{tmdbId}/{season}/{episode}`; se configura `theme=16A085`, `title=true`, `poster=true`, `sub=es`, `hideServer=false` y `fullscreenButton=false`, **sin `autoPlay`** (el arranque lo hace Xuper; ver sección "VidFast"). `sub=es` solicita español como subtítulo predeterminado, pero la disponibilidad y selección efectiva dependen de las pistas que entregue VidFast; Xuper no descarga ni genera subtítulos externos en esta integración.
@@ -32,9 +34,8 @@ Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. 
 ## Archivos principales
 
 - `app/src/main/java/com/quilmes/xuper/MainActivity.kt`: navegación principal, resolución de solicitudes de reproducción y flujo del siguiente episodio.
-- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI y VidLux; también marca anime para elegir la ruta de VideoAPI.
-- `app/src/main/java/com/quilmes/xuper/data/PlayerLabRepository.kt`, `data/PlayerLabEngine.kt` y `ui/screens/PlayerLabScreen.kt`: PlayerLab (ver sección propia).
-- `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, PlayerLab (este último solo en películas, no en episodios).
+- `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI, VidLux y VidFast; también marca anime para elegir la ruta de VideoAPI.
+- `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, Alternativo, Alternativo 2 (en películas y en episodios).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`: reproductor web embebido, mandos/teclas, controles superpuestos, filtrado de solicitudes y tratamiento de errores.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/WebHubKeyRouter.kt`: enrutamiento de teclas del mando para controles web.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/XuperWebRequestFilter.kt` y `XuperBraveAdblock.kt`: filtrado de solicitudes y protección frente a publicidad/redirecciones.
@@ -46,7 +47,7 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 ## Reproducción y mando a distancia
 
 - La reproducción debe permanecer dentro de Xuper cuando sea posible; no abrir una aplicación externa ni dejar una página del proveedor navegable como experiencia final si se puede controlar el reproductor embebido.
-- Vidly y VidLux usan WebView embebido. Ambos reciben la navegación de mando específica de Xuper cuando AndroidX WebKit permite inyectar JavaScript al inicio del documento; VidLux conserva también los controles originales del proveedor. VidLux carga subtítulos automáticamente (incluye español según el título), sin parámetro de idioma conocido: no asumir que haya subtítulos en español para todos los títulos.
+- Vidly, VidLux y VidFast usan WebView embebido. Todos reciben la navegación de mando específica de Xuper cuando AndroidX WebKit permite inyectar JavaScript al inicio del documento; VidLux y VidFast conservan también los controles originales del proveedor. VidLux carga subtítulos automáticamente (incluye español según el título), sin parámetro de idioma conocido: no asumir que haya subtítulos en español para todos los títulos.
 - VideoAPI/Latino utiliza el agente de frames y controles superpuestos propios cuando están disponibles.
 - No interceptar indiscriminadamente OK/flechas: puede impedir navegar los controles originales del proveedor. Al modificar el mando, razonar por proveedor y verificar los eventos recibidos.
 - Los errores de carga o reproducción deben ser visibles y útiles. Evitar estados de carga infinitos, cierres de la app y falsos mensajes de éxito.
@@ -64,26 +65,13 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 - Servidores internos de VidLux (según su presentación): Star, Rocket, Quilox, Spider, Nova, Magic, Aura, Dubai, Astra, con fallback automático; también calidad (144p–1080p) y pistas de audio/subtítulos seleccionables dentro del reproductor.
 - Verificación hecha: lógica del script probada con jsdom (video que arranca muteado, póster con botón Play que crea el `<video>`, `play()` rechazado) y sintaxis con `node --check`. **No se compiló el APK ni se probó en una TV.**
 
-### Referencia archivada: VidFast, eventos y progreso (ya NO está en el código)
+## VidFast (reproductor "Alternativo 2")
 
-VidFast envía eventos de reproducción a la ventana principal con `postMessage`. Orígenes válidos (siempre verificar `event.origin`): `https://vidfast.pro`, `.in`, `.to`, `.me`, `.net`, `.xyz`, `.vc`, `.bz`.
-
-- **`PLAYER_EVENT`**: `{ type: "PLAYER_EVENT", data: { event, currentTime, duration, tmdbId, mediaType ("movie"|"tv"), season, episodeId, playing, muted, volume } }`, con `event` = `play` (empieza), `pause`, `seeked` (cambia la posición), `ended`, `timeupdate` (periódico) o `playerstatus` (respuesta a la consulta `getStatus`).
-- **`MEDIA_DATA`**: `{ type: "MEDIA_DATA", data: {...} }` con el progreso completo; la doc sugiere guardarlo en `localStorage` bajo la clave `vidfastProgress`. Estructura, indexada por ID TMDB: `{ "<id>": { id, type ("movie"|"tv"), title, poster_path, backdrop_path, progress: { watched, duration }, last_updated, last_season_watched?, last_episode_watched?, show_progress?: { "s1e1": { season, episode, progress: { watched, duration }, last_updated } } } }` (tiempos en segundos; `last_updated` en ms epoch). Las películas solo traen `progress`; las series suman `last_season_watched`, `last_episode_watched` y `show_progress` por episodio. Conservar esta estructura y sus campos si se la usa.
-- **Uso que tuvo en Xuper (eliminado al pasar a VidLux)**: solo `PLAYER_EVENT`, dentro de `XUPER_VIDFAST_AUTOPLAY_JS`: se loguea el primer `play`/`timeupdate`/`playerstatus` con `muted`/`volume`/`playing` (Logcat, etiqueta `XuperVidFast`) y, durante el arranque, si el reproductor informa `muted=true` se fuerza el audio. Se ignoran mensajes de orígenes que no estén en la lista. `MEDIA_DATA` **no se usa**: el progreso/resume de Xuper sigue con su propio seguimiento (`webPlaybackResumeScript`); podría aprovecharse a futuro para retomar donde se dejó. En el WebView la página de VidFast es el documento principal, por lo que no está confirmado que estos mensajes lleguen: verificarlo en Logcat.
-
-## PlayerLab (reproductor de pruebas por torrent)
-
-Port a Android del proyecto "Xuper Player Lab" (Node + WebTorrent). Flujo, igual que en el lab: **ID de TMDB → IMDb → catálogo YTS → archivo `.torrent` → streaming → reproducción**.
-
-1. `PlayerLabRepository`: pide `external_ids` a TMDB (reusa `TmdbExternalIdResolver`, con caché) y consulta `list_movies.json?query_term=<imdb>` en la API compatible con YTS (`https://movies-api.accel.li/api/v2`, respaldo `https://yts.mx/api/v2`). **Exige coincidencia exacta de `imdb_code`**; nunca se elige por parecido de título. Devuelve las variantes (calidad, tipo, tamaño, códec, audio, seeds, peers, `url` del .torrent). Solo se usan variantes con URL `https://` del .torrent.
-2. `PlayerLabScreen`: lista de calidades (botón ▶ Reproducir por cada una), pantalla de preparación (pre-buffer, velocidad, peers) y, cuando está listo, `PlayerScreen(directOnly = true)` con la URL local. Atrás vuelve a la lista de calidades; salir de la pantalla detiene todo y **borra lo descargado** (`externalCacheDir/playerlab`).
-3. `PlayerLabEngine`: baja el `.torrent` (HTTPS, 20 B–5 MB), elige el video más grande (mp4/webm/m4v/mov/mkv), lo agrega a **libtorrent4j** (`org.libtorrent4j:*:2.1.0-31`, binarios de arm, arm64, x86, x86_64), descarga solo ese archivo en modo secuencial con `setPieceDeadline` (principio, final y ventana de 16 piezas por delante de la posición de lectura) y lo sirve por un HTTP mínimo en `127.0.0.1:<puerto>` con soporte de `Range` (equivale al `createServer` de WebTorrent). Abre el reproductor cuando hay ~10 MB de pre-buffer.
-4. `NativePlayerScreen` usa timeouts de 30 s/120 s solo para URLs `http://127.0.0.1:` (un tramo sin piezas puede tardar más que los 8 s por defecto). El pre-buffer inicial se configuró en 15 MiB y la ventana de prioridad de lectura en 50 MiB. Esta ventana limita qué piezas se priorizan por delante del reproductor; **no es un límite de almacenamiento en disco**. Libtorrent sigue escribiendo las piezas recibidas en `externalCacheDir/playerlab/data`, y PlayerLab borra esa carpeta al cerrar la sesión/salir de la pantalla. No se implementó una caché circular de 100 MiB porque borrar piezas anteriores sin un sistema de almacenamiento por bloques puede romper búsquedas hacia atrás y peticiones HTTP Range.
-
-Clave de TMDB: `BuildConfig.TMDB_API_KEY`, que el workflow toma del secret de GitHub `TMDB_API_KEY` (ya estaba configurado para el resto de la app). Sin clave, PlayerLab muestra un mensaje que lo indica.
-
-Limitaciones conocidas: solo películas (el lab no implementa series; en episodios no hay botón PlayerLab); la API YTS es de terceros y puede no tener un título; un torrent con pocos seeds puede tardar o no arrancar; ExoPlayer no reproduce todos los códecs/contenedores; subtítulos externos todavía no integrados (el lab tampoco; ExoPlayer solo muestra pistas embebidas en el archivo, botón "CC Subtítulos"). **No se probó en un dispositivo real**: se verificó la sintaxis y el tipado del motor contra stubs de libtorrent4j, pero la API real de libtorrent4j (`SessionManager.download/find`, `TorrentHandle.setPieceDeadline/havePiece/prioritizeFiles`, `TorrentFlags.SEQUENTIAL_DOWNLOAD`) y el streaming en el TV quedan por validar al compilar en GitHub Actions y probar.
+- Se abre desde el botón **Alternativo 2** en películas y episodios (id interno `vidfast:<id>`; `DetailScreen` → `MainActivity` → `WebSourceRegistry.vidFastUrl(...)`). Se carga dentro del WebView de Xuper.
+- URL: `https://vidfast.pro/movie/{tmdbId}` o `https://vidfast.pro/tv/{tmdbId}/{season}/{episode}` (sin temporada se usa `1/1`) + `?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false`, **sin `autoPlay`**. `sub=es` solo pide español como subtítulo predeterminado: la disponibilidad real depende de las pistas que entregue VidFast. Dominios reconocidos (mismo servicio): `vidfast.pro`, `.in`, `.to`, `.me`, `.net`, `.xyz`, `.vc`, `.bz`; el código genera siempre `vidfast.pro`.
+- **Tratamiento en `PlayerScreen.kt`**: igual que VidLux (`isVidFast`): navegación de mando (`XUPER_REMOTE_NAV_JS`, `consumeDpad`) y arranque automático con sonido mediante `XUPER_VIDFAST_AUTOPLAY_JS`, que **se deriva del script de VidLux** (`XUPER_VIDLUX_AUTOPLAY_JS`) cambiando solo la bandera de "ya instalado" y la etiqueta de Logcat (`adb logcat -s XuperVidFast`). Cualquier mejora al script de arranque de VidLux se hereda en VidFast automáticamente. Los popups se bloquean igual que en VidLux.
+- **Importante**: esta reintegración se hizo a partir de la referencia de este README y del código de VidLux, **no** del código viejo de VidFast (que ya no estaba en el proyecto). Es posible que el script anterior tuviera detalles propios (p. ej. el listener de `postMessage`/`PLAYER_EVENT` para loguear `muted`/`volume`) que no se recuperaron; el arranque con sonido usa la lógica genérica de VidLux. Verificar en la TV.
+- Referencia de eventos de VidFast (por si se quiere usar a futuro; hoy **no se usan**): envía `postMessage` a la ventana principal; verificar siempre `event.origin` contra los dominios de arriba. `PLAYER_EVENT`: `{ type: "PLAYER_EVENT", data: { event, currentTime, duration, tmdbId, mediaType ("movie"|"tv"), season, episodeId, playing, muted, volume } }` con `event` = `play`, `pause`, `seeked`, `ended`, `timeupdate` o `playerstatus`. `MEDIA_DATA`: `{ type: "MEDIA_DATA", data: {...} }` con el progreso completo indexado por ID TMDB (`progress: { watched, duration }`, `last_updated`, y en series `last_season_watched`, `last_episode_watched`, `show_progress` por `s<N>e<M>`); la doc sugiere guardarlo en `localStorage` bajo `vidfastProgress`. El progreso/resume de Xuper sigue con su propio seguimiento (`webPlaybackResumeScript`).
 
 ## Catálogo, episodios y contenido especial
 

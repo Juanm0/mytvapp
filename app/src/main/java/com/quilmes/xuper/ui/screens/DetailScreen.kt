@@ -141,10 +141,7 @@ fun DetailScreen(
                                 Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
                                 Button(onClick = { onPlay("vidlux:$videoApiPlaybackId") }) { Text("▶  Alternativo") }
-                                // PlayerLab (torrent vía YTS): solo películas con ID de TMDB.
-                                if (Regex("^tmdb-movie-\\d+$").matches(title.id)) {
-                                    Button(onClick = { onPlay("playerlab:${title.id}") }) { Text("▶  PlayerLab") }
-                                }
+                                Button(onClick = { onPlay("vidfast:$videoApiPlaybackId") }) { Text("▶  Alternativo 2") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -220,6 +217,10 @@ fun DetailScreen(
                                     selectedEpisode = episode.number
                                     onPlay("vidlux:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Alternativo") }
+                                Button(onClick = {
+                                    selectedEpisode = episode.number
+                                    onPlay("vidfast:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  Alternativo 2") }
                             }
                         }
                     }

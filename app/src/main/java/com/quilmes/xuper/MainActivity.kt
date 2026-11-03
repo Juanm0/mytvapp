@@ -32,7 +32,6 @@ import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
-import com.quilmes.xuper.ui.screens.PlayerLabScreen
 import com.quilmes.xuper.ui.screens.XuperBraveAdblock
 import com.quilmes.xuper.ui.theme.XuperTheme
 import kotlinx.coroutines.CompletableDeferred
@@ -381,57 +380,41 @@ class MainActivity : ComponentActivity() {
                             title = title,
                             catalogService = tmdbCatalogService,
                             onPlay = { request ->
-                              if (request.startsWith("playerlab:")) {
-                                // PlayerLab: reproductor de pruebas (TMDB -> IMDb -> YTS -> torrent -> ExoPlayer).
-                                val labId = request.removePrefix("playerlab:")
-                                navController.navigate("playerlab/${Uri.encode(labId)}/${Uri.encode(title.name)}")
-                              } else {
-                                val useVideoApi = request.startsWith("videoapi:")
-                                val useVidly = request.startsWith("vidly:")
-                                val useVidLux = request.startsWith("vidlux:")
-                                val useSimuladores = request.startsWith("simuladores:")
-                                val requestedId = when {
-                                    useVideoApi -> request.removePrefix("videoapi:")
-                                    useVidly -> request.removePrefix("vidly:")
-                                    useVidLux -> request.removePrefix("vidlux:")
-                                    useSimuladores -> request.removePrefix("simuladores:")
-                                    else -> request
-                                }
-                                val url = when {
-                                    useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
-                                    useVidly -> WebSourceRegistry.vidlyUrl(requestedId)
-                                    useVidLux -> WebSourceRegistry.vidLuxUrl(requestedId)
-                                    useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
-                                        val season = match.groupValues[1].toIntOrNull() ?: 1
-                                        val episode = match.groupValues[2].toIntOrNull() ?: 1
-                                        val videoId = simuladoresVideoId(season, episode)
-                                        if (videoId != null) "https://ok.ru/videoembed/$videoId" else null
-                                    }
-                                    else -> WebSourceRegistry.vidlyUrl(requestedId)
-                                }
-                                if (url != null) {
-                                    val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                                    navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl/${Uri.encode(requestedId)}")
-                                }
+                              val useVideoApi = request.startsWith("videoapi:")
+                              val useVidly = request.startsWith("vidly:")
+                              val useVidLux = request.startsWith("vidlux:")
+                              val useVidFast = request.startsWith("vidfast:")
+                              val useSimuladores = request.startsWith("simuladores:")
+                              val requestedId = when {
+                                  useVideoApi -> request.removePrefix("videoapi:")
+                                  useVidly -> request.removePrefix("vidly:")
+                                  useVidLux -> request.removePrefix("vidlux:")
+                                  useVidFast -> request.removePrefix("vidfast:")
+                                  useSimuladores -> request.removePrefix("simuladores:")
+                                  else -> request
+                              }
+                              val url = when {
+                                  useVideoApi -> WebSourceRegistry.videoApiUrl(requestedId)
+                                  useVidly -> WebSourceRegistry.vidlyUrl(requestedId)
+                                  useVidLux -> WebSourceRegistry.vidLuxUrl(requestedId)
+                                  useVidFast -> WebSourceRegistry.vidFastUrl(requestedId)
+                                  useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
+                                      val season = match.groupValues[1].toIntOrNull() ?: 1
+                                      val episode = match.groupValues[2].toIntOrNull() ?: 1
+                                      val videoId = simuladoresVideoId(season, episode)
+                                      if (videoId != null) "https://ok.ru/videoembed/$videoId" else null
+                                  }
+                                  else -> WebSourceRegistry.vidlyUrl(requestedId)
+                              }
+                              if (url != null) {
+                                  val encodedUrl = Base64.encodeToString(url.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                  navController.navigate("external-player/${Uri.encode(title.name)}/$encodedUrl/${Uri.encode(requestedId)}")
                               }
                             },
                             onOpenTitle = { relatedTitle ->
                                 pendingDetailTitle.value = relatedTitle
                                 navController.navigate("detail/${relatedTitle.id}")
                             },
-                        )
-                    }
-                    composable(
-                        route = "playerlab/{titleId}/{titleName}",
-                        arguments = listOf(
-                            navArgument("titleId") { type = NavType.StringType },
-                            navArgument("titleName") { type = NavType.StringType },
-                        ),
-                    ) { entry ->
-                        PlayerLabScreen(
-                            catalogId = entry.arguments?.getString("titleId").orEmpty(),
-                            titleName = entry.arguments?.getString("titleName").orEmpty(),
-                            onExit = { navController.popBackStack() },
                         )
                     }
                     composable(
