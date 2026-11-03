@@ -113,6 +113,8 @@ private class HubAwareWebView(
     context: Context,
     /** true en Vidly: las flechas/OK se mandan a la página y no se dejan escapar a la navegación de foco de Android. */
     private val consumeDpad: Boolean,
+    /** > 0: tras ese tiempo sin teclas se "saca" el mouse falso del reproductor (ver nudgeHover). 0 = nunca. Hoy solo Prueba. */
+    private val hoverExitDelayMs: Long = 0L,
     private val onRemoteKey: (AndroidKeyEvent) -> Boolean,
 ) : WebView(context) {
     /** Dispatch a fallback key without re-entering our own remote-key interceptor. */
@@ -121,6 +123,25 @@ private class HubAwareWebView(
     private var hoverEntered = false
     private var hoverFlip = false
     private var lastHoverAt = 0L
+    private var lastHoverX = 0f
+    private var lastHoverY = 0f
+
+    private val exitHover = Runnable {
+        if (!hoverEntered) return@Runnable
+        hoverEntered = false
+        runCatching {
+            val now = android.os.SystemClock.uptimeMillis()
+            val exit = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_HOVER_EXIT, lastHoverX, lastHoverY, 0)
+            exit.source = android.view.InputDevice.SOURCE_MOUSE
+            onHoverEvent(exit)
+            exit.recycle()
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(exitHover)
+        super.onDetachedFromWindow()
+    }
 
     /**
      * Mueve un "mouse" real sobre el centro del reproductor. Muchos reproductores web solo muestran sus controles con
@@ -128,11 +149,16 @@ private class HubAwareWebView(
      */
     private fun nudgeHover() {
         val now = android.os.SystemClock.uptimeMillis()
-        if (now - lastHoverAt < 250L || width == 0 || height == 0) return
+        if (width == 0 || height == 0) return
+        // Con salida programada, cada tecla reinicia la cuenta aunque el movimiento se limite a uno cada 250 ms.
+        if (hoverExitDelayMs > 0L) { removeCallbacks(exitHover); postDelayed(exitHover, hoverExitDelayMs) }
+        if (now - lastHoverAt < 250L) return
         lastHoverAt = now
         hoverFlip = !hoverFlip
         val x = width / 2f + if (hoverFlip) 3f else -3f
         val y = height * 0.5f
+        lastHoverX = x
+        lastHoverY = y
         runCatching {
             if (!hoverEntered) {
                 hoverEntered = true
@@ -181,6 +207,10 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
   if(window.__xuperRemoteNav)return; window.__xuperRemoteNav=true;
   var HL_ID='xuper-nav-hl';
   var cur=null, hl=null, lastWake=0, lastSeekAt=0;
+  // Reposo (opcional, solo si la app define window.__xuperIdleHideMs antes de este script; hoy solo "Prueba"):
+  // tras ese tiempo sin teclas se borra el recuadro amarillo y se "saca" el mouse falso del reproductor para que
+  // oculte sus controles (muchos no los ocultan mientras crean que el mouse está encima).
+  var IDLE_MS=(window.__xuperIdleHideMs|0), idleTimer=null;
   var ROLES={button:1,link:1,menuitem:1,menuitemradio:1,menuitemcheckbox:1,option:1,tab:1,slider:1,'switch':1,checkbox:1,radio:1};
   function vw(){return window.innerWidth||document.documentElement.clientWidth||0;}
   function vh(){return window.innerHeight||document.documentElement.clientHeight||0;}
@@ -291,6 +321,24 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
       targets.forEach(function(t){if(t)try{t.dispatchEvent(new MouseEvent(n,{bubbles:true,clientX:x,clientY:y}));}catch(e){}});
     });
   }
+  function idleHide(){
+    idleTimer=null;
+    clear();
+    try{
+      var x=vw()/2, y=vh()/2, el=document.elementFromPoint(x,y), chain=[];
+      for(var p=el,i=0;p&&i<30;p=p.parentElement,i++)chain.push(p);
+      chain.push(document);
+      chain.forEach(function(t){
+        ['pointerout','mouseout'].forEach(function(n){try{t.dispatchEvent(new MouseEvent(n,{bubbles:true,clientX:x,clientY:y}));}catch(e){}});
+        ['pointerleave','mouseleave'].forEach(function(n){try{t.dispatchEvent(new MouseEvent(n,{bubbles:false,clientX:x,clientY:y}));}catch(e){}});
+      });
+    }catch(e){}
+  }
+  function armIdle(){
+    if(!IDLE_MS)return;
+    if(idleTimer)clearTimeout(idleTimer);
+    idleTimer=setTimeout(idleHide,IDLE_MS);
+  }
   function clickEl(e){
     var r=rectOf(e), o={bubbles:true,cancelable:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,view:window};
     ['pointerdown','mousedown','pointerup','mouseup'].forEach(function(n){
@@ -334,6 +382,7 @@ private val XUPER_REMOTE_NAV_JS = """(function(){
       return;
     }
     if(now-lastWake>500){lastWake=now;wake();}
+    armIdle();
     var active=cur&&cur.isConnected&&shown(cur);
     if(ok){
       if(active){stop(ev);clickEl(cur);setTimeout(paint,150);return;}
@@ -1341,6 +1390,8 @@ private fun WebEmbedPlayer(
     val remoteNavSupported = remember {
         (isVidly || isVidLux || isPrueba) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
     }
+    // Script de navegación: Prueba le suma el modo reposo (ver IDLE_MS en XUPER_REMOTE_NAV_JS); el resto, sin cambios.
+    val remoteNavScript = remember(isPrueba) { if (isPrueba) "window.__xuperIdleHideMs=4000;\n$XUPER_REMOTE_NAV_JS" else XUPER_REMOTE_NAV_JS }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
     val hasCustomHub = isLatinoFamily || isOkRu || isSimuladores
@@ -1828,7 +1879,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isPrueba) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isPrueba, hoverExitDelayMs = if (isPrueba) 4_000L else 0L) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1930,7 +1981,7 @@ private fun WebEmbedPlayer(
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
-                            if ((isVidly || isVidLux || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if ((isVidly || isVidLux || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(remoteNavScript, null)
                             if (isVidLux && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
@@ -1986,7 +2037,7 @@ private fun WebEmbedPlayer(
                     }
                     // Vidly: navegación con el mando dentro de la página (debe registrarse ANTES de cargar para cubrir los iframes).
                     if (remoteNavSupported) {
-                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_REMOTE_NAV_JS, setOf("*")) }
+                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, remoteNavScript, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperRemoteNav", "No se pudo instalar la navegación con el mando", it) }
                     }
                     // VidLux: arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDLUX_AUTOPLAY_JS).
