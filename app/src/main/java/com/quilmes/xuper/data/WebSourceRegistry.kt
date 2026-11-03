@@ -101,9 +101,9 @@ object WebSourceRegistry {
     }
 
     // ---- VidFast (reproductor "Alternativo 2") ----
-    private const val VIDFAST_HOST = "vidfast.pro"
+    private const val VIDFAST_HOST = "vidfast.vc"
     // Dominios que publica VidFast (mismo servicio); solo se usan para reconocer el host.
-    private val VIDFAST_HOSTS = listOf(VIDFAST_HOST, "vidfast.in", "vidfast.to", "vidfast.me", "vidfast.net", "vidfast.xyz", "vidfast.vc", "vidfast.bz")
+    private val VIDFAST_HOSTS = listOf(VIDFAST_HOST, "vidfast.pro", "vidfast.in", "vidfast.to", "vidfast.me", "vidfast.net", "vidfast.xyz", "vidfast.bz")
 
     fun isVidFastHost(host: String?): Boolean {
         val h = host?.lowercase()?.trimEnd('.') ?: return false
@@ -127,8 +127,9 @@ object WebSourceRegistry {
                 "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
             } ?: return null
         }
-        // Sin `autoPlay`: el arranque con sonido lo hace Xuper desde el WebView (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
-        // `sub=es` pide español como subtítulo predeterminado; depende de las pistas que entregue VidFast.
-        return "$base?theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
+        // `autoPlay=true` es el parámetro oficial de VidFast para arrancar solo. Además, Xuper deja su script de respaldo
+        // para forzar el sonido (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
+        // `sub=es` pide español como subtítulo predeterminado (no confirmado en la doc consultada).
+        return "$base?autoPlay=true&theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
     }
 }

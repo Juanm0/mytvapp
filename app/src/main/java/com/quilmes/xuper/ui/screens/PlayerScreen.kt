@@ -514,7 +514,7 @@ private val XUPER_VIDLUX_AUTOPLAY_JS = """(function(){
 
 /**
  * Arranque automático CON SONIDO de VidFast (botón Alternativo 2). Misma lógica que [XUPER_VIDLUX_AUTOPLAY_JS]
- * (VidFast tampoco recibe `autoPlay` en la URL: el arranque lo hace Xuper), pero con su propia bandera de
+ * (en VidFast la URL ya lleva `autoPlay=true`; el script queda de respaldo, sobre todo para el sonido), pero con su propia bandera de
  * "ya instalado" y su propia etiqueta de Logcat (XuperVidFast) para distinguir los dos proveedores.
  */
 private val XUPER_VIDFAST_AUTOPLAY_JS = XUPER_VIDLUX_AUTOPLAY_JS
@@ -2004,7 +2004,7 @@ private fun WebEmbedPlayer(
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDLUX_AUTOPLAY_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperVidLux", "No se pudo instalar el arranque automático", it) }
                     }
-                    // VidFast: mismo arranque automático con sonido (la URL no lleva autoPlay; ver XUPER_VIDFAST_AUTOPLAY_JS).
+                    // VidFast: la URL lleva autoPlay=true; este script es el respaldo para forzar el sonido (ver XUPER_VIDFAST_AUTOPLAY_JS).
                     if (isVidFast && remoteNavSupported) {
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDFAST_AUTOPLAY_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperVidFast", "No se pudo instalar el arranque automático", it) }
