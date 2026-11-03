@@ -1338,7 +1338,10 @@ private fun WebEmbedPlayer(
     var pageError by remember(url) { mutableStateOf<String?>(null) }
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-    val isVideoApi = remember(url) { runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
+    // Prueba: URL de VideoAPI marcada con "#xuper-prueba". Se trata como página web normal (navegación de mando de
+    // fábrica, igual que Vidly/VidLux/VidFast), SIN el hub ni el agente de frames de Latino.
+    val isPrueba = remember(url) { WebSourceRegistry.isVideoApiPruebaUrl(url) }
+    val isVideoApi = remember(url) { !isPrueba && runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
     // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
@@ -1347,7 +1350,7 @@ private fun WebEmbedPlayer(
     val isVidFast = remember(url) { runCatching { WebSourceRegistry.isVidFastHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
     val remoteNavSupported = remember {
-        (isVidly || isVidLux || isVidFast) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
+        (isVidly || isVidLux || isVidFast || isPrueba) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
     }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
@@ -1836,7 +1839,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isVidFast) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isVidFast || isPrueba) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1939,7 +1942,7 @@ private fun WebEmbedPlayer(
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
-                            if ((isVidly || isVidLux || isVidFast) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if ((isVidly || isVidLux || isVidFast || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
                             if (isVidLux && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
                             if (isVidFast && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDFAST_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {

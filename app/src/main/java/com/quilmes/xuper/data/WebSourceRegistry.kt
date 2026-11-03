@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo) y VidFast (Alternativo 2). */
+/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo), VidFast (Alternativo 2) y Prueba (VideoAPI con navegación de fábrica). */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -36,6 +36,15 @@ object WebSourceRegistry {
         }
         return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
     }
+
+    // ---- Prueba: VideoAPI con la navegación de mando "de fábrica" (como Vidly/VidLux/VidFast), sin hub de Xuper ----
+    // Usa exactamente la misma URL de VideoAPI; solo se le agrega un fragmento (#xuper-prueba) que NO se envía al
+    // servidor y que PlayerScreen usa para tratarlo como página web normal (sin hub ni agente de frames de Latino).
+    private const val PRUEBA_FRAGMENT = "#xuper-prueba"
+
+    fun videoApiPruebaUrl(catalogId: String): String? = videoApiUrl(catalogId)?.let { it + PRUEBA_FRAGMENT }
+
+    fun isVideoApiPruebaUrl(url: String): Boolean = url.endsWith(PRUEBA_FRAGMENT) && isVideoApiEmbedUrl(url)
 
     // ---- Vidly (reproductor principal: botón "Reproducir") ----
     private const val VIDLY_HOST = "vidly.pro"

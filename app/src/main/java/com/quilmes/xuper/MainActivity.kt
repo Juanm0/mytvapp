@@ -384,12 +384,14 @@ class MainActivity : ComponentActivity() {
                               val useVidly = request.startsWith("vidly:")
                               val useVidLux = request.startsWith("vidlux:")
                               val useVidFast = request.startsWith("vidfast:")
+                              val usePrueba = request.startsWith("prueba:")
                               val useSimuladores = request.startsWith("simuladores:")
                               val requestedId = when {
                                   useVideoApi -> request.removePrefix("videoapi:")
                                   useVidly -> request.removePrefix("vidly:")
                                   useVidLux -> request.removePrefix("vidlux:")
                                   useVidFast -> request.removePrefix("vidfast:")
+                                  usePrueba -> request.removePrefix("prueba:")
                                   useSimuladores -> request.removePrefix("simuladores:")
                                   else -> request
                               }
@@ -398,6 +400,7 @@ class MainActivity : ComponentActivity() {
                                   useVidly -> WebSourceRegistry.vidlyUrl(requestedId)
                                   useVidLux -> WebSourceRegistry.vidLuxUrl(requestedId)
                                   useVidFast -> WebSourceRegistry.vidFastUrl(requestedId)
+                                  usePrueba -> WebSourceRegistry.videoApiPruebaUrl(requestedId)
                                   useSimuladores -> Regex("^.*\\|s(\\d+)\\|e(\\d+)$").matchEntire(requestedId)?.let { match ->
                                       val season = match.groupValues[1].toIntOrNull() ?: 1
                                       val episode = match.groupValues[2].toIntOrNull() ?: 1
@@ -557,6 +560,8 @@ class MainActivity : ComponentActivity() {
                                     val nextUrl = if (tmdbNumber == "332") {
                                         val okId = simuladoresVideoId(nextSeasonNumber, nextEpisode.number)
                                         okId?.let { "https://ok.ru/videoembed/$it" }
+                                    } else if (WebSourceRegistry.isVideoApiPruebaUrl(streamUrl)) {
+                                        WebSourceRegistry.videoApiPruebaUrl(nextKey)
                                     } else if (runCatching { WebSourceRegistry.isVideoApiHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {
                                         WebSourceRegistry.videoApiUrl(nextKey)
                                     } else if (runCatching { WebSourceRegistry.isVidlyHost(Uri.parse(streamUrl).host) }.getOrDefault(false)) {

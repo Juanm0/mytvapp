@@ -14,6 +14,7 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 2. **Latino** — VideoAPI (`videoapi.la`; para rutas de anime también puede usarse `videoapp.zip`).
 3. **Alternativo** — VidLux (`vidlux.xyz`), embed web por ID TMDB para películas y episodios.
 4. **Alternativo 2** — VidFast (`vidfast.vc`), embed web por ID TMDB para películas y episodios (volvió a agregarse como cuarta opción; antes había sido reemplazado por VidLux porque en la TV andaba peor que en PC).
+5. **Prueba** — VideoAPI (`videoapi.la`) con la navegación de mando "de fábrica" de Xuper (la misma de Vidly/VidLux/VidFast), sin hub ni agente de frames. Es un experimento: si anda bien en la TV, la idea es pasar Latino a este esquema. **No confundir con el antiguo botón "Prueba" (que era Vidly y hoy se llama "Reproducir")**.
 
 **PlayerLab (torrent con libtorrent4j/YTS) está eliminado** por pedido del usuario (se sospechaba que trababa toda la app): no quedan archivos, ruta `playerlab/...`, botón, dependencias `libtorrent4j` ni timeouts especiales para `127.0.0.1`. No volver a agregarlo salvo pedido explícito.
 
@@ -26,6 +27,7 @@ Los identificadores internos de petición que usa `DetailScreen` y resuelve `Mai
 - `vidly:<id>` → `WebSourceRegistry.vidlyUrl(...)` → botón **Reproducir**.
 - `videoapi:<id>` → `WebSourceRegistry.videoApiUrl(...)` → botón **Latino**.
 - `vidlux:<id>` → `WebSourceRegistry.vidLuxUrl(...)` → `https://vidlux.xyz/embed/movie/{id}` o `/embed/tv/{id}/{season}/{episode}` → botón **Alternativo**.
+- `prueba:<id>` → `WebSourceRegistry.videoApiPruebaUrl(...)` → misma URL de VideoAPI que Latino + fragmento `#xuper-prueba` → botón **Prueba** (ver sección "Prueba").
 - `vidfast:<id>` → `WebSourceRegistry.vidFastUrl(...)` → `https://vidfast.vc/movie/{id}?autoPlay=true` o `/tv/{id}/{season}/{episode}?autoPlay=true` → botón **Alternativo 2**.
 - `simuladores:<id>|s<temporada>|e<episodio>` → ruta especial de Los Simuladores mediante OK.ru.
 
@@ -35,7 +37,7 @@ Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. 
 
 - `app/src/main/java/com/quilmes/xuper/MainActivity.kt`: navegación principal, resolución de solicitudes de reproducción y flujo del siguiente episodio.
 - `app/src/main/java/com/quilmes/xuper/data/WebSourceRegistry.kt`: detección de dominios y construcción de URLs de Vidly, VideoAPI, VidLux y VidFast; también marca anime para elegir la ruta de VideoAPI.
-- `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, Alternativo, Alternativo 2 (en películas y en episodios).
+- `app/src/main/java/com/quilmes/xuper/ui/screens/DetailScreen.kt`: ficha, selección de temporada/episodio y botones de reproducción. Mantener el orden oficial: Reproducir, Latino, Alternativo, Alternativo 2, Prueba (en películas y en episodios).
 - `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`: reproductor web embebido, mandos/teclas, controles superpuestos, filtrado de solicitudes y tratamiento de errores.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/WebHubKeyRouter.kt`: enrutamiento de teclas del mando para controles web.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/XuperWebRequestFilter.kt` y `XuperBraveAdblock.kt`: filtrado de solicitudes y protección frente a publicidad/redirecciones.
@@ -64,6 +66,14 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 - La navegación del mando usa el agente remoto ya utilizado por Vidly cuando AndroidX WebKit admite scripts al inicio del documento (`XUPER_REMOTE_NAV_JS`, `HubAwareWebView`); VidLux conserva sus controles originales. Los selectores del agente son genéricos: **verificar en la TV** que el mando llega al selector de servidores y a los controles de VidLux.
 - Servidores internos de VidLux (según su presentación): Star, Rocket, Quilox, Spider, Nova, Magic, Aura, Dubai, Astra, con fallback automático; también calidad (144p–1080p) y pistas de audio/subtítulos seleccionables dentro del reproductor.
 - Verificación hecha: lógica del script probada con jsdom (video que arranca muteado, póster con botón Play que crea el `<video>`, `play()` rechazado) y sintaxis con `node --check`. **No se compiló el APK ni se probó en una TV.**
+
+## Prueba (VideoAPI con navegación de fábrica)
+
+- Objetivo: que VideoAPI se pueda navegar con el mando por **todas las opciones de la pantalla** (como en Alternativo/Alternativo 2), en vez de pasar por el hub propio de Latino.
+- La URL es la de `WebSourceRegistry.videoApiUrl(...)` más el fragmento `#xuper-prueba` (los fragmentos no se envían al servidor; no cambia lo que recibe VideoAPI). `WebSourceRegistry.isVideoApiPruebaUrl(url)` lo detecta.
+- En `PlayerScreen.kt` (`WebEmbedPlayer`) `isPrueba` fuerza `isVideoApi = false`, por lo que **no** se activan el hub, el agente de frames, la sonda de Latino ni la selección automática de español de Latino; en cambio recibe `XUPER_REMOTE_NAV_JS` y `consumeDpad`, igual que Vidly/VidLux/VidFast. No usa `videoApiEmbedUrl(...)` (no reanuda la posición guardada como Latino).
+- El siguiente episodio conserva Prueba (`MainActivity`).
+- **Latino no se tocó**: sigue con su hub. Pendiente de verificar en la TV si el mando llega a todos los controles de VideoAPI; los selectores del agente son genéricos y VideoAPI corre en un iframe de otro origen (el script se inyecta en todos los frames).
 
 ## VidFast (reproductor "Alternativo 2")
 
