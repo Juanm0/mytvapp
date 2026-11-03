@@ -30,6 +30,7 @@ import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.screens.MainScreen
+import com.quilmes.xuper.ui.screens.LabPlayerScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.screens.XuperBraveAdblock
@@ -366,14 +367,28 @@ class MainActivity : ComponentActivity() {
                                 val key = "jkanime-$encodedEpisode"
                                 navController.navigate("external-player/${Uri.encode(title)}/$encodedStream/$key")
                             },
-                            // LAB: catálogo TMDB + CineSrc. Usa el mismo "external-player" que Vidly/Latino/Alternativo.
+                            // LAB: catálogo TMDB + CineSrc. Pantalla "Cargando…" + reproductor propio (ver LabPlayerScreen).
                             onPlayLab = { labTitle, catalogId ->
-                                val labUrl = WebSourceRegistry.cineSrcUrl(catalogId)
-                                if (labUrl != null) {
-                                    val encodedLabUrl = Base64.encodeToString(labUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                                    navController.navigate("external-player/${Uri.encode(labTitle)}/$encodedLabUrl/${Uri.encode(catalogId)}")
-                                }
+                                navController.navigate("lab-player/${Uri.encode(labTitle)}/${Uri.encode(catalogId)}")
                             },
+                        )
+                    }
+                    composable(
+                        route = "lab-player/{labName}/{labId}",
+                        arguments = listOf(
+                            navArgument("labName") { type = NavType.StringType },
+                            navArgument("labId") { type = NavType.StringType },
+                        ),
+                    ) { entry ->
+                        LabPlayerScreen(
+                            name = entry.arguments?.getString("labName").orEmpty(),
+                            catalogId = entry.arguments?.getString("labId").orEmpty(),
+                            catalogService = tmdbCatalogService,
+                            onPlayNext = { nextName, nextId ->
+                                navController.popBackStack()
+                                navController.navigate("lab-player/${Uri.encode(nextName)}/${Uri.encode(nextId)}")
+                            },
+                            onExit = { navController.popBackStack() },
                         )
                     }
                     composable(

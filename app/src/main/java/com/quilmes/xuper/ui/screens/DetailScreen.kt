@@ -142,6 +142,8 @@ fun DetailScreen(
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
                                 Button(onClick = { onPlay("vidlux:$videoApiPlaybackId") }) { Text("▶  Alternativo") }
                                 Button(onClick = { onPlay("prueba:$videoApiPlaybackId") }) { Text("▶  Prueba") }
+                                // LAB: CineSrc
+                                Button(onClick = { onPlay("cinesrc:$videoApiPlaybackId") }) { Text("▶  LAB") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -221,6 +223,11 @@ fun DetailScreen(
                                     selectedEpisode = episode.number
                                     onPlay("prueba:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Prueba") }
+                                // LAB: CineSrc
+                                Button(onClick = {
+                                    selectedEpisode = episode.number
+                                    onPlay("cinesrc:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
+                                }) { Text("▶  LAB") }
                             }
                         }
                     }
