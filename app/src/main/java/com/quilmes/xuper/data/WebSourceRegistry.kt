@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo), VidFast (Alternativo 2) y Prueba (VideoAPI con navegación de fábrica). */
+/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo) y Prueba (VideoAPI con navegación de fábrica). */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -37,7 +37,7 @@ object WebSourceRegistry {
         return "$base?autoplay=1&auto_next=1&skip_intro=1&thumbnails=1&subtitles=1&quality_selector=1"
     }
 
-    // ---- Prueba: VideoAPI con la navegación de mando "de fábrica" (como Vidly/VidLux/VidFast), sin hub de Xuper ----
+    // ---- Prueba: VideoAPI con la navegación de mando "de fábrica" (como Vidly/VidLux), sin hub de Xuper ----
     // Usa exactamente la misma URL de VideoAPI; solo se le agrega un fragmento (#xuper-prueba) que NO se envía al
     // servidor y que PlayerScreen usa para tratarlo como página web normal (sin hub ni agente de frames de Latino).
     private const val PRUEBA_FRAGMENT = "#xuper-prueba"
@@ -107,38 +107,5 @@ object WebSourceRegistry {
         // - Sin parámetros de autoplay: su nombre no está confirmado en la documentación consultada. El arranque con
         //   sonido lo hace Xuper desde el WebView (ver XUPER_VIDLUX_AUTOPLAY_JS en PlayerScreen.kt).
         return "$base?color=16A085"
-    }
-
-    // ---- VidFast (reproductor "Alternativo 2") ----
-    private const val VIDFAST_HOST = "vidfast.vc"
-    // Dominios que publica VidFast (mismo servicio); solo se usan para reconocer el host.
-    private val VIDFAST_HOSTS = listOf(VIDFAST_HOST, "vidfast.pro", "vidfast.in", "vidfast.to", "vidfast.me", "vidfast.net", "vidfast.xyz", "vidfast.bz")
-
-    fun isVidFastHost(host: String?): Boolean {
-        val h = host?.lowercase()?.trimEnd('.') ?: return false
-        return VIDFAST_HOSTS.any { h == it || h.endsWith(".$it") }
-    }
-
-    fun isVidFastEmbedUrl(url: String): Boolean =
-        VIDFAST_HOSTS.any { url.startsWith("https://$it/movie/") || url.startsWith("https://$it/tv/") }
-
-    /** VidFast recibe IDs TMDB: /movie/{id} o /tv/{id}/{season}/{episode}. */
-    fun vidFastUrl(catalogId: String): String? {
-        val episode = Regex("^tmdb-tv-(\\d+)\\|s(\\d+)\\|e(\\d+)$").matchEntire(catalogId)
-        val base = when {
-            episode != null -> {
-                val (id, season, number) = episode.destructured
-                "https://$VIDFAST_HOST/tv/$id/$season/$number"
-            }
-            else -> Regex("^tmdb-movie-(\\d+)$").matchEntire(catalogId)?.let {
-                "https://$VIDFAST_HOST/movie/${it.groupValues[1]}"
-            } ?: Regex("^tmdb-tv-(\\d+)$").matchEntire(catalogId)?.let {
-                "https://$VIDFAST_HOST/tv/${it.groupValues[1]}/1/1"
-            } ?: return null
-        }
-        // `autoPlay=true` es el parámetro oficial de VidFast para arrancar solo. Además, Xuper deja su script de respaldo
-        // para forzar el sonido (ver XUPER_VIDFAST_AUTOPLAY_JS en PlayerScreen.kt).
-        // `sub=es` pide español como subtítulo predeterminado (no confirmado en la doc consultada).
-        return "$base?autoPlay=true&theme=16A085&title=true&poster=true&sub=es&hideServer=false&fullscreenButton=false"
     }
 }

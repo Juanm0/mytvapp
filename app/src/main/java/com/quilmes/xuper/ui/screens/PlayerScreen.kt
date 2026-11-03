@@ -512,15 +512,6 @@ private val XUPER_VIDLUX_AUTOPLAY_JS = """(function(){
   tick();
 })();"""
 
-/**
- * Arranque automático CON SONIDO de VidFast (botón Alternativo 2). Misma lógica que [XUPER_VIDLUX_AUTOPLAY_JS]
- * (en VidFast la URL ya lleva `autoPlay=true`; el script queda de respaldo, sobre todo para el sonido), pero con su propia bandera de
- * "ya instalado" y su propia etiqueta de Logcat (XuperVidFast) para distinguir los dos proveedores.
- */
-private val XUPER_VIDFAST_AUTOPLAY_JS = XUPER_VIDLUX_AUTOPLAY_JS
-    .replace("__xuperVidLuxAutoplay", "__xuperVidFastAutoplay")
-    .replace("[XuperVidLux] ", "[XuperVidFast] ")
-
 
 /**
  * Best-effort HTML5 controls. A cross-origin iframe is intentionally inaccessible by browser policy.
@@ -805,7 +796,7 @@ fun PlayerScreen(
     directOnly: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
-        WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isVidFastEmbedUrl(streamUrl) ||
+        WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) ||
         streamUrl.startsWith("https://los-simuladores.bringfeel.com.ar/reproductor") ||
         streamUrl.startsWith("https://ok.ru/videoembed/")
 
@@ -1339,18 +1330,16 @@ private fun WebEmbedPlayer(
     var pageFinished by remember(url) { mutableStateOf(false) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     // Prueba: URL de VideoAPI marcada con "#xuper-prueba". Se trata como página web normal (navegación de mando de
-    // fábrica, igual que Vidly/VidLux/VidFast), SIN el hub ni el agente de frames de Latino.
+    // fábrica, igual que Vidly/VidLux), SIN el hub ni el agente de frames de Latino.
     val isPrueba = remember(url) { WebSourceRegistry.isVideoApiPruebaUrl(url) }
     val isVideoApi = remember(url) { !isPrueba && runCatching { WebSourceRegistry.isVideoApiHost(URI(url).host) }.getOrDefault(false) }
     // Vidly (botón "Reproducir"): reproductor principal. El control remoto lo maneja
     // XUPER_REMOTE_NAV_JS (navegación entre los controles que muestra la propia página).
     val isVidly = remember(url) { runCatching { WebSourceRegistry.isVidlyHost(URI(url).host) }.getOrDefault(false) }
     val isVidLux = remember(url) { runCatching { WebSourceRegistry.isVidLuxHost(URI(url).host) }.getOrDefault(false) }
-    // VidFast (botón "Alternativo 2"): mismo tratamiento que VidLux (navegación con el mando + arranque con sonido).
-    val isVidFast = remember(url) { runCatching { WebSourceRegistry.isVidFastHost(URI(url).host) }.getOrDefault(false) }
     val isLatinoFamily = isVideoApi
     val remoteNavSupported = remember {
-        (isVidly || isVidLux || isVidFast || isPrueba) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
+        (isVidly || isVidLux || isPrueba) && runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)
     }
     val isOkRu = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "ok.ru" || it.endsWith(".ok.ru") } == true }.getOrDefault(false) }
     val isSimuladores = remember(url) { runCatching { URI(url).host?.lowercase()?.let { it == "los-simuladores.bringfeel.com.ar" || it.endsWith(".bringfeel.com.ar") } == true }.getOrDefault(false) }
@@ -1839,7 +1828,7 @@ private fun WebEmbedPlayer(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext ->
                 val container = FrameLayout(viewContext).apply { setBackgroundColor(AndroidColor.BLACK) }
-                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isVidFast || isPrueba) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
+                val webView = HubAwareWebView(viewContext, consumeDpad = isVidly || isVidLux || isPrueba) { keyEvent -> onHubKeyState.value(keyEvent) }.apply {
                     setBackgroundColor(AndroidColor.BLACK)
                     setLayerType(View.LAYER_TYPE_HARDWARE, null)
                     settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -1865,7 +1854,6 @@ private fun WebEmbedPlayer(
                         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
                             val text = consoleMessage?.message()
                             if (text != null && text.startsWith("[XuperVidLux]")) android.util.Log.i("XuperVidLux", text.take(300))
-                            if (text != null && text.startsWith("[XuperVidFast]")) android.util.Log.i("XuperVidFast", text.take(300))
                             return super.onConsoleMessage(consoleMessage)
                         }
                         override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message?): Boolean = false
@@ -1942,9 +1930,8 @@ private fun WebEmbedPlayer(
                             })();""", null)
                             view?.evaluateJavascript(webPlaybackResumeScript(savedResumePosition, autoSelectSpanish = isVideoApi), null)
                             // Sin soporte de scripts de inicio de documento: al menos el documento principal.
-                            if ((isVidly || isVidLux || isVidFast || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
+                            if ((isVidly || isVidLux || isPrueba) && !remoteNavSupported) view?.evaluateJavascript(XUPER_REMOTE_NAV_JS, null)
                             if (isVidLux && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDLUX_AUTOPLAY_JS, null)
-                            if (isVidFast && !remoteNavSupported) view?.evaluateJavascript(XUPER_VIDFAST_AUTOPLAY_JS, null)
                             if (isSimuladores || isOkRu) {
                                 view?.evaluateJavascript(simuladoresAutoplayScript(), null)
                             }
@@ -2007,11 +1994,6 @@ private fun WebEmbedPlayer(
                         runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDLUX_AUTOPLAY_JS, setOf("*")) }
                             .onFailure { android.util.Log.w("XuperVidLux", "No se pudo instalar el arranque automático", it) }
                     }
-                    // VidFast: la URL lleva autoPlay=true; este script es el respaldo para forzar el sonido (ver XUPER_VIDFAST_AUTOPLAY_JS).
-                    if (isVidFast && remoteNavSupported) {
-                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, XUPER_VIDFAST_AUTOPLAY_JS, setOf("*")) }
-                            .onFailure { android.util.Log.w("XuperVidFast", "No se pudo instalar el arranque automático", it) }
-                    }
                     tag = url
                     if (nextEpisode != null) {
                         addJavascriptInterface(object {
@@ -2053,8 +2035,9 @@ private fun WebEmbedPlayer(
                             }
                         }, "XuperBridge")
                     }
-                    if (isVideoApi) {
-                        loadUrl(videoApiEmbedUrl(url, savedResumePosition))
+                    if (isVideoApi || isPrueba) {
+                        // Prueba carga la MISMA URL que Latino (skin=netflix, hide_controls=0, start_at...), sin el fragmento.
+                        loadUrl(videoApiEmbedUrl(url.substringBefore('#'), savedResumePosition))
                     } else if (isSimuladores || isOkRu) loadUrl(simuladoresAutoplayUrl(url)) else loadUrl(url)
                     requestFocus()
                 }
@@ -2066,8 +2049,8 @@ private fun WebEmbedPlayer(
                 val webView = container.getChildAt(0) as? WebView
                 if (webView != null && webView.tag != url) {
                     webView.tag = url
-                    if (isVideoApi) {
-                        webView.loadUrl(videoApiEmbedUrl(url, playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
+                    if (isVideoApi || isPrueba) {
+                        webView.loadUrl(videoApiEmbedUrl(url.substringBefore('#'), playbackPrefs.getLong(positionPreferenceKey, savedResumePosition).coerceAtLeast(0L)))
                     } else if (isSimuladores || isOkRu) webView.loadUrl(simuladoresAutoplayUrl(url)) else webView.loadUrl(url)
                 }
             },
