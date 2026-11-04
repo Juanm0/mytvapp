@@ -22,7 +22,6 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -69,15 +68,14 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
+import androidx.media3.common.MediaItem.SubtitleConfiguration
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -86,6 +84,7 @@ import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
+import com.quilmes.xuper.data.ExternalSubtitle
 import com.quilmes.xuper.data.WebPageMediaResolver
 import java.net.URI
 import kotlinx.coroutines.delay
@@ -846,7 +845,7 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
-    subtitles: List<Pair<String, String>> = emptyList(),
+    externalSubtitles: List<ExternalSubtitle> = emptyList(),
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
@@ -885,8 +884,8 @@ fun PlayerScreen(
         onPlayNextEpisode = onPlayNextEpisode,
         onExit = onExit,
         directOnly = directOnly,
+        externalSubtitles = externalSubtitles,
         onResolveAsWebPage = resolvePageCallback,
-        subtitles = subtitles,
     )
 }
 
@@ -905,8 +904,8 @@ private fun NativePlayerScreen(
     onPlayNextEpisode: (String) -> Unit,
     onExit: () -> Unit,
     directOnly: Boolean,
+    externalSubtitles: List<ExternalSubtitle>,
     onResolveAsWebPage: () -> Unit,
-    subtitles: List<Pair<String, String>> = emptyList(),
 ) {
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
@@ -919,37 +918,13 @@ private fun NativePlayerScreen(
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
-var failedSources by remember(streamUrl) { mutableStateOf(0) }
+    var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
 
-    // Estilo de subtítulos (tamaño, posición, color, fondo)
-    var subtitleFontSize by remember(streamUrl) { mutableStateOf(1.0f) }     // multiplicador de charWidthFraction
-    var subtitlePosition by remember(streamUrl) { mutableStateOf(0.10f) }   // windowSizeFraction (0.05=cerca del borde, 0.15=más arriba)
-    var subtitleColor by remember(streamUrl) { mutableStateOf("white") }    // white/yellow/black
-    var subtitleBackground by remember(streamUrl) { mutableStateOf("dark") } // none/dark/translucent
-    var playerViewRef by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
-
-    val buttonCount = 8
+    val buttonCount = 4
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
     val rootFocusRequester = remember(streamUrl) { FocusRequester() }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
-
-    // Etiquetas legibles para los botones de estilo de subtítulos (ciclan opciones)
-    fun tamanioLabel(s: Float) = when (s) { 0.7f -> "Pequeño"; 1.5f -> "Grande"; else -> "Normal" }
-    fun posicionLabel(p: Float) = when (p) { 0.06f -> "Abajo"; 0.14f -> "Arriba"; else -> "Medio" }
-    fun colorLabel(c: String) = when (c) { "white" -> "Blanco"; "yellow" -> "Amarillo"; else -> "Negro" }
-    fun fondoLabel(b: String) = when (b) { "none" -> "Ninguno"; "dark" -> "Oscuro"; else -> "Translúcido" }
-
-    // Nombre legible de idioma para las pistas de texto (subtitle track label)
-    fun nombreIdioma(lang: String): String = when (lang.lowercase()) {
-        "spa", "es", "esp" -> "Español"
-        "en", "eng" -> "Inglés"
-        "pt", "por" -> "Portugués"
-        "fr", "fra" -> "Francés"
-        "it", "ita" -> "Italiano"
-        "de", "deu" -> "Alemán"
-        else -> if (lang.isNotBlank()) lang.uppercase() else "Subtítulo"
-    }
 
     val dataSourceFactory = remember {
         DefaultHttpDataSource.Factory()
@@ -969,74 +944,33 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             }
     }
 
-    // Aplica el estilo completo de subtítulos al SubtitleView del PlayerView
-    // (color de texto, fondo del texto, tamaño de fuente y fondo del área).
-    LaunchedEffect(playerViewRef, subtitleFontSize, subtitlePosition, subtitleColor, subtitleBackground) {
-        val pv = playerViewRef ?: return@LaunchedEffect
-        // Buscar el SubtitleView entre los hijos de PlayerView por nombre de clase (Media3 usa SubtitleView interna).
-        val subtitleView = (0 until pv.childCount)
-            .map { pv.getChildAt(it) }
-            .firstOrNull { it::class.simpleName == "SubtitleView" } as? SubtitleView
-        if (subtitleView == null) return@LaunchedEffect
-
-        val textColor = when (subtitleColor) {
-            "white" -> android.graphics.Color.WHITE
-            "yellow" -> android.graphics.Color.YELLOW
-            "black" -> android.graphics.Color.BLACK
-            else -> android.graphics.Color.WHITE
-        }
-
-        val bgColor = when (subtitleBackground) {
-            "none" -> android.graphics.Color.TRANSPARENT
-            "dark" -> android.graphics.Color.BLACK
-            "translucent" -> android.graphics.Color.argb(128, 0, 0, 0)
-            else -> android.graphics.Color.TRANSPARENT
-        }
-
-        // Estilo de subtítulo vía CaptionStyleCompat de Media3 (color de texto y fondo del texto).
-        val style = CaptionStyleCompat(
-            textColor,
-            bgColor,
-            android.graphics.Color.TRANSPARENT, // windowColor
-            0, // edgeType (EDGE_TYPE_NONE)
-            android.graphics.Color.BLACK, // edgeColor
-            android.graphics.Typeface.DEFAULT // typeface
-        )
-        subtitleView.setStyle(style)
-        subtitleView.setApplyEmbeddedStyles(false)
-
-        // Tamaño de fuente como fracción del alto de la vista.
-        val textSizeFraction = when (subtitleFontSize) {
-            0.7f -> 0.04f
-            1.0f -> 0.0533f
-            1.5f -> 0.07f
-            else -> 0.0533f
-        }
-        subtitleView.setFractionalTextSize(textSizeFraction)
-
-        // Color de fondo del área de subtítulos (fondo del view completo).
-        subtitleView.setBackgroundColor(bgColor)
-    }
-
     fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
         dataSourceFactory.setDefaultRequestProperties(headers)
         val cleanUrl = url.substringBefore('?').lowercase()
         val lowerUrl = url.lowercase()
-        // Pistas de subtítulo detectadas en el embed de CineSrc (LAB).
-        val subtitleConfigs = subtitles.map { (subUrl, subLang) ->
-            val mime = if (subUrl.lowercase().contains("vtt")) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
-            MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                .setMimeType(mime)
-                .setLanguage(subLang)
-                .setLabel(nombreIdioma(subLang))
-                .build()
-        }
+        val subtitleConfigurations = externalSubtitles
+            .distinctBy { it.url }
+            .mapNotNull { subtitle ->
+                val subtitleUri = runCatching { android.net.Uri.parse(subtitle.url) }.getOrNull() ?: return@mapNotNull null
+                val mime = when (subtitle.mimeType) {
+                    "text/vtt" -> MimeTypes.TEXT_VTT
+                    else -> MimeTypes.APPLICATION_SUBRIP
+                }
+                runCatching {
+                    SubtitleConfiguration.Builder(subtitleUri)
+                        .setMimeType(mime)
+                        .setLanguage(subtitle.language)
+                        .setLabel(subtitle.label + (if (subtitle.hearingImpaired) " (HI)" else "") + (if (subtitle.forced) " (forzado)" else ""))
+                        .setSelectionFlags(if (subtitle.language.startsWith("es", true)) C.SELECTION_FLAG_AUTOSELECT else 0)
+                        .build()
+                }.getOrNull()
+            }
         val item = MediaItem.Builder().setUri(url).apply {
             when {
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
-            setSubtitleConfigurations(subtitleConfigs)
+            if (subtitleConfigurations.isNotEmpty()) setSubtitleConfigurations(subtitleConfigurations)
         }.build()
         attemptedUrls = attemptedUrls + url
         val resumeKey = currentTitleId.ifBlank { streamUrl }
@@ -1217,7 +1151,6 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                    playerViewRef = this
                 }
             },
             update = { it.player = exoPlayer },
@@ -1245,21 +1178,6 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     }
                 }
                 Text("◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                if (subtitles.isNotEmpty()) {
-                    Text(
-                        text = "Subtítulos: disponible (CC)",
-                        color = Color(0xFF65DCE8),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                    )
-                } else {
-                    Text(
-                        text = "Sin subtítulos disponibles",
-                        color = Color(0x99FFFFFF),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
-                    )
-                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(buttonFocusRequesters[0]), onClick = { togglePlayPause() }) {
                         Text(if (isPlaying) "Ⅱ  Pausar" else "▶  Reproducir")
@@ -1269,33 +1187,10 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                         showControls = true
                         TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
                     }) { Text("♫  Audio") }
-                    Button(
-                        modifier = Modifier.focusRequester(buttonFocusRequesters[3]),
-                        onClick = {
-                            showControls = true
-                            TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
-                        }
-                    ) {
-                        Text("CC  Subtítulos", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[4]), onClick = {
-                        subtitleFontSize = when (subtitleFontSize) { 0.7f -> 1.0f; 1.0f -> 1.5f; else -> 0.7f }
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[3]), onClick = {
                         showControls = true
-                    }) { Text("Tamaño: ${tamanioLabel(subtitleFontSize)}", fontSize = 10.sp) }
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[5]), onClick = {
-                        subtitlePosition = when (subtitlePosition) { 0.06f -> 0.10f; 0.10f -> 0.14f; else -> 0.06f }
-                        showControls = true
-                    }) { Text("Pos: ${posicionLabel(subtitlePosition)}", fontSize = 10.sp) }
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[6]), onClick = {
-                        subtitleColor = when (subtitleColor) { "white" -> "yellow"; "yellow" -> "black"; else -> "white" }
-                        showControls = true
-                    }) { Text("Color: ${colorLabel(subtitleColor)}", fontSize = 10.sp) }
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[7]), onClick = {
-                        subtitleBackground = when (subtitleBackground) { "none" -> "dark"; "dark" -> "translucent"; else -> "none" }
-                        showControls = true
-                    }) { Text("Fondo: ${fondoLabel(subtitleBackground)}", fontSize = 10.sp) }
+                        TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
+                    }) { Text("CC  Subtítulos") }
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
@@ -1305,22 +1200,17 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
         }
         if (showNextEpisode && nextEpisode != null) {
             val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 30)
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                NextEpisodeOverlay(
-                    episode = nextEpisode,
-                    secondsLeft = secondsLeft,
-                    onPlayNow = {
-                        if (!nextEpisodeTriggered) {
-                            nextEpisodeTriggered = true
-                            onPlayNextEpisode(nextEpisode.id)
-                        }
-                    },
-                    modifier = Modifier.padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp)
-                )
-            }
+            NextEpisodeOverlay(
+                episode = nextEpisode,
+                secondsLeft = secondsLeft,
+                onPlayNow = {
+                    if (!nextEpisodeTriggered) {
+                        nextEpisodeTriggered = true
+                        onPlayNextEpisode(nextEpisode.id)
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp),
+            )
         }
     }
 }
