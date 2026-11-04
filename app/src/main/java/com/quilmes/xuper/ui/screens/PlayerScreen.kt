@@ -26,7 +26,6 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.layout.align
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -1262,17 +1261,22 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
         }
         if (showNextEpisode && nextEpisode != null) {
             val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 30)
-            NextEpisodeOverlay(
-                episode = nextEpisode,
-                secondsLeft = secondsLeft,
-                onPlayNow = {
-                    if (!nextEpisodeTriggered) {
-                        nextEpisodeTriggered = true
-                        onPlayNextEpisode(nextEpisode.id)
-                    }
-                },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp),
-            )
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.BottomEnd
+            ) {
+                NextEpisodeOverlay(
+                    episode = nextEpisode,
+                    secondsLeft = secondsLeft,
+                    onPlayNow = {
+                        if (!nextEpisodeTriggered) {
+                            nextEpisodeTriggered = true
+                            onPlayNextEpisode(nextEpisode.id)
+                        }
+                    },
+                    modifier = Modifier.padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp)
+                )
+            }
         }
     }
 }
