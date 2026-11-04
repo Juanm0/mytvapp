@@ -76,6 +76,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -917,10 +918,15 @@ private fun NativePlayerScreen(
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
-var subtitleOffsetMs by remember(streamUrl) { mutableStateOf(0L) }
-    var activeSubtitle by remember(streamUrl) { mutableStateOf<String?>(null) }
 var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
+
+    // Estilo de subtítulos (tamaño, posición, color, fondo)
+    var subtitleFontSize by remember(streamUrl) { mutableStateOf(1.0f) }     // multiplicador de charWidthFraction
+    var subtitlePosition by remember(streamUrl) { mutableStateOf(0.10f) }   // windowSizeFraction (0.05=cerca del borde, 0.15=más arriba)
+    var subtitleColor by remember(streamUrl) { mutableStateOf("white") }    // white/yellow/black
+    var subtitleBackground by remember(streamUrl) { mutableStateOf("dark") } // none/dark/translucent
+    var playerViewRef by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
 
     val buttonCount = 4
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
@@ -943,6 +949,29 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
             }
+    }
+
+    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (tamaño, posición, fondo).
+    LaunchedEffect(playerViewRef, subtitleFontSize, subtitlePosition, subtitleBackground) {
+        val pv = playerViewRef ?: return@LaunchedEffect
+        // Buscar el SubtitleView entre los hijos de PlayerView (id exo_subtitle_view de Media3).
+        val subtitleView = (0 until pv.childCount)
+            .map { pv.getChildAt(it) }
+            .firstOrNull { it is SubtitleView }
+        if (subtitleView == null) return@LaunchedEffect
+
+        val style = SubtitleView.Style().apply {
+            windowSizeFraction = subtitlePosition
+            charWidthFraction = 0.035f * subtitleFontSize
+            lineCountFraction = 0.12f
+        }
+        subtitleView.setStyle(style)
+
+        when (subtitleBackground) {
+            "none" -> subtitleView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            "dark" -> subtitleView.setBackgroundColor(android.graphics.Color.BLACK)
+            "translucent" -> subtitleView.setBackgroundColor(android.graphics.Color.argb(128, 0, 0, 0))
+        }
     }
 
     fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
@@ -970,7 +999,6 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
         val savedPosition = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
             .getLong(resumeKey, 0L).coerceAtLeast(0L)
         exoPlayer.setMediaItem(item, savedPosition)
-        exoPlayer.setTextTrackOffsetMs(subtitleOffsetMs)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         error = null
@@ -985,9 +1013,6 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
     }
 
     LaunchedEffect(exoPlayer, streamUrl) { setUrl(streamUrl, streamHeaders) }
-    LaunchedEffect(subtitleOffsetMs) {
-        exoPlayer.setTextTrackOffsetMs(subtitleOffsetMs)
-    }
     LaunchedEffect(streamUrl) {
         delay(100)
         runCatching { rootFocusRequester.requestFocus() }
@@ -1148,6 +1173,7 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                     setOnClickListener { showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    playerViewRef = this
                 }
             },
             update = { it.player = exoPlayer },
@@ -1176,9 +1202,8 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                 }
                 Text("◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir", color = Color(0x99FFFFFF), fontSize = 11.sp)
                 if (subtitles.isNotEmpty()) {
-                    val offsetText = if (subtitleOffsetMs == 0L) "sincronizados" else if (subtitleOffsetMs > 0) "+${subtitleOffsetMs / 1000} s" else "${subtitleOffsetMs / 1000} s"
                     Text(
-                        text = "Subtítulos: disponible (CC) · offset $offsetText",
+                        text = "Subtítulos: disponible (CC)",
                         color = Color(0xFF65DCE8),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
@@ -1210,16 +1235,29 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                         Text("CC  Subtítulos", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                // Controles de ajuste de subtítulos (desfase de tiempo)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Desfase subtítulos:", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                    Button(onClick = { subtitleOffsetMs = 0L; showControls = true }) { Text("Reset", fontSize = 11.sp) }
-                    Button(onClick = { subtitleOffsetMs -= 500; showControls = true }) { Text("-0.5 s", fontSize = 11.sp) }
-                    Button(onClick = { subtitleOffsetMs += 500; showControls = true }) { Text("+0.5 s", fontSize = 11.sp) }
-                    Button(onClick = { subtitleOffsetMs -= 1000; showControls = true }) { Text("-1 s", fontSize = 11.sp) }
-                    Button(onClick = { subtitleOffsetMs += 1000; showControls = true }) { Text("+1 s", fontSize = 11.sp) }
+                // Controles de estilo de subtítulos (tamaño, posición, color, fondo)
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Tamaño:", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                        Button(onClick = { subtitleFontSize = 0.7f; showControls = true }) { Text("A-", fontSize = 10.sp) }
+                        Button(onClick = { subtitleFontSize = 1.0f; showControls = true }) { Text("A", fontSize = 10.sp) }
+                        Button(onClick = { subtitleFontSize = 1.5f; showControls = true }) { Text("A+", fontSize = 10.sp) }
+                        Text("Posición:", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                        Button(onClick = { subtitlePosition = 0.06f; showControls = true }) { Text("↓", fontSize = 10.sp) }
+                        Button(onClick = { subtitlePosition = 0.10f; showControls = true }) { Text("○", fontSize = 10.sp) }
+                        Button(onClick = { subtitlePosition = 0.14f; showControls = true }) { Text("↑", fontSize = 10.sp) }
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Color:", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                        Button(onClick = { subtitleColor = "white"; showControls = true }) { Text("Blanco", fontSize = 10.sp) }
+                        Button(onClick = { subtitleColor = "yellow"; showControls = true }) { Text("Amarillo", fontSize = 10.sp) }
+                        Button(onClick = { subtitleColor = "black"; showControls = true }) { Text("Negro", fontSize = 10.sp) }
+                        Text("Fondo:", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                        Button(onClick = { subtitleBackground = "none"; showControls = true }) { Text("Ninguno", fontSize = 10.sp) }
+                        Button(onClick = { subtitleBackground = "dark"; showControls = true }) { Text("Oscuro", fontSize = 10.sp) }
+                        Button(onClick = { subtitleBackground = "translucent"; showControls = true }) { Text("Translúcido", fontSize = 10.sp) }
+                    }
                 }
-                if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
                     Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
                 }
