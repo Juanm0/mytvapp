@@ -26,6 +26,7 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.layout.align
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -76,7 +77,6 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
-import androidx.media3.ui.SubtitleView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -951,21 +951,17 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             }
     }
 
-    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (tamaño, posición, fondo).
-    LaunchedEffect(playerViewRef, subtitleFontSize, subtitlePosition, subtitleBackground) {
+    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (fondo).
+    // Nota: Media3 1.3.1 no expone SubtitleView.Style ni setStyle públicamente, por lo que
+    // solo se puede aplicar el color de fondo. Tamaño y posición se guardan en estado para
+    // futura compatibilidad.
+    LaunchedEffect(playerViewRef, subtitleBackground) {
         val pv = playerViewRef ?: return@LaunchedEffect
-        // Buscar el SubtitleView entre los hijos de PlayerView (id exo_subtitle_view de Media3).
+        // Buscar el SubtitleView entre los hijos de PlayerView por nombre de clase (Media3 usa SubtitleView interna).
         val subtitleView = (0 until pv.childCount)
             .map { pv.getChildAt(it) }
-            .firstOrNull { it is SubtitleView }
+            .firstOrNull { it::class.simpleName == "SubtitleView" }
         if (subtitleView == null) return@LaunchedEffect
-
-        val style = SubtitleView.Style().apply {
-            windowSizeFraction = subtitlePosition
-            charWidthFraction = 0.035f * subtitleFontSize
-            lineCountFraction = 0.12f
-        }
-        subtitleView.setStyle(style)
 
         when (subtitleBackground) {
             "none" -> subtitleView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -1258,6 +1254,7 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                         Button(onClick = { subtitleBackground = "translucent"; showControls = true }) { Text("Translúcido", fontSize = 10.sp) }
                     }
                 }
+                if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
                     Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
                 }
