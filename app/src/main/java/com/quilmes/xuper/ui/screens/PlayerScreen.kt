@@ -75,6 +75,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
@@ -927,10 +928,27 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var subtitleBackground by remember(streamUrl) { mutableStateOf("dark") } // none/dark/translucent
     var playerViewRef by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
 
-    val buttonCount = 4
+    val buttonCount = 8
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
     val rootFocusRequester = remember(streamUrl) { FocusRequester() }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
+
+    // Etiquetas legibles para los botones de estilo de subtítulos (ciclan opciones)
+    private fun tamanioLabel(s: Float) = when (s) { 0.7f -> "Pequeño"; 1.5f -> "Grande"; else -> "Normal" }
+    private fun posicionLabel(p: Float) = when (p) { 0.06f -> "Abajo"; 0.14f -> "Arriba"; else -> "Medio" }
+    private fun colorLabel(c: String) = when (c) { "white" -> "Blanco"; "yellow" -> "Amarillo"; else -> "Negro" }
+    private fun fondoLabel(b: String) = when (b) { "none" -> "Ninguno"; "dark" -> "Oscuro"; else -> "Translúcido" }
+
+    // Nombre legible de idioma para las pistas de texto (subtitle track label)
+    private fun nombreIdioma(lang: String): String = when (lang.lowercase()) {
+        "spa", "es", "esp" -> "Español"
+        "en", "eng" -> "Inglés"
+        "pt", "por" -> "Portugués"
+        "fr", "fra" -> "Francés"
+        "it", "ita" -> "Italiano"
+        "de", "deu" -> "Alemán"
+        else -> if (lang.isNotBlank()) lang.uppercase() else "Subtítulo"
+    }
 
     val dataSourceFactory = remember {
         DefaultHttpDataSource.Factory()
@@ -950,11 +968,8 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             }
     }
 
-    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (fondo).
-    // Nota: Media3 1.3.1 no expone SubtitleView.Style ni setStyle públicamente, por lo que
-    // solo se puede aplicar el color de fondo. Tamaño y posición se guardan en estado para
-    // futura compatibilidad.
-    LaunchedEffect(playerViewRef, subtitleBackground) {
+    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (color de texto, fondo del texto, tamaño y fondo del área).
+    LaunchedEffect(playerViewRef, subtitleFontSize, subtitlePosition, subtitleColor, subtitleBackground) {
         val pv = playerViewRef ?: return@LaunchedEffect
         // Buscar el SubtitleView entre los hijos de PlayerView por nombre de clase (Media3 usa SubtitleView interna).
         val subtitleView = (0 until pv.childCount)
@@ -962,11 +977,44 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             .firstOrNull { it::class.simpleName == "SubtitleView" }
         if (subtitleView == null) return@LaunchedEffect
 
-        when (subtitleBackground) {
-            "none" -> subtitleView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
-            "dark" -> subtitleView.setBackgroundColor(android.graphics.Color.BLACK)
-            "translucent" -> subtitleView.setBackgroundColor(android.graphics.Color.argb(128, 0, 0, 0))
+        val textColor = when (subtitleColor) {
+            "white" -> android.graphics.Color.WHITE
+            "yellow" -> android.graphics.Color.YELLOW
+            "black" -> android.graphics.Color.BLACK
+            else -> android.graphics.Color.WHITE
         }
+
+        val bgColor = when (subtitleBackground) {
+            "none" -> android.graphics.Color.TRANSPARENT
+            "dark" -> android.graphics.Color.BLACK
+            "translucent" -> android.graphics.Color.argb(128, 0, 0, 0)
+            else -> android.graphics.Color.TRANSPARENT
+        }
+
+        // Estilo de subtítulo vía CaptionStyleCompat de Media3 (color de texto y fondo del texto).
+        val style = CaptionStyleCompat(
+            textColor,
+            bgColor,
+            android.graphics.Color.TRANSPARENT, // windowColor
+            0, // edgeType (EDGE_TYPE_NONE)
+            android.graphics.Color.BLACK, // edgeColor
+            android.graphics.Typeface.DEFAULT, // typeface
+            1f // typefaceScale
+        )
+        subtitleView.setStyle(style)
+        subtitleView.setApplyEmbeddedStyles(false)
+
+        // Tamaño de fuente como fracción del alto de la vista.
+        val textSizeFraction = when (subtitleFontSize) {
+            0.7f -> 0.04f
+            1.0f -> 0.0533f
+            1.5f -> 0.07f
+            else -> 0.0533f
+        }
+        subtitleView.setFractionalTextSize(textSizeFraction)
+
+        // Color de fondo del área de subtítulos (fondo del view completo).
+        subtitleView.setBackgroundColor(bgColor)
     }
 
     fun setUrl(url: String, headers: Map<String, String> = emptyMap()) {
@@ -979,7 +1027,7 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
                 .setMimeType(mime)
                 .setLanguage(subLang)
-                .setLabel(subLang)
+                .setLabel(nombreIdioma(subLang))
                 .build()
         }
         val item = MediaItem.Builder().setUri(url).apply {
@@ -1230,28 +1278,23 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                         Text("CC  Subtítulos", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
-                // Controles de estilo de subtítulos (tamaño, posición, color, fondo)
-                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Tamaño:", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                        Button(onClick = { subtitleFontSize = 0.7f; showControls = true }) { Text("A-", fontSize = 10.sp) }
-                        Button(onClick = { subtitleFontSize = 1.0f; showControls = true }) { Text("A", fontSize = 10.sp) }
-                        Button(onClick = { subtitleFontSize = 1.5f; showControls = true }) { Text("A+", fontSize = 10.sp) }
-                        Text("Posición:", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                        Button(onClick = { subtitlePosition = 0.06f; showControls = true }) { Text("↓", fontSize = 10.sp) }
-                        Button(onClick = { subtitlePosition = 0.10f; showControls = true }) { Text("○", fontSize = 10.sp) }
-                        Button(onClick = { subtitlePosition = 0.14f; showControls = true }) { Text("↑", fontSize = 10.sp) }
-                    }
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Color:", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                        Button(onClick = { subtitleColor = "white"; showControls = true }) { Text("Blanco", fontSize = 10.sp) }
-                        Button(onClick = { subtitleColor = "yellow"; showControls = true }) { Text("Amarillo", fontSize = 10.sp) }
-                        Button(onClick = { subtitleColor = "black"; showControls = true }) { Text("Negro", fontSize = 10.sp) }
-                        Text("Fondo:", color = Color(0x99FFFFFF), fontSize = 11.sp)
-                        Button(onClick = { subtitleBackground = "none"; showControls = true }) { Text("Ninguno", fontSize = 10.sp) }
-                        Button(onClick = { subtitleBackground = "dark"; showControls = true }) { Text("Oscuro", fontSize = 10.sp) }
-                        Button(onClick = { subtitleBackground = "translucent"; showControls = true }) { Text("Translúcido", fontSize = 10.sp) }
-                    }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[4]), onClick = {
+                        subtitleFontSize = when (subtitleFontSize) { 0.7f -> 1.0f; 1.0f -> 1.5f; else -> 0.7f }
+                        showControls = true
+                    }) { Text("Tamaño: ${tamanioLabel(subtitleFontSize)}", fontSize = 10.sp) }
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[5]), onClick = {
+                        subtitlePosition = when (subtitlePosition) { 0.06f -> 0.10f; 0.10f -> 0.14f; else -> 0.06f }
+                        showControls = true
+                    }) { Text("Pos: ${posicionLabel(subtitlePosition)}", fontSize = 10.sp) }
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[6]), onClick = {
+                        subtitleColor = when (subtitleColor) { "white" -> "yellow"; "yellow" -> "black"; else -> "white" }
+                        showControls = true
+                    }) { Text("Color: ${colorLabel(subtitleColor)}", fontSize = 10.sp) }
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[7]), onClick = {
+                        subtitleBackground = when (subtitleBackground) { "none" -> "dark"; "dark" -> "translucent"; else -> "none" }
+                        showControls = true
+                    }) { Text("Fondo: ${fondoLabel(subtitleBackground)}", fontSize = 10.sp) }
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))

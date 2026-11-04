@@ -63,7 +63,7 @@ private data class LabStream(
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
 private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$)|[?&]format=(?:srt|vtt)\\b)", RegexOption.IGNORE_CASE)
 private const val RESOLVE_TIMEOUT_MS = 30_000L
-private const val SUBTITLE_GRACE_PERIOD_MS = 1_500L
+private const val SUBTITLE_GRACE_PERIOD_MS = 3_000L
 
 /**
  * Reproductor de LAB: la persona nunca ve el reproductor de CineSrc.
@@ -423,6 +423,8 @@ private fun detectSubtitleLang(url: String): String {
         val lowerUrl = url.lowercase()
         val spanishKeywords = listOf("esp", "spa", "spanish", "espanol", "español", "latino", "lat", "cast", "castellano")
         if (spanishKeywords.any { lowerUrl.contains(it) }) return "spa"
+        val englishKeywords = listOf("eng", "english", "en-", "en_")
+        if (englishKeywords.any { lowerUrl.contains(it) }) return "en"
         // 3) Fallback: devolver vacío en lugar de "und"
         return ""
     } catch (e: Exception) {
@@ -448,6 +450,8 @@ private fun detectSubtitleDisplay(url: String, lang: String): String {
         val lowerUrl = url.lowercase()
         val spanishKeywords = listOf("esp", "spa", "spanish", "espanol", "español", "latino", "lat", "cast", "castellano")
         if (spanishKeywords.any { lowerUrl.contains(it) }) return "Español"
+        val englishKeywords = listOf("eng", "english", "en-", "en_")
+        if (englishKeywords.any { lowerUrl.contains(it) }) return "Inglés"
         return if (lang.isNotBlank()) lang.uppercase() else "Subtítulo"
     } catch (e: Exception) {
         return "Subtítulo"
