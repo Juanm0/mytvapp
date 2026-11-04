@@ -947,21 +947,21 @@ private fun NativePlayerScreen(
         dataSourceFactory.setDefaultRequestProperties(headers)
         val cleanUrl = url.substringBefore('?').lowercase()
         val lowerUrl = url.lowercase()
+        // Pistas de subtítulo detectadas en el embed de CineSrc (LAB).
+        val subtitleConfigs = subtitles.map { (subUrl, subLang) ->
+            val mime = if (subUrl.lowercase().contains("vtt")) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
+            MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                .setMimeType(mime)
+                .setLanguage(subLang)
+                .setLabel(subLang)
+                .build()
+        }
         val item = MediaItem.Builder().setUri(url).apply {
             when {
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
-            // Pistas de subtítulo detectadas en el embed de CineSrc (LAB). Media3 las baja con los mismos
-            // headers (Referer/Origin/User-Agent) que el video, así no hace falta un proxy aparte.
-            subtitles.forEach { (subUrl, subLang) ->
-                val mime = if (subUrl.lowercase().contains("vtt")) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
-                addSubtitle(MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
-                    .setMimeType(mime)
-                    .setLanguage(subLang)
-                    .setLabel(subLang)
-                    .build())
-            }
+            setSubtitleConfigurations(subtitleConfigs)
         }.build()
         attemptedUrls = attemptedUrls + url
         val resumeKey = currentTitleId.ifBlank { streamUrl }
