@@ -917,6 +917,7 @@ private fun NativePlayerScreen(
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
+var subtitleOffsetMs by remember(streamUrl) { mutableStateOf(0L) }
     var activeSubtitle by remember(streamUrl) { mutableStateOf<String?>(null) }
 var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
@@ -969,6 +970,7 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
         val savedPosition = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
             .getLong(resumeKey, 0L).coerceAtLeast(0L)
         exoPlayer.setMediaItem(item, savedPosition)
+        exoPlayer.setTextTrackOffsetMs(subtitleOffsetMs)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         error = null
@@ -983,6 +985,9 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
     }
 
     LaunchedEffect(exoPlayer, streamUrl) { setUrl(streamUrl, streamHeaders) }
+    LaunchedEffect(subtitleOffsetMs) {
+        exoPlayer.setTextTrackOffsetMs(subtitleOffsetMs)
+    }
     LaunchedEffect(streamUrl) {
         delay(100)
         runCatching { rootFocusRequester.requestFocus() }
@@ -1171,8 +1176,9 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                 }
                 Text("◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir", color = Color(0x99FFFFFF), fontSize = 11.sp)
                 if (subtitles.isNotEmpty()) {
+                    val offsetText = if (subtitleOffsetMs == 0L) "sincronizados" else if (subtitleOffsetMs > 0) "+${subtitleOffsetMs / 1000} s" else "${subtitleOffsetMs / 1000} s"
                     Text(
-                        text = "Subtítulos: ${if (activeSubtitle != null) "activado" else "disponible (CC)"}",
+                        text = "Subtítulos: disponible (CC) · offset $offsetText",
                         color = Color(0xFF65DCE8),
                         fontSize = 13.sp,
                         modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
@@ -1203,6 +1209,15 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     ) {
                         Text("CC  Subtítulos", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+                // Controles de ajuste de subtítulos (desfase de tiempo)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Desfase subtítulos:", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                    Button(onClick = { subtitleOffsetMs = 0L; showControls = true }) { Text("Reset", fontSize = 11.sp) }
+                    Button(onClick = { subtitleOffsetMs -= 500; showControls = true }) { Text("-0.5 s", fontSize = 11.sp) }
+                    Button(onClick = { subtitleOffsetMs += 500; showControls = true }) { Text("+0.5 s", fontSize = 11.sp) }
+                    Button(onClick = { subtitleOffsetMs -= 1000; showControls = true }) { Text("-1 s", fontSize = 11.sp) }
+                    Button(onClick = { subtitleOffsetMs += 1000; showControls = true }) { Text("+1 s", fontSize = 11.sp) }
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))

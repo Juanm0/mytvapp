@@ -230,9 +230,11 @@ private fun LabResolving(
         if (!done.get()) {
             done.compareAndSet(false, true)
         }
+        // Ordenar subtítulos: español primero para que sea fácil de encontrar
+        val sortedSubtitles = subtitles.sortedBy { it.lang != "spa" }
         handler.post {
             foundState.value(
-                LabStream(data.first, data.second, data.third, subtitles.toList())
+                LabStream(data.first, data.second, data.third, sortedSubtitles.toList())
             )
         }
     }
@@ -404,31 +406,50 @@ private fun saveRecent(context: Context, contentKey: String, title: String, embe
 /** Lee el parámetro base64url `m` de la URL del subtítulo para obtener el idioma (igual que el lab de Node). */
 private fun detectSubtitleLang(url: String): String {
     return try {
-        val query = URL(url).query ?: return "und"
-        val mValue = query.split('&').map { it.split('=', limit = 2) }
-            .firstOrNull { it.first() == "m" }?.getOrNull(1) ?: return "und"
-        val base64 = mValue.replace('-', '+').replace('_', '/')
-        val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
-        val obj = org.json.JSONObject(json)
-        val lang = obj.optString("lang", "").lowercase().take(5)
-        if (lang.isNotEmpty()) lang else "und"
+        // 1) Intentar leer el parámetro base64url `m`
+        val query = URL(url).query
+        if (query != null) {
+            val mValue = query.split('&').map { it.split('=', limit = 2) }
+                .firstOrNull { it.first() == "m" }?.getOrNull(1)
+            if (mValue != null) {
+                val base64 = mValue.replace('-', '+').replace('_', '/')
+                val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
+                val obj = org.json.JSONObject(json)
+                val lang = obj.optString("lang", "").lowercase().take(5)
+                if (lang.isNotEmpty()) return lang
+            }
+        }
+        // 2) Detectar por palabras clave en la URL
+        val lowerUrl = url.lowercase()
+        val spanishKeywords = listOf("esp", "spa", "spanish", "espanol", "español", "latino", "lat", "cast", "castellano")
+        if (spanishKeywords.any { lowerUrl.contains(it) }) return "spa"
+        // 3) Fallback: devolver vacío en lugar de "und"
+        return ""
     } catch (e: Exception) {
-        "und"
+        return ""
     }
 }
 
 /** Lee el parámetro `m` (o usa el idioma) para armar el nombre visible del subtítulo. */
 private fun detectSubtitleDisplay(url: String, lang: String): String {
     return try {
-        val query = URL(url).query ?: return if (lang == "und") "Subtítulo del reproductor" else lang
-        val mValue = query.split('&').map { it.split('=', limit = 2) }
-            .firstOrNull { it.first() == "m" }?.getOrNull(1) ?: return if (lang == "und") "Subtítulo del reproductor" else lang
-        val base64 = mValue.replace('-', '+').replace('_', '/')
-        val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
-        val obj = org.json.JSONObject(json)
-        val display = obj.optString("display", "")
-        return if (display.isNotBlank()) display else if (lang == "und") "Subtítulo del reproductor" else lang
+        val query = URL(url).query
+        if (query != null) {
+            val mValue = query.split('&').map { it.split('=', limit = 2) }
+                .firstOrNull { it.first() == "m" }?.getOrNull(1)
+            if (mValue != null) {
+                val base64 = mValue.replace('-', '+').replace('_', '/')
+                val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
+                val obj = org.json.JSONObject(json)
+                val display = obj.optString("display", "")
+                if (display.isNotBlank()) return display
+            }
+        }
+        val lowerUrl = url.lowercase()
+        val spanishKeywords = listOf("esp", "spa", "spanish", "espanol", "español", "latino", "lat", "cast", "castellano")
+        if (spanishKeywords.any { lowerUrl.contains(it) }) return "Español"
+        return if (lang.isNotBlank()) lang.uppercase() else "Subtítulo"
     } catch (e: Exception) {
-        if (lang == "und") "Subtítulo del reproductor" else lang
+        return "Subtítulo"
     }
 }
