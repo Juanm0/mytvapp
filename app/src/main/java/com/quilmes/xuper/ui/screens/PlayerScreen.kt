@@ -22,6 +22,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -843,6 +844,7 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
+    subtitles: List<Pair<String, String>> = emptyList(),
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
@@ -882,6 +884,7 @@ fun PlayerScreen(
         onExit = onExit,
         directOnly = directOnly,
         onResolveAsWebPage = resolvePageCallback,
+        subtitles = subtitles,
     )
 }
 
@@ -901,6 +904,7 @@ private fun NativePlayerScreen(
     onExit: () -> Unit,
     directOnly: Boolean,
     onResolveAsWebPage: () -> Unit,
+    subtitles: List<Pair<String, String>> = emptyList(),
 ) {
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
@@ -947,6 +951,16 @@ private fun NativePlayerScreen(
             when {
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
+            }
+            // Pistas de subtítulo detectadas en el embed de CineSrc (LAB). Media3 las baja con los mismos
+            // headers (Referer/Origin/User-Agent) que el video, así no hace falta un proxy aparte.
+            subtitles.forEach { (subUrl, subLang) ->
+                val mime = if (subUrl.lowercase().contains("vtt")) MimeTypes.TEXT_VTT else MimeTypes.APPLICATION_SUBRIP
+                addSubtitle(MediaItem.SubtitleConfiguration.Builder(Uri.parse(subUrl))
+                    .setMimeType(mime)
+                    .setLanguage(subLang)
+                    .setLabel(subLang)
+                    .build())
             }
         }.build()
         attemptedUrls = attemptedUrls + url

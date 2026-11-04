@@ -45,13 +45,25 @@ import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.WebSourceRegistry
 import kotlinx.coroutines.delay
 import java.net.URI
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicBoolean
 
+/** Subtitulo detectado en el embed de CineSrc (URL + metadatos basicos). */
+private data class LabSubtitle(val url: String, val referer: String, val lang: String, val display: String)
+
 /** Enlace de video que la propia página de CineSrc pidió, más lo necesario para repetir el pedido. */
-private data class LabStream(val url: String, val referer: String, val userAgent: String)
+private data class LabStream(
+    val url: String,
+    val referer: String,
+    val userAgent: String,
+    val subtitles: List<LabSubtitle> = emptyList(),
+)
 
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
+private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$)|[?&]format=(?:srt|vtt)\\b)", RegexOption.IGNORE_CASE)
 private const val RESOLVE_TIMEOUT_MS = 30_000L
+private const val SUBTITLE_GRACE_PERIOD_MS = 1_500L
 
 /**
  * Reproductor de LAB: la persona nunca ve el reproductor de CineSrc.
@@ -147,6 +159,7 @@ fun LabPlayerScreen(
             onPlayNextEpisode = playNext,
             onExit = onExit,
             directOnly = true,
+            subtitles = found.subtitles.map { it.url to it.lang },
         )
         failure != null -> LabMessage(
             message = failure.orEmpty(),
@@ -182,6 +195,8 @@ private fun LabResolving(
     BackHandler { onExit() }
     val handler = remember { Handler(Looper.getMainLooper()) }
     val done = remember(embedUrl, attempt) { AtomicBoolean(false) }
+    val m3u8Data = remember(embedUrl, attempt) { mutableStateOf<Triple<String, String, String>?>(null) }
+    val subtitles = remember(embedUrl, attempt) { mutableListOf<LabSubtitle>() }
     val foundState = rememberUpdatedState(onFound)
     val failState = rememberUpdatedState(onFail)
     var webViewRef by remember(embedUrl, attempt) { mutableStateOf<WebView?>(null) }
@@ -200,8 +215,25 @@ private fun LabResolving(
                 webViewRef?.let { tapCenter(it) }
             }
             if (elapsed > RESOLVE_TIMEOUT_MS && done.compareAndSet(false, true)) {
-                failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 1000} s.")
+                if (m3u8Data.value == null) {
+                    failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 1000} s.")
+                }
             }
+        }
+    }
+
+    // Cuando se encuentra el m3u8, esperar un periodo de gracia para capturar subtitulos del embed
+    // antes de resolver (igual que el lab de Node: da margen para que aparezcan los .srt/.vtt).
+    LaunchedEffect(m3u8Data.value) {
+        val data = m3u8Data.value ?: return@LaunchedEffect
+        delay(SUBTITLE_GRACE_PERIOD_MS)
+        if (!done.get()) {
+            done.compareAndSet(false, true)
+        }
+        handler.post {
+            foundState.value(
+                LabStream(data.first, data.second, data.third, subtitles.toList())
+            )
         }
     }
 
@@ -244,14 +276,25 @@ private fun LabResolving(
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                             val req = request ?: return null
                             val url = req.url.toString()
-                            // Ya tenemos el enlace: se corta todo lo demás (así no suena ni gasta datos el video oculto).
+                            // Capturar subtitulos del embed (solo observar, no bloquear: se pasan al reproductor nativo).
+                            if (SUBTITLE_URL.containsMatchIn(url)) {
+                                val headers = req.requestHeaders.orEmpty()
+                                val referer = headers["Referer"] ?: headers["referer"] ?: embedUrl
+                                val lang = detectSubtitleLang(url)
+                                val display = detectSubtitleDisplay(url, lang)
+                                if (!subtitles.any { it.url == url }) {
+                                    subtitles.add(LabSubtitle(url, referer, lang, display))
+                                }
+                                return null
+                            }
+                            // Ya tenemos el enlace de video: se corta todo lo demás (así no suena ni gasta datos el video oculto).
                             if (done.get()) return XuperBraveAdblock.blockedResponse()
                             if (M3U8_URL.containsMatchIn(url)) {
-                                if (done.compareAndSet(false, true)) {
+                                if (m3u8Data.value == null) {
                                     val headers = req.requestHeaders.orEmpty()
                                     val referer = headers["Referer"] ?: headers["referer"] ?: embedUrl
                                     val ua = headers["User-Agent"] ?: headers["user-agent"] ?: webUserAgent
-                                    handler.post { foundState.value(LabStream(url, referer, ua)) }
+                                    m3u8Data.value = Triple(url, referer, ua)
                                 }
                                 return XuperBraveAdblock.blockedResponse()
                             }
@@ -356,4 +399,36 @@ private fun saveRecent(context: Context, contentKey: String, title: String, embe
     }
     prefs.edit().putString("recent", recent.takeLast(30).joinToString("|"))
         .putString("recent_items", rebuilt.toString()).apply()
+}
+
+/** Lee el parámetro base64url `m` de la URL del subtítulo para obtener el idioma (igual que el lab de Node). */
+private fun detectSubtitleLang(url: String): String {
+    return try {
+        val query = URL(url).query ?: return "und"
+        val mValue = query.split('&').map { it.split('=', limit = 2) }
+            .firstOrNull { it.first() == "m" }?.getOrNull(1) ?: return "und"
+        val base64 = mValue.replace('-', '+').replace('_', '/')
+        val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
+        val obj = org.json.JSONObject(json)
+        val lang = obj.optString("lang", "").lowercase().take(5)
+        if (lang.isNotEmpty()) lang else "und"
+    } catch (e: Exception) {
+        "und"
+    }
+}
+
+/** Lee el parámetro `m` (o usa el idioma) para armar el nombre visible del subtítulo. */
+private fun detectSubtitleDisplay(url: String, lang: String): String {
+    return try {
+        val query = URL(url).query ?: return if (lang == "und") "Subtítulo del reproductor" else lang
+        val mValue = query.split('&').map { it.split('=', limit = 2) }
+            .firstOrNull { it.first() == "m" }?.getOrNull(1) ?: return if (lang == "und") "Subtítulo del reproductor" else lang
+        val base64 = mValue.replace('-', '+').replace('_', '/')
+        val json = String(android.util.Base64.decode(base64, android.util.Base64.DEFAULT), StandardCharsets.UTF_8)
+        val obj = org.json.JSONObject(json)
+        val display = obj.optString("display", "")
+        return if (display.isNotBlank()) display else if (lang == "und") "Subtítulo del reproductor" else lang
+    } catch (e: Exception) {
+        if (lang == "und") "Subtítulo del reproductor" else lang
+    }
 }
