@@ -1045,9 +1045,6 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                     showControls = true
                 }
             }
-            override fun onTextTrackChanged(index: Int) {
-                activeSubtitle = if (index == C.INDEX_UNSET) null else "activado"
-            }
         }
         exoPlayer.addListener(listener)
         onDispose { exoPlayer.removeListener(listener) }
@@ -1198,7 +1195,7 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
                         TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
                     }) { Text("♫  Audio") }
                     Button(
-                        modifier = Modifier.focusRequester(buttonFocusRequesters[3]).width(IntrinsicSize.Max),
+                        modifier = Modifier.focusRequester(buttonFocusRequesters[3]),
                         onClick = {
                             showControls = true
                             TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
