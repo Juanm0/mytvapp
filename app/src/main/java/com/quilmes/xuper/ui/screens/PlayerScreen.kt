@@ -75,7 +75,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
@@ -934,13 +933,13 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
     val buttonFocusRequesters = remember { List(buttonCount) { FocusRequester() } }
 
     // Etiquetas legibles para los botones de estilo de subtítulos (ciclan opciones)
-    private fun tamanioLabel(s: Float) = when (s) { 0.7f -> "Pequeño"; 1.5f -> "Grande"; else -> "Normal" }
-    private fun posicionLabel(p: Float) = when (p) { 0.06f -> "Abajo"; 0.14f -> "Arriba"; else -> "Medio" }
-    private fun colorLabel(c: String) = when (c) { "white" -> "Blanco"; "yellow" -> "Amarillo"; else -> "Negro" }
-    private fun fondoLabel(b: String) = when (b) { "none" -> "Ninguno"; "dark" -> "Oscuro"; else -> "Translúcido" }
+    fun tamanioLabel(s: Float) = when (s) { 0.7f -> "Pequeño"; 1.5f -> "Grande"; else -> "Normal" }
+    fun posicionLabel(p: Float) = when (p) { 0.06f -> "Abajo"; 0.14f -> "Arriba"; else -> "Medio" }
+    fun colorLabel(c: String) = when (c) { "white" -> "Blanco"; "yellow" -> "Amarillo"; else -> "Negro" }
+    fun fondoLabel(b: String) = when (b) { "none" -> "Ninguno"; "dark" -> "Oscuro"; else -> "Translúcido" }
 
     // Nombre legible de idioma para las pistas de texto (subtitle track label)
-    private fun nombreIdioma(lang: String): String = when (lang.lowercase()) {
+    fun nombreIdioma(lang: String): String = when (lang.lowercase()) {
         "spa", "es", "esp" -> "Español"
         "en", "eng" -> "Inglés"
         "pt", "por" -> "Portugués"
@@ -968,8 +967,11 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             }
     }
 
-    // Aplica el estilo de subtítulos al SubtitleView del PlayerView (color de texto, fondo del texto, tamaño y fondo del área).
-    LaunchedEffect(playerViewRef, subtitleFontSize, subtitlePosition, subtitleColor, subtitleBackground) {
+    // Aplica el fondo de subtítulos al SubtitleView del PlayerView (color de fondo del área).
+    // Nota: Media3 1.3.1 no expone setStyle()/setApplyEmbeddedStyles()/setFractionalTextSize()
+    // públicamente en SubtitleView, así que solo se puede aplicar el color de fondo.
+    // Tamaño de fuente, color de texto y posición de subtítulo requieren una versión más nueva de Media3.
+    LaunchedEffect(playerViewRef, subtitleBackground) {
         val pv = playerViewRef ?: return@LaunchedEffect
         // Buscar el SubtitleView entre los hijos de PlayerView por nombre de clase (Media3 usa SubtitleView interna).
         val subtitleView = (0 until pv.childCount)
@@ -977,41 +979,12 @@ var failedSources by remember(streamUrl) { mutableStateOf(0) }
             .firstOrNull { it::class.simpleName == "SubtitleView" }
         if (subtitleView == null) return@LaunchedEffect
 
-        val textColor = when (subtitleColor) {
-            "white" -> android.graphics.Color.WHITE
-            "yellow" -> android.graphics.Color.YELLOW
-            "black" -> android.graphics.Color.BLACK
-            else -> android.graphics.Color.WHITE
-        }
-
         val bgColor = when (subtitleBackground) {
             "none" -> android.graphics.Color.TRANSPARENT
             "dark" -> android.graphics.Color.BLACK
             "translucent" -> android.graphics.Color.argb(128, 0, 0, 0)
             else -> android.graphics.Color.TRANSPARENT
         }
-
-        // Estilo de subtítulo vía CaptionStyleCompat de Media3 (color de texto y fondo del texto).
-        val style = CaptionStyleCompat(
-            textColor,
-            bgColor,
-            android.graphics.Color.TRANSPARENT, // windowColor
-            0, // edgeType (EDGE_TYPE_NONE)
-            android.graphics.Color.BLACK, // edgeColor
-            android.graphics.Typeface.DEFAULT, // typeface
-            1f // typefaceScale
-        )
-        subtitleView.setStyle(style)
-        subtitleView.setApplyEmbeddedStyles(false)
-
-        // Tamaño de fuente como fracción del alto de la vista.
-        val textSizeFraction = when (subtitleFontSize) {
-            0.7f -> 0.04f
-            1.0f -> 0.0533f
-            1.5f -> 0.07f
-            else -> 0.0533f
-        }
-        subtitleView.setFractionalTextSize(textSizeFraction)
 
         // Color de fondo del área de subtítulos (fondo del view completo).
         subtitleView.setBackgroundColor(bgColor)
