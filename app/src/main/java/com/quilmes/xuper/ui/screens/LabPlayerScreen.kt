@@ -13,6 +13,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.JavascriptInterface
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -39,27 +40,55 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.quilmes.xuper.data.ContentKind
-import com.quilmes.xuper.data.ExternalSubtitle
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.WebSourceRegistry
 import kotlinx.coroutines.delay
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import android.util.Base64
+import org.json.JSONObject
 
-/** Enlace de video que la propia página de CineSrc pidió, más lo necesario para repetir el pedido. */
-private data class LabStream(val url: String, val referer: String, val userAgent: String, val subtitles: List<ExternalSubtitle> = emptyList())
+/** Enlace de video y subtítulos que la propia página de CineSrc solicitó. */
+private data class LabStream(
+    val url: String,
+    val referer: String,
+    val userAgent: String,
+    val subtitles: List<ExternalSubtitleTrack> = emptyList(),
+)
 
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
+private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$))|[?&]format=(?:srt|vtt)\\b", RegexOption.IGNORE_CASE)
 private const val RESOLVE_TIMEOUT_MS = 30_000L
+private val SUBTITLE_CAPTURE_JS = """
+(function(){
+  if (window.__xuperSubtitleCapture) return; window.__xuperSubtitleCapture = true;
+  function scan(text){ try {
+    text = String(text || '').replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+    var re = /https?:[^\"'\s\\<>]+(?:format=(?:srt|vtt)|\.(?:srt|vtt))[^\"'\s\\<>]*/gi, m;
+    while ((m = re.exec(text)) !== null) {
+      try { window.XuperSubtitleBridge.add(m[0], document.referrer || location.href); } catch(e) {}
+    }
+  } catch(e) {} }
+  function smallTextResponse(r){ try { var ct = r.headers.get('content-type') || ''; var len = Number(r.headers.get('content-length') || 0); return /json|text/i.test(ct) && (!len || len < 300000); } catch(e) { return false; } }
+  try { var f = window.fetch; if (f) window.fetch = function(){ return f.apply(this, arguments).then(function(r){ if (smallTextResponse(r)) { try { r.clone().text().then(scan).catch(function(){}); } catch(e) {} } return r; }); }; } catch(e) {}
+  try { var o = XMLHttpRequest.prototype.open, s = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(){ this.__xuperUrl = arguments[1]; return o.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function(){ this.addEventListener('load', function(){ var ct = this.getResponseHeader('content-type') || ''; if ((!this.responseType || this.responseType === 'text') && /json|text/i.test(ct) && (!this.responseText || this.responseText.length < 300000)) scan(this.responseText); }); return s.apply(this, arguments); };
+  } catch(e) {}
+})();
+""".trimIndent()
 
 /**
  * Reproductor de LAB: la persona nunca ve el reproductor de CineSrc.
- * 1) Un WebView oculto (tapado por la pantalla "Cargando…") abre el embed y atrapa el pedido `.m3u8` que hace
- *    la propia página (como F12 → Network). No replica tokens ni firmas: solo observa lo que el navegador pide.
- * 2) Con ese enlace (y el Referer real) se abre nuestro reproductor nativo (Media3).
- * 3) Si no aparece ningún enlace, se ofrece Reintentar o, a pedido, el reproductor original de CineSrc.
+ * 1) Un WebView oculto abre el embed y observa el `.m3u8` y las pistas `.srt`/`.vtt` que pide la página.
+ *    También inspecciona respuestas JSON pequeñas vía fetch/XHR, igual que el laboratorio de escritorio.
+ * 2) Tras una breve ventana de captura, pasa video, encabezados y pistas externas al reproductor nativo Media3.
+ * 3) Si no aparece ningún enlace de video, se ofrece Reintentar o el reproductor original de CineSrc.
  */
 @Composable
 fun LabPlayerScreen(
@@ -184,12 +213,23 @@ private fun LabResolving(
     BackHandler { onExit() }
     val handler = remember { Handler(Looper.getMainLooper()) }
     val done = remember(embedUrl, attempt) { AtomicBoolean(false) }
+    val streamCaptured = remember(embedUrl, attempt) { AtomicBoolean(false) }
+    val capturedSubtitles = remember(embedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
+    val subtitleBridge = remember(embedUrl, attempt) {
+        object {
+            @JavascriptInterface
+            fun add(url: String?, referer: String?) {
+                val value = url?.trim().orEmpty()
+                if (value.startsWith("https://", true) && SUBTITLE_URL.containsMatchIn(value)) {
+                    capturedSubtitles.putIfAbsent(value, subtitleFromUrl(value, referer?.takeIf { it.startsWith("https://") } ?: embedUrl))
+                }
+            }
+        }
+    }
     val foundState = rememberUpdatedState(onFound)
     val failState = rememberUpdatedState(onFail)
     var webViewRef by remember(embedUrl, attempt) { mutableStateOf<WebView?>(null) }
     var seconds by remember(embedUrl, attempt) { mutableStateOf(0) }
-    val capturedSubtitles = remember(embedUrl, attempt) { linkedMapOf<String, ExternalSubtitle>() }
-    val streamCaptured = remember(embedUrl, attempt) { AtomicBoolean(false) }
 
     // Tiempo de espera y, como en el lab, algunos toques en el centro por si el embed espera un "play".
     LaunchedEffect(embedUrl, attempt) {
@@ -203,7 +243,7 @@ private fun LabResolving(
                 taps++
                 webViewRef?.let { tapCenter(it) }
             }
-            if (elapsed > RESOLVE_TIMEOUT_MS && done.compareAndSet(false, true)) {
+            if (elapsed > RESOLVE_TIMEOUT_MS && !streamCaptured.get() && done.compareAndSet(false, true)) {
                 failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 1000} s.")
             }
         }
@@ -241,38 +281,42 @@ private fun LabResolving(
                     settings.setSupportMultipleWindows(false)
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     settings.userAgentString = settings.userAgentString + " XuperQuilmesTV/1.0"
+                    addJavascriptInterface(subtitleBridge, "XuperSubtitleBridge")
+                    if (runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
+                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, SUBTITLE_CAPTURE_JS, setOf("*")) }
+                    }
                     CookieManager.getInstance().setAcceptCookie(true)
                     CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                     val webUserAgent = settings.userAgentString
                     webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                            if (!runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
+                                view?.evaluateJavascript(SUBTITLE_CAPTURE_JS, null)
+                            }
+                        }
+
                         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                             val req = request ?: return null
                             val url = req.url.toString()
-                            // Ya tenemos el enlace: se corta todo lo demás (así no suena ni gasta datos el video oculto).
+                            // Al finalizar la ventana de captura se corta el resto de solicitudes del WebView oculto.
                             if (done.get()) return XuperBraveAdblock.blockedResponse()
-                            if (ExternalSubtitle.isSubtitleUrl(url)) {
-                                val headers = req.requestHeaders.orEmpty()
-                                val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value ?: embedUrl
-                                synchronized(capturedSubtitles) {
-                                    if (capturedSubtitles.size < 24) {
-                                        capturedSubtitles.putIfAbsent(url, ExternalSubtitle.fromRequest(url, referer))
-                                    }
-                                }
-                                return null
+                            if (SUBTITLE_URL.containsMatchIn(url)) {
+                                capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, embedUrl))
+                                // El WebView deja que el reproductor solicite el subtítulo; Media3 lo cargará luego.
+                                return XuperBraveAdblock.blockedResponse()
                             }
                             if (M3U8_URL.containsMatchIn(url)) {
                                 if (streamCaptured.compareAndSet(false, true)) {
                                     val headers = req.requestHeaders.orEmpty()
-                                    val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value ?: embedUrl
-                                    val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: webUserAgent
-                                    // El lab espera un pequeño margen tras el HLS para registrar también las pistas
-                                    // externas que el mismo reproductor solicita al inicializarse.
+                                    val referer = headers["Referer"] ?: headers["referer"] ?: embedUrl
+                                    val ua = headers["User-Agent"] ?: headers["user-agent"] ?: webUserAgent
+                                    // Esperar un poco después del m3u8 permite capturar las solicitudes de subtítulos
+                                    // que el embed dispara en paralelo o inmediatamente después.
                                     handler.postDelayed({
                                         if (done.compareAndSet(false, true)) {
-                                            val subs = synchronized(capturedSubtitles) { capturedSubtitles.values.toList() }
-                                            foundState.value(LabStream(url, referer, ua, subs))
+                                            foundState.value(LabStream(url, referer, ua, capturedSubtitles.values.toList().sortedBy { it.label }))
                                         }
-                                    }, 1_500L)
+                                    }, 2_200L)
                                 }
                                 return XuperBraveAdblock.blockedResponse()
                             }
@@ -341,6 +385,31 @@ private fun tapCenter(view: WebView) {
     }
     down.recycle()
     up.recycle()
+}
+
+private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrack {
+    var lang = "und"
+    var label = "Subtítulo del reproductor"
+    var source: String? = null
+    var flags = 0
+    runCatching {
+        val encoded = URI(url).query.orEmpty().split('&')
+            .firstOrNull { it.substringBefore('=') == "m" }?.substringAfter('=', "")
+        if (!encoded.isNullOrBlank()) {
+            val normalized = encoded.replace('-', '+').replace('_', '/')
+            val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
+            val json = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
+            val meta = JSONObject(json)
+            lang = meta.optString("lang", "und").lowercase().take(5).ifBlank { "und" }
+            label = meta.optString("display", lang.takeIf { it != "und" } ?: "Subtítulo del reproductor")
+            source = meta.optString("src").takeIf { it.isNotBlank() }
+            if (meta.optString("hi") == "1") flags = flags or ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED
+            if (meta.optString("forced") == "1") flags = flags or ExternalSubtitleTrack.FLAG_FORCED
+        }
+    }
+    val mime = if (url.substringBefore('?').endsWith(".vtt", true) || url.contains("format=vtt", true))
+        androidx.media3.common.MimeTypes.TEXT_VTT else androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
+    return ExternalSubtitleTrack(url = url, referer = embedUrl, language = lang, label = label, mimeType = mime, flags = flags, source = source)
 }
 
 private fun originOf(url: String): String? = runCatching {

@@ -68,7 +68,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.MediaItem.SubtitleConfiguration
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -84,7 +83,6 @@ import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
-import com.quilmes.xuper.data.ExternalSubtitle
 import com.quilmes.xuper.data.WebPageMediaResolver
 import java.net.URI
 import kotlinx.coroutines.delay
@@ -845,7 +843,7 @@ fun PlayerScreen(
     onPlayNextEpisode: (String) -> Unit = {},
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
-    externalSubtitles: List<ExternalSubtitle> = emptyList(),
+    externalSubtitles: List<ExternalSubtitleTrack> = emptyList(),
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
@@ -904,7 +902,7 @@ private fun NativePlayerScreen(
     onPlayNextEpisode: (String) -> Unit,
     onExit: () -> Unit,
     directOnly: Boolean,
-    externalSubtitles: List<ExternalSubtitle>,
+    externalSubtitles: List<ExternalSubtitleTrack>,
     onResolveAsWebPage: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -948,29 +946,22 @@ private fun NativePlayerScreen(
         dataSourceFactory.setDefaultRequestProperties(headers)
         val cleanUrl = url.substringBefore('?').lowercase()
         val lowerUrl = url.lowercase()
-        val subtitleConfigurations = externalSubtitles
-            .distinctBy { it.url }
-            .mapNotNull { subtitle ->
-                val subtitleUri = runCatching { android.net.Uri.parse(subtitle.url) }.getOrNull() ?: return@mapNotNull null
-                val mime = when (subtitle.mimeType) {
-                    "text/vtt" -> MimeTypes.TEXT_VTT
-                    else -> MimeTypes.APPLICATION_SUBRIP
-                }
-                runCatching {
-                    SubtitleConfiguration.Builder(subtitleUri)
-                        .setMimeType(mime)
-                        .setLanguage(subtitle.language)
-                        .setLabel(subtitle.label + (if (subtitle.hearingImpaired) " (HI)" else "") + (if (subtitle.forced) " (forzado)" else ""))
-                        .setSelectionFlags(if (subtitle.language.startsWith("es", true)) C.SELECTION_FLAG_AUTOSELECT else 0)
-                        .build()
-                }.getOrNull()
-            }
         val item = MediaItem.Builder().setUri(url).apply {
             when {
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
-            if (subtitleConfigurations.isNotEmpty()) setSubtitleConfigurations(subtitleConfigurations)
+            if (externalSubtitles.isNotEmpty()) {
+                setSubtitleConfigurations(externalSubtitles.distinctBy { it.url }.map { track ->
+                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(track.url))
+                        .setMimeType(track.mimeType)
+                        .setLanguage(track.language)
+                        .setLabel(track.label + (track.source?.let { " · $it" } ?: ""))
+                        .setSelectionFlags(if (track.flags and ExternalSubtitleTrack.FLAG_FORCED != 0) C.SELECTION_FLAG_FORCED else 0)
+                        .setRoleFlags(if (track.flags and ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED != 0) C.ROLE_FLAG_CAPTION else 0)
+                        .build()
+                })
+            }
         }.build()
         attemptedUrls = attemptedUrls + url
         val resumeKey = currentTitleId.ifBlank { streamUrl }
