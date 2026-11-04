@@ -917,7 +917,8 @@ private fun NativePlayerScreen(
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
-    var failedSources by remember(streamUrl) { mutableStateOf(0) }
+    var activeSubtitle by remember(streamUrl) { mutableStateOf<String?>(null) }
+var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
 
     val buttonCount = 4
@@ -1044,6 +1045,9 @@ private fun NativePlayerScreen(
                     showControls = true
                 }
             }
+            override fun onTextTrackChanged(index: Int) {
+                activeSubtitle = if (index == C.INDEX_UNSET) null else "activado"
+            }
         }
         exoPlayer.addListener(listener)
         onDispose { exoPlayer.removeListener(listener) }
@@ -1169,6 +1173,21 @@ private fun NativePlayerScreen(
                     }
                 }
                 Text("◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                if (subtitles.isNotEmpty()) {
+                    Text(
+                        text = "Subtítulos: ${if (activeSubtitle != null) "activado" else "disponible (CC)"}",
+                        color = Color(0xFF65DCE8),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    )
+                } else {
+                    Text(
+                        text = "Sin subtítulos disponibles",
+                        color = Color(0x99FFFFFF),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 4.dp, bottom = 8.dp)
+                    )
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(buttonFocusRequesters[0]), onClick = { togglePlayPause() }) {
                         Text(if (isPlaying) "Ⅱ  Pausar" else "▶  Reproducir")
@@ -1178,10 +1197,15 @@ private fun NativePlayerScreen(
                         showControls = true
                         TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
                     }) { Text("♫  Audio") }
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[3]), onClick = {
-                        showControls = true
-                        TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
-                    }) { Text("CC  Subtítulos") }
+                    Button(
+                        modifier = Modifier.focusRequester(buttonFocusRequesters[3]).width(IntrinsicSize.Max),
+                        onClick = {
+                            showControls = true
+                            TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
+                        }
+                    ) {
+                        Text("CC  Subtítulos", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
