@@ -936,6 +936,14 @@ private fun NativePlayerScreen(
     var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
 
+    // Canales en vivo (hay cola de canales): reconexión automática ante cortes/trabas.
+    val isLive = channelQueue.size > 1
+    val liveRetryDelaysMs = remember { longArrayOf(1_000, 2_000, 3_000, 5_000, 5_000, 8_000, 8_000, 10_000) }
+    var reconnectAttempt by remember(streamUrl) { mutableStateOf(0) }
+    var reconnectRequest by remember(streamUrl) { mutableStateOf(0) }
+    var reconnectPending by remember(streamUrl) { mutableStateOf(false) }
+    var reconnecting by remember(streamUrl) { mutableStateOf(false) }
+
     val buttonCount = 4
     var focusedButton by remember(streamUrl) { mutableStateOf(0) }
     val rootFocusRequester = remember(streamUrl) { FocusRequester() }
@@ -999,6 +1007,66 @@ private fun NativePlayerScreen(
         if (!labMode) showControls = true
     }
 
+    // Pide una reconexión al mismo canal (con espera creciente). Devuelve false si ya se agotaron los intentos.
+    fun requestLiveReconnect(reason: String): Boolean {
+        if (!isLive || reconnectAttempt >= liveRetryDelaysMs.size) {
+            reconnecting = false
+            reconnectPending = false
+            return false
+        }
+        reconnectAttempt++
+        android.util.Log.w("XuperLive", "reconectando ($reason), intento $reconnectAttempt/${liveRetryDelaysMs.size}")
+        reconnecting = true
+        reconnectPending = true
+        reconnectRequest++
+        return true
+    }
+
+    LaunchedEffect(reconnectRequest) {
+        if (reconnectRequest == 0) return@LaunchedEffect
+        delay(liveRetryDelaysMs[(reconnectAttempt - 1).coerceIn(0, liveRetryDelaysMs.lastIndex)])
+        setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders)
+        reconnectPending = false
+    }
+
+    // Vigilante: si el canal queda trabado cargando, o el stream termina, se reconecta solo.
+    LaunchedEffect(exoPlayer, streamUrl, isLive) {
+        if (!isLive) return@LaunchedEffect
+        var bufferingTicks = 0
+        var playingTicks = 0
+        while (true) {
+            delay(1_000)
+            if (reconnectPending) continue
+            when {
+                exoPlayer.isPlaying -> {
+                    bufferingTicks = 0
+                    playingTicks++
+                    reconnecting = false
+                    if (playingTicks >= 15 && reconnectAttempt > 0) reconnectAttempt = 0
+                }
+                exoPlayer.playbackState == Player.STATE_ENDED -> {
+                    playingTicks = 0
+                    if (!requestLiveReconnect("el stream terminó")) {
+                        error = "Se cortó la transmisión de este canal. Elegí otro canal o probá de nuevo."
+                        showControls = true
+                    }
+                }
+                exoPlayer.playbackState == Player.STATE_BUFFERING && exoPlayer.playWhenReady && error == null -> {
+                    playingTicks = 0
+                    bufferingTicks++
+                    if (bufferingTicks >= 15) {
+                        bufferingTicks = 0
+                        if (!requestLiveReconnect("trabado cargando")) {
+                            error = "Este canal no responde. Elegí otro canal o probá de nuevo."
+                            showControls = true
+                        }
+                    }
+                }
+                else -> bufferingTicks = 0
+            }
+        }
+    }
+
     LaunchedEffect(exoPlayer, streamUrl) { setUrl(streamUrl, streamHeaders) }
     LaunchedEffect(streamUrl) {
         delay(100)
@@ -1011,8 +1079,8 @@ private fun NativePlayerScreen(
             runCatching { buttonFocusRequesters[0].requestFocus() }
         }
     }
-    LaunchedEffect(exoPlayer, showControls) {
-        if (showControls) {
+    LaunchedEffect(exoPlayer, showControls, error) {
+        if (showControls && error == null) {
             delay(6_000)
             showControls = false
         }
@@ -1058,6 +1126,7 @@ private fun NativePlayerScreen(
                     onResolveAsWebPage()
                     return
                 }
+                if (isLive && requestLiveReconnect("error ${e.errorCodeName}")) return
                 val nextIndex = (1..alternatePlayers.size).asSequence()
                     .map { (sourceIndex + it) % alternatePlayers.size.coerceAtLeast(1) }
                     .firstOrNull { i ->
@@ -1270,6 +1339,15 @@ private fun NativePlayerScreen(
             },
             update = { it.player = exoPlayer; if (labMode) labPlayerView = it },
         )
+        if (reconnecting && error == null && !labMode) {
+            Box(
+                Modifier.align(Alignment.TopCenter).padding(top = 28.dp)
+                    .background(Color(0xCC14202B), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+            ) {
+                Text("Reconectando… (intento $reconnectAttempt)", color = Color.White, fontSize = 15.sp)
+            }
+        }
         if (showControls && !labMode) {
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xB8000000), Color.Transparent, Color(0xE6000000)))))
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(horizontal = 38.dp, vertical = 26.dp)) {
@@ -1310,7 +1388,7 @@ private fun NativePlayerScreen(
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
+                        Button(onClick = { reconnectAttempt = 0; reconnecting = false; setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
                         if (channelQueue.size > 1) {
                             Button(onClick = { changeChannelBy(-1) }) { Text("◀  Canal anterior") }
                             Button(onClick = { changeChannelBy(1) }) { Text("Canal siguiente  ▶") }
