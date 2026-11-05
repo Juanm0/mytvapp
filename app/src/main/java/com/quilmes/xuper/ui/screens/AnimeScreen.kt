@@ -40,9 +40,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Button
+import com.quilmes.xuper.ui.components.Button
 import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.Surface
+import com.quilmes.xuper.ui.components.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.AdultContentSettings

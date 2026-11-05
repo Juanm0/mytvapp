@@ -78,7 +78,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.TrackSelectionDialogBuilder
-import androidx.tv.material3.Button
+import com.quilmes.xuper.ui.components.Button
 import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature

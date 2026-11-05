@@ -17,7 +17,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.tv.material3.Button
+import com.quilmes.xuper.ui.components.Button
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.quilmes.xuper.data.ContentKind

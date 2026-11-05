@@ -38,7 +38,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.tv.material3.ClickableSurfaceDefaults
-import androidx.tv.material3.Surface
+import com.quilmes.xuper.ui.components.Surface
 
 /** Navegación estilo streaming: solo quedan Inicio, Buscar, Argentina y utilidades personales. */
 @Composable
