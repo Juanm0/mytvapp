@@ -57,7 +57,7 @@ fun HomeScreen(
     val sections by repository.sections.collectAsState()
     val loading by repository.loading.collectAsState()
 
-    // Inicio = un poco de todo: canales de Argentina (con Gran Hermano y Deportes aparte),
+    // Inicio = un poco de todo: canales de Argentina (con Deportes aparte),
     // las primeras filas de películas/series de las listas M3U, y unas pocas filas de TMDB
     // (tendencias y populares). El catálogo COMPLETO de TMDB (plataformas, etc.) se encuentra
     // desde el buscador.
@@ -182,9 +182,8 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
     // --- Canales argentinos (en vivo) ---
     val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
         ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
-    val gh = argentina.filter { isGranHermano(it.name) }
-    val sports = argentina.filter { isArgentinaSports(it.name) && !isGranHermano(it.name) }
-    val mainChannels = argentina.filter { !isGranHermano(it.name) && !isArgentinaSports(it.name) }
+    val sports = argentina.filter { isArgentinaSports(it.name) }
+    val mainChannels = argentina.filter { !isArgentinaSports(it.name) }
 
     // --- Películas / series / VOD de las listas M3U: las primeras `homeRows` filas de cada fuente ---
     val seenUrls = HashSet<String>()
@@ -215,13 +214,10 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
         if (labRow != null) add(labRow)
         addAll(tmdbRows)
         if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
-        if (gh.isNotEmpty()) add(Category("home-gran-hermano", "GRAN HERMANO · EN VIVO", gh))
         if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
         addAll(vodRows)
     }
 }
-
-private fun isGranHermano(name: String): Boolean = name.contains("gran hermano", ignoreCase = true) || name.trim().equals("GH", ignoreCase = true)
 
 private fun isArgentinaSports(name: String): Boolean = listOf(
     "directv sports", "espn", "fox sports", "tyc sports", "tnt sports", "deportes argentina"

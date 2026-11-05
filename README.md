@@ -127,3 +127,14 @@ Pedido del usuario (03/11/2026): llevar a Xuper lo que se probó en `cinesrc-lab
 - La opción **Resolución** abre el selector de pistas de video de Media3. Automático sigue siendo la selección predeterminada; las calidades manuales solo aparecen si la fuente realmente las ofrece.
 - En el LAB, OK alterna pausa/reproducción cuando no hay paneles abiertos. Las flechas izquierda/derecha realizan saltos de 10 s, 30 s y hasta 120 s según la repetición de la tecla.
 - Estos cambios se mantienen aislados del reproductor principal.
+
+
+### Listas M3U propias (`assets/mis-listas/`)
+
+- Cualquier `.m3u`/`.m3u8` que se ponga en `app/src/main/assets/mis-listas/` se registra solo como fuente (`buildRepository` en `MainActivity.kt`; se copia a `filesDir/mis-listas/` en `prepareLocalFiles`). El nombre del archivo es el nombre de la fuente. Se carga con `M3uRepository`, igual que las demás: `.mp4` => película, `S01E02`/`1x02` => serie, el resto => TV en vivo (clasificación por entrada, `classifyContent`). Solo entran URLs `http(s)`; las rutas locales de PC (`C:\...`) no se reproducen en la tele. **No verificado**: compilación ni prueba en TV.
+
+### Sección Argentina (solo lista propia)
+
+- La sección **Argentina** usa únicamente `app/src/main/assets/argentina.m3u` (lista armada por el usuario en su PC, ~246 canales). Ya no se descarga `iptv-org/.../ar.m3u`, se quitó la fuente "Argentina · agregados" y no se mezclan canales Gran Hermano de otras listas. Orden: los canales conocidos primero (`argentinaRankNorm`), el resto alfabético; solo se quitan URLs repetidas. Para actualizarla, reemplazar ese archivo y compilar. `parse` también toma `user-agent`/`referrer` declarados en la línea `#EXTINF` (además de `#EXTVLCOPT`). **No verificado**: compilación ni prueba en TV.
+- **Sin fallback en canales en vivo**: `getPlayableAlternatives` devuelve vacío para canales (`isLive`); ya no cambia a otra lista si un canal falla (Argentina tiene una única lista). Las películas/series siguen pudiendo tener alternativas entre listas. **Gran Hermano se eliminó** (fila de Inicio, categoría de la pestaña Argentina, prioridad de orden): ya no transmite. En la pestaña Argentina de `LibraryScreen` ya no se colapsan canales por marca: se muestran todas las URLs de la lista.
+- **Canales en vivo: nunca cambian solos.** Si un canal falla, `PlayerScreen` muestra "No se puede reproducir este canal" con **Reintentar**, **Canal anterior** y **Canal siguiente** (además de CH+/CH− del mando); el usuario decide. Antes `onPlayerError` saltaba a otra entrada de igual nombre (`getPlayableAlternatives`), ahora vacío para canales en vivo.

@@ -1050,7 +1050,7 @@ private fun NativePlayerScreen(
         }
     }
 
-    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, directOnly, onResolveAsWebPage) {
+    DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, directOnly, onResolveAsWebPage, channelQueue) {
         val listener = object : Player.Listener {
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
@@ -1071,7 +1071,9 @@ private fun NativePlayerScreen(
                     setUrl(candidate.streamUrl, candidate.requestHeaders)
                     showControls = true
                 } else {
-                    error = "No se encontró otro enlace coincidente que no se haya probado. Puede que este contenido no esté disponible en las listas cargadas."
+                    // Canales en vivo (hay cola de canales): NO se cambia solo a otro; el usuario elige.
+                    error = if (channelQueue.size > 1) "No se puede reproducir este canal. Elegí otro canal o probá de nuevo."
+                    else "No se encontró otro enlace coincidente que no se haya probado. Puede que este contenido no esté disponible en las listas cargadas."
                     showControls = true
                 }
             }
@@ -1307,7 +1309,13 @@ private fun NativePlayerScreen(
                 }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
-                    Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(onClick = { setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
+                        if (channelQueue.size > 1) {
+                            Button(onClick = { changeChannelBy(-1) }) { Text("◀  Canal anterior") }
+                            Button(onClick = { changeChannelBy(1) }) { Text("Canal siguiente  ▶") }
+                        }
+                    }
                 }
             }
         }

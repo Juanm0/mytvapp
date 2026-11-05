@@ -127,18 +127,12 @@ private fun buildLibraryRows(
             // Se normaliza el nombre UNA sola vez por canal (antes se hacía dentro del ordenamiento,
             // con una Regex nueva en cada comparación, y trababa la pestaña Argentina).
             val keyed = argentina.distinctBy { it.streamUrl }.map { it to normalizeName(it.name) }
-            val orderedPairs = keyed.distinctBy { (title, n) ->
-                if (n.contains("gran hermano") || n == "gh") "gh:${title.streamUrl}"
-                else argentinaBrand(n) ?: "url:${title.streamUrl}"
-            }.sortedWith(compareBy<Pair<Title, String>>({ argentinaPriority(it.second) }, { it.second }))
-            val gh = orderedPairs.filter { (_, n) -> n.contains("gran hermano") || n == "gh" }.map { it.first }
+            val orderedPairs = keyed.sortedWith(compareBy<Pair<Title, String>>({ argentinaPriority(it.second) }, { it.second }))
             val sports = orderedPairs.filter { isArgentinaSport(it.second) }.map { it.first }
-            val ghUrls = gh.map { it.streamUrl }.toSet()
             val sportUrls = sports.map { it.streamUrl }.toSet()
-            val channels = orderedPairs.map { it.first }.filter { it.streamUrl !in ghUrls && it.streamUrl !in sportUrls }
+            val channels = orderedPairs.map { it.first }.filter { it.streamUrl !in sportUrls }
             listOfNotNull(
                 channels.takeIf { it.isNotEmpty() }?.let { Category("argentina-live", "Canales argentinos", it) },
-                gh.takeIf { it.isNotEmpty() }?.let { Category("argentina-gh", "Gran Hermano", it) },
                 sports.takeIf { it.isNotEmpty() }?.let { Category("argentina-sports", "Deportes Argentina", it) },
             )
         }
@@ -148,22 +142,6 @@ private fun buildLibraryRows(
 private val MARKS_REGEX = Regex("\\p{Mn}+")
 
 private fun normalizeName(value: String): String = java.text.Normalizer.normalize(value.lowercase(), java.text.Normalizer.Form.NFD).replace(MARKS_REGEX, "")
-
-/** `n` ya viene normalizado con normalizeName. */
-private fun argentinaBrand(n: String): String? {
-    return when {
-        n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") -> "tn"
-        "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> "la nacion"
-        "cronica" in n -> "cronica"
-        "el trece" in n || "eltrece" in n -> "el trece"
-        "telefe" in n -> "telefe"
-        n == "america" || n.startsWith("america ") || "america tv" in n -> "america"
-        "c5n" in n -> "c5n"
-        "canal 9" in n || n == "el nueve" || n.startsWith("canal nueve") -> "canal 9"
-        "tv publica" in n || "television publica" in n -> "tv publica"
-        else -> null
-    }
-}
 
 private fun argentinaPriority(n: String): Int {
     return when {
@@ -176,8 +154,7 @@ private fun argentinaPriority(n: String): Int {
         "c5n" in n -> 6
         "canal 9" in n || n == "el nueve" || n.startsWith("canal nueve") -> 7
         "tv publica" in n || "television publica" in n -> 8
-        "gran hermano" in n || n == "gh" -> 9
-        else -> 10
+        else -> 9
     }
 }
 

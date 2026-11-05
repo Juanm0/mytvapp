@@ -140,8 +140,6 @@ private data class Entry(val group: String, val title: Title, val norm: String) 
 
 private fun entryOf(group: String, title: Title) = Entry(group, title, normalizeText(title.name))
 
-private fun isGranHermanoNorm(n: String) = n.contains("gran hermano") || n == "gh"
-
 /**
  * ContentRepository que lee listas IPTV/VOD (M3U) y las mezcla con el catálogo visual de TMDB.
  *
@@ -330,6 +328,8 @@ class M3uRepository(
     /** Variante que también acepta fichas TMDB ya vinculadas a un stream reproducible. */
     fun getPlayableAlternatives(current: Title): List<Title> {
         if (current.streamUrl.isBlank() && !current.id.startsWith("tmdb-")) return emptyList()
+        // Canales en vivo: sin cambio automático a otra lista (Argentina usa una única lista propia).
+        if (current.isLive) return emptyList()
         val all = allEntries
         val accountIndices = sources.indices.filter { sources[it].isUserIptvAccount }.toSet()
         val useAccountSources = accountIndices.isNotEmpty()
@@ -495,14 +495,15 @@ class M3uRepository(
         val row = _sections.value.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
             ?.categories.orEmpty().flatMap { it.items }
         return row.ifEmpty {
-            allEntries.filter { it.title.isLive }
+            val argIdx = sources.indexOfFirst { it.name.equals("Argentina", ignoreCase = true) }
+            allEntries.filter { it.title.isLive && sourceIndexOf(it.title.id) == argIdx }
                 .distinctBy { it.title.streamUrl }
                 .sortedWith(compareBy<Entry>({ argentinaRankNorm(it.norm) }, { it.norm }))
                 .map { it.title }
         }
     }
 
-    /** Curated order: first nine familiar Argentine channels, then every Gran Hermano feed, then the rest. */
+    /** Curated order: first nine familiar Argentine channels, then the rest. */
     private fun argentinaRankNorm(n: String): Int = when {
         n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") || "todo noticias" in n -> 0
         "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> 1
@@ -513,25 +514,7 @@ class M3uRepository(
         "c5n" in n -> 6
         n.contains("canal 9") || n == "el nueve" || n.startsWith("canal nueve") -> 7
         "tv publica" in n || "television publica" in n -> 8
-        isGranHermanoNorm(n) -> 9
-        else -> 10
-    }
-
-    private fun argentinaDedupeKey(entry: Entry): String {
-        val n = entry.norm
-        return when {
-            isGranHermanoNorm(n) -> "gh:${entry.title.streamUrl}"
-            n == "tn" || n.startsWith("tn ") || n.startsWith("tn-") || "todo noticias" in n -> "tn"
-            "la nacion" in n || "lanacion" in n || "ln+" in n || n == "ln" -> "ln"
-            "cronica" in n -> "cronica"
-            "el trece" in n || "eltrece" in n -> "eltrece"
-            "telefe" in n -> "telefe"
-            n == "america" || n.startsWith("america ") || "america tv" in n -> "america"
-            "c5n" in n -> "c5n"
-            n.contains("canal 9") || n == "el nueve" || n.startsWith("canal nueve") -> "canal9"
-            "tv publica" in n || "television publica" in n -> "tvpublica"
-            else -> "url:${entry.title.streamUrl}"
-        }
+        else -> 9
     }
 
     private fun channelPriorityNorm(n: String): Int = when {
@@ -541,22 +524,14 @@ class M3uRepository(
         "eltrece" in n || "el trece" in n -> 3
         "telefe" in n -> 4
         "america" in n -> 5
-        isGranHermanoNorm(n) -> 6
         else -> 100
     }
 
     private fun buildSection(i: Int, source: M3uSource, entries: List<Entry>): Section {
         if (source.flattenIntoOneCategory) {
             val isArgentina = source.name.equals("Argentina", ignoreCase = true)
-            val mergedExtras = if (isArgentina) sources.indices
-                .filter { sources[it].mergeIntoArgentina }
-                .flatMap { entriesBySource[it].orEmpty() }
-                .filter { it.title.isLive } else emptyList()
-            val realityEntries = if (isArgentina) {
-                entriesBySource.values.flatten().filter { it.title.isLive && isGranHermanoNorm(it.norm) }
-            } else emptyList()
-            val raw = entries + mergedExtras + realityEntries
-            val deduped = if (isArgentina) raw.distinctBy(::argentinaDedupeKey) else raw.distinctBy { it.title.streamUrl }
+            // Argentina usa SOLO su propia lista: no se mezclan canales de otras fuentes.
+            val deduped = entries.distinctBy { it.title.streamUrl }
             val sorted = deduped.sortedWith(
                 compareBy<Entry>({ if (isArgentina) argentinaRankNorm(it.norm) else Int.MAX_VALUE }, { it.norm })
             )
@@ -659,6 +634,8 @@ class M3uRepository(
                 attrs = a
                 name = n
                 pendingHeaders = linkedMapOf()
+                a["user-agent"]?.takeIf { it.isNotBlank() }?.let { pendingHeaders["User-Agent"] = it }
+                (a["referrer"] ?: a["referer"])?.takeIf { it.isNotBlank() }?.let { pendingHeaders["Referer"] = it }
             } else if (line.startsWith("#EXTVLCOPT:", ignoreCase = true)) {
                 // Keep the common HTTP options used by M3U streams. Other VLC-only
                 // options (subtitle delay, subtitle file, etc.) are intentionally ignored.

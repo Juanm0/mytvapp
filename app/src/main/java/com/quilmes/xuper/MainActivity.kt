@@ -47,25 +47,18 @@ import java.nio.charset.StandardCharsets
  * a la barra lateral. Para otra fuente (Xtream, backend propio), implementá
  * ContentRepository y devolvela acá.
  */
+private const val MY_LISTS_DIR = "mis-listas"
+
 private fun buildRepository(cacheDir: File, assets: android.content.res.AssetManager): ContentRepository {
     val builtInSources = listOf(
+        // Sección Argentina: SOLO la lista propia (app/src/main/assets/argentina.m3u).
         M3uSource(
             name = "Argentina",
-            url = "https://iptv-org.github.io/iptv/countries/ar.m3u",
+            url = File(cacheDir, "argentina.m3u").toURI().toString(),
             icon = "🇦🇷",
             homeRows = 1,
-            priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública", "Gran Hermano"),
+            priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública"),
             flattenIntoOneCategory = true,
-            enrichMetadata = false,
-            maxPerRow = 100,
-            maxRows = 1,
-        ),
-        M3uSource(
-            name = "Argentina · agregados",
-            url = File(cacheDir, "argentina-extra.m3u").toURI().toString(),
-            icon = "🇦🇷",
-            homeRows = 0,
-            mergeIntoArgentina = true,
             enrichMetadata = false,
             maxPerRow = 100,
             maxRows = 1,
@@ -168,10 +161,27 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             isUserIptvAccount = true,
         )
     }
+    // Listas propias: cualquier .m3u que se suelte en app/src/main/assets/mis-listas/ se registra sola.
+    // El nombre del archivo es el nombre de la fuente; el tipo (película/serie/canal) se detecta
+    // por cada entrada (.mp4 => película, S01E02 => serie, el resto => TV en vivo).
+    val myListSources = (runCatching { assets.list(MY_LISTS_DIR)?.toList() }.getOrNull().orEmpty())
+        .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
+        .sorted()
+        .map { file ->
+            M3uSource(
+                name = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim().ifBlank { "Mi lista" },
+                url = File(File(cacheDir, MY_LISTS_DIR), file).toURI().toString(),
+                icon = "🎬",
+                homeRows = 2,
+                enrichMetadata = false,
+                maxPerRow = 60,
+                maxRows = 200,
+            )
+        }
     return M3uRepository(
         cacheDir = cacheDir,
         // Las cuentas del TXT siempre tienen prioridad sobre las fuentes públicas/integradas.
-        sources = accountSources + loadCustomM3uSources(cacheDir) + builtInSources,
+        sources = accountSources + myListSources + loadCustomM3uSources(cacheDir) + builtInSources,
     )
 }
 
@@ -284,10 +294,12 @@ class MainActivity : ComponentActivity() {
         // Solo limpiamos la antigua lista de fallos: las URL se reintentan y no deben quedar
         // bloqueadas para siempre después de un error transitorio.
         File(filesDir, "unavailable_streams.txt").delete()
+        // Cachés viejos de la sección Argentina (lista pública + agregados): se descartan.
+        filesDir.listFiles { f -> f.name.startsWith("catalog_") && f.name.contains("argentina") }?.forEach { it.delete() }
         // Instala/actualiza todas las listas empaquetadas en el APK en el almacenamiento privado.
         // Cada una se registra como fuente en buildRepository(); TMDB solo aporta metadatos.
         for (name in listOf(
-            "argentina-extra.m3u", "iptv-extra.m3u", "lista-extendida.m3u",
+            "argentina.m3u", "iptv-extra.m3u", "lista-extendida.m3u",
             "mi-lista.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u"
         )) {
             runCatching {
@@ -296,6 +308,17 @@ class MainActivity : ComponentActivity() {
                 }
             }.onFailure { error ->
                 android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $name", error)
+            }
+        }
+        // Listas propias (assets/mis-listas/*.m3u): se copian a filesDir/mis-listas/.
+        runCatching {
+            val dir = File(filesDir, MY_LISTS_DIR).apply { mkdirs() }
+            assets.list(MY_LISTS_DIR).orEmpty().forEach { name ->
+                runCatching {
+                    assets.open("$MY_LISTS_DIR/$name").use { input ->
+                        File(dir, name).outputStream().use { output -> input.copyTo(output) }
+                    }
+                }.onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $MY_LISTS_DIR/$name", it) }
             }
         }
     }
