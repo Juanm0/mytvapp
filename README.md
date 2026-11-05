@@ -119,3 +119,11 @@ Pedido del usuario (03/11/2026): llevar a Xuper lo que se probó en `cinesrc-lab
 3. No volver a crear documentación Markdown paralela. Actualizar este `README.md` único cuando cambien decisiones, arquitectura o comportamiento.
 4. No afirmar que una función está arreglada por haber cambiado código: indicar con precisión qué se verificó y qué queda por probar en una TV/dispositivo.
 5. El usuario prefiere cambios concretos y comprobables, y trabaja pasando ZIPs entre distintas IAs. Cuando corresponda, entregar un ZIP del proyecto limpio sin `.git` ni archivos temporales.
+
+
+### LAB — selección de pistas y controles de reproducción
+
+- El selector de subtítulos del LAB conserva todas las pistas capturadas identificadas como español (incluidas variantes regionales) y las pistas en inglés. La opción **Pistas de subtítulos** abre el selector nativo de Media3 para que se puedan probar las distintas versiones disponibles, en lugar de limitarse a una preferencia genérica de idioma.
+- La opción **Resolución** abre el selector de pistas de video de Media3. Automático sigue siendo la selección predeterminada; las calidades manuales solo aparecen si la fuente realmente las ofrece.
+- En el LAB, OK alterna pausa/reproducción cuando no hay paneles abiertos. Las flechas izquierda/derecha realizan saltos de 10 s, 30 s y hasta 120 s según la repetición de la tecla.
+- Estos cambios se mantienen aislados del reproductor principal.

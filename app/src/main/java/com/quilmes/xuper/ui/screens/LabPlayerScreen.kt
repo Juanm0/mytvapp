@@ -315,7 +315,7 @@ private fun LabResolving(
                                     // que el embed dispara en paralelo o inmediatamente después.
                                     handler.postDelayed({
                                         if (done.compareAndSet(false, true)) {
-                                            foundState.value(LabStream(url, referer, ua, capturedSubtitles.values.toList().sortedBy { it.label }))
+                                            foundState.value(LabStream(url, referer, ua, capturedSubtitles.values.toList().filter { isSpanishOrEnglishSubtitle(it) }.distinctBy { it.url }.sortedWith(compareBy<ExternalSubtitleTrack> { if (isSpanishSubtitle(it)) 0 else 1 }.thenBy { it.label })))
                                         }
                                     }, 2_200L)
                                 }
@@ -387,6 +387,22 @@ private fun tapCenter(view: WebView) {
     down.recycle()
     up.recycle()
 }
+
+private fun normalizedSubtitleLanguage(track: ExternalSubtitleTrack): String =
+    (track.language + " " + track.label + " " + track.source.orEmpty()).lowercase()
+
+private fun isSpanishSubtitle(track: ExternalSubtitleTrack): Boolean {
+    val value = normalizedSubtitleLanguage(track)
+    return Regex("(^|[^a-z])(es|spa|es-[a-z0-9]+|spanish|español|castellano|latino)([^a-z]|$)").containsMatchIn(value)
+}
+
+private fun isEnglishSubtitle(track: ExternalSubtitleTrack): Boolean {
+    val value = normalizedSubtitleLanguage(track)
+    return Regex("(^|[^a-z])(en|eng|en-[a-z0-9]+|english|inglés)([^a-z]|$)").containsMatchIn(value)
+}
+
+private fun isSpanishOrEnglishSubtitle(track: ExternalSubtitleTrack): Boolean =
+    isSpanishSubtitle(track) || isEnglishSubtitle(track)
 
 private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrack {
     var lang = "und"

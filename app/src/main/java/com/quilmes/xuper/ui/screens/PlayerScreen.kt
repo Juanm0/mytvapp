@@ -915,7 +915,7 @@ private fun NativePlayerScreen(
     var showControls by remember(streamUrl, labMode) { mutableStateOf(!labMode) }
     var labPanelOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
     var labSettingsOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
-    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 idioma, 3 tamaño, 4 estilo, 5 salida
+    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 resolución, 6 salida
     var labFocusOption by remember(streamUrl) { mutableStateOf(0) }
     var labAudioSelected by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleLanguage by remember(streamUrl) { mutableStateOf(0) }
@@ -931,6 +931,8 @@ private fun NativePlayerScreen(
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
+    var labSeekDirection by remember(streamUrl) { mutableStateOf(0) }
+    var labSeekLabel by remember(streamUrl) { mutableStateOf("") }
     var failedSources by remember(streamUrl) { mutableStateOf(0) }
     var attemptedUrls by remember(streamUrl) { mutableStateOf(setOf(streamUrl)) }
 
@@ -994,7 +996,7 @@ private fun NativePlayerScreen(
         val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L)
         val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost(exoPlayer.duration) else target
         exoPlayer.seekTo(boundedTarget)
-        showControls = true
+        if (!labMode) showControls = true
     }
 
     LaunchedEffect(exoPlayer, streamUrl) { setUrl(streamUrl, streamHeaders) }
@@ -1088,8 +1090,14 @@ private fun NativePlayerScreen(
         if (next.id != currentTitleId) onChangeChannel(next.id)
     }
     fun togglePlayPause() {
-        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-        showControls = true
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+            isPlaying = false
+        } else {
+            exoPlayer.play()
+            isPlaying = true
+        }
+        if (!labMode) showControls = true
     }
     fun changeSource() {
         if (alternatePlayers.isEmpty()) {
@@ -1127,17 +1135,17 @@ private fun NativePlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
     }
     fun moveLabFocus(delta: Int) {
-        labFocusRow = (labFocusRow + delta).coerceIn(0, 5)
+        labFocusRow = (labFocusRow + delta).coerceIn(0, 6)
         labFocusOption = when (labFocusRow) {
             0 -> labAudioSelected
-            2 -> labSubtitleLanguage
+            2 -> 0
             3 -> labSubtitleSize
             4 -> labSubtitleStyle
             else -> 0
         }
     }
     fun moveLabOption(delta: Int) {
-        val max = when (labFocusRow) { 0, 2 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
+        val max = when (labFocusRow) { 0 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
         labFocusOption = (labFocusOption + delta + max + 1) % (max + 1)
     }
     fun confirmLabFocus() {
@@ -1148,10 +1156,11 @@ private fun NativePlayerScreen(
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
             }
-            2 -> applyLabSubtitleLanguage(labFocusOption)
+            2 -> TrackSelectionDialogBuilder(context, "Pistas de subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
-            5 -> labSettingsOpen = false
+            5 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
+            6 -> labSettingsOpen = false
         }
     }
     BackHandler(enabled = labMode && (labSettingsOpen || labPanelOpen)) {
@@ -1178,11 +1187,26 @@ private fun NativePlayerScreen(
                             if (labSettingsOpen) moveLabFocus(-1) else if (labPanelOpen) labPanelOpen = false
                             return@onPreviewKeyEvent true
                         }
-                        Key.DirectionLeft -> { if (labSettingsOpen) moveLabOption(-1); return@onPreviewKeyEvent true }
-                        Key.DirectionRight -> { if (labSettingsOpen) moveLabOption(1); return@onPreviewKeyEvent true }
+                        Key.DirectionLeft -> {
+                            if (labSettingsOpen) moveLabOption(-1) else if (!labPanelOpen) {
+                                val repeat = event.nativeKeyEvent.repeatCount
+                                val seconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                                seekBy(-seconds * 1_000L); labSeekDirection = -1; labSeekLabel = "⏪  ${formatTime(exoPlayer.currentPosition)}"
+                            }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionRight -> {
+                            if (labSettingsOpen) moveLabOption(1) else if (!labPanelOpen) {
+                                val repeat = event.nativeKeyEvent.repeatCount
+                                val seconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                                seekBy(seconds * 1_000L); labSeekDirection = 1; labSeekLabel = "⏩  ${formatTime(exoPlayer.currentPosition)}"
+                            }
+                            return@onPreviewKeyEvent true
+                        }
                         Key.DirectionCenter, Key.Enter -> {
                             if (labSettingsOpen) confirmLabFocus()
                             else if (labPanelOpen) labSettingsOpen = true
+                            else togglePlayPause()
                             return@onPreviewKeyEvent true
                         }
                         else -> {}
@@ -1193,13 +1217,13 @@ private fun NativePlayerScreen(
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> {
                         val repeat = event.nativeKeyEvent.repeatCount
-                        val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                        val jumpSeconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
                         seekBy(-jumpSeconds * 1_000L)
                         return@onPreviewKeyEvent true
                     }
                     AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
                         val repeat = event.nativeKeyEvent.repeatCount
-                        val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                        val jumpSeconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
                         seekBy(jumpSeconds * 1_000L)
                         return@onPreviewKeyEvent true
                     }
@@ -1208,7 +1232,7 @@ private fun NativePlayerScreen(
                     AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer.pause(); isPlaying = false; return@onPreviewKeyEvent true }
                 }
                 val repeat = event.nativeKeyEvent.repeatCount
-                val jumpSeconds = when { repeat >= 5 -> 60; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
+                val jumpSeconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
                 when (event.key) {
                     Key.DirectionLeft -> { seekBy(-jumpSeconds * 1_000L); true }
                     Key.DirectionRight -> { seekBy(jumpSeconds * 1_000L); true }
@@ -1300,7 +1324,34 @@ private fun NativePlayerScreen(
                 ) { Text("Configuración", color = Color(0xFF10221F), fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
                 Text("RESOLUCIÓN", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Box(Modifier.width(190.dp).background(Color(0xFFE1E5E4), RoundedCornerShape(22.dp)).padding(horizontal = 18.dp, vertical = 10.dp)) {
-                    Text("●  720p", color = Color(0xFF26312F), fontSize = 14.sp)
+                    Text("●  Automático", color = Color(0xFF26312F), fontSize = 14.sp)
+                }
+            }
+        }
+        if (labMode && !labSettingsOpen && !labPanelOpen && !isPlaying) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.width(76.dp).height(76.dp).background(Color(0xFF168DC0), RoundedCornerShape(50)), contentAlignment = Alignment.Center) {
+                    Text("▶", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        if (labMode && !labSettingsOpen && !labPanelOpen && labSeekDirection != 0) {
+            LaunchedEffect(labSeekLabel) { delay(1_500); labSeekDirection = 0 }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Box(Modifier.background(Color(0xCC168DC0), RoundedCornerShape(50)).padding(horizontal = 24.dp, vertical = 16.dp)) {
+                    Text(labSeekLabel, color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        if (labMode && !labSettingsOpen && !labPanelOpen && labSeekDirection != 0 && duration > 0L) {
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 46.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text(formatTime(position), color = Color(0xFF83E6D2), fontSize = 13.sp)
+                Box(Modifier.fillMaxWidth().height(4.dp).background(Color(0x88FFFFFF), RoundedCornerShape(4.dp))) {
+                    Box(Modifier.fillMaxWidth((position.toFloat() / duration.toFloat()).coerceIn(0f, 1f)).height(4.dp).background(Color(0xFF83E6D2), RoundedCornerShape(4.dp)))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Text(formatTime(duration), color = Color.White, fontSize = 13.sp)
                 }
             }
         }
@@ -1315,11 +1366,12 @@ private fun NativePlayerScreen(
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF53616A)))
                 LabSettingsRow("Audio", listOf("Español", "Inglés"), labAudioSelected, labFocusRow == 0, labFocusOption, false)
                 LabToggleRow(labSubtitlesEnabled, labFocusRow == 1)
-                LabSettingsRow("Idioma", listOf("Español", "Inglés"), labSubtitleLanguage, labFocusRow == 2, labFocusOption, true)
+                LabSettingsRow("Pistas de subtítulos", listOf("Elegir pista"), 0, labFocusRow == 2, 0, true)
                 LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)
                 LabStyleRow(labSubtitleStyle, labFocusRow == 4, labFocusOption)
+                LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 5, 0, true)
                 Box(Modifier.fillMaxWidth().padding(top = 3.dp), contentAlignment = Alignment.Center) {
-                    Box(Modifier.width(220.dp).background(if (labFocusRow == 5) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.width(220.dp).background(if (labFocusRow == 6) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                         Text("Salida", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
