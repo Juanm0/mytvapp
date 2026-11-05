@@ -178,6 +178,7 @@ fun LabPlayerScreen(
             onExit = onExit,
             directOnly = true,
             externalSubtitles = found.subtitles,
+            labMode = true,
         )
         failure != null -> LabMessage(
             message = failure.orEmpty(),

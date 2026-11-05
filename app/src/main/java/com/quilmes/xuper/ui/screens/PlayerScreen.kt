@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Message
 import android.os.SystemClock
+import android.util.TypedValue
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.View
 import android.view.ViewGroup
@@ -75,6 +76,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import androidx.tv.material3.Button
 import androidx.tv.material3.Text
@@ -844,6 +846,7 @@ fun PlayerScreen(
     onExit: () -> Unit = {},
     directOnly: Boolean = false,
     externalSubtitles: List<ExternalSubtitleTrack> = emptyList(),
+    labMode: Boolean = false,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
@@ -883,6 +886,7 @@ fun PlayerScreen(
         onExit = onExit,
         directOnly = directOnly,
         externalSubtitles = externalSubtitles,
+        labMode = labMode,
         onResolveAsWebPage = resolvePageCallback,
     )
 }
@@ -903,11 +907,22 @@ private fun NativePlayerScreen(
     onExit: () -> Unit,
     directOnly: Boolean,
     externalSubtitles: List<ExternalSubtitleTrack>,
+    labMode: Boolean,
     onResolveAsWebPage: () -> Unit,
 ) {
     val context = LocalContext.current
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
-    var showControls by remember(streamUrl) { mutableStateOf(true) }
+    var showControls by remember(streamUrl, labMode) { mutableStateOf(!labMode) }
+    var labPanelOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
+    var labSettingsOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
+    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 idioma, 3 tamaño, 4 estilo, 5 salida
+    var labFocusOption by remember(streamUrl) { mutableStateOf(0) }
+    var labAudioSelected by remember(streamUrl) { mutableStateOf(0) }
+    var labSubtitleLanguage by remember(streamUrl) { mutableStateOf(0) }
+    var labSubtitleSize by remember(streamUrl) { mutableStateOf(0) }
+    var labSubtitleStyle by remember(streamUrl) { mutableStateOf(0) }
+    var labSubtitlesEnabled by remember(streamUrl) { mutableStateOf(true) }
+    var labPlayerView by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
     var showNextEpisode by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
     var nextEpisodeTriggered by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
     var sourceIndex by remember(streamUrl, alternatePlayers) {
@@ -936,6 +951,7 @@ private fun NativePlayerScreen(
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
+                    .apply { if (labMode) setPreferredAudioLanguage("es") }
                     .setPreferredTextLanguage("es")
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
@@ -997,6 +1013,19 @@ private fun NativePlayerScreen(
         if (showControls) {
             delay(6_000)
             showControls = false
+        }
+    }
+    LaunchedEffect(labMode, labSubtitleSize, labSubtitleStyle, labPlayerView) {
+        if (labMode) {
+            val subtitleView = labPlayerView?.subtitleView
+            if (subtitleView != null) {
+                val size = when (labSubtitleSize) { 1 -> 25f; 2 -> 15f; else -> 19f }
+                subtitleView.setFixedTextSize(TypedValue.COMPLEX_UNIT_SP, size)
+                subtitleView.setApplyEmbeddedStyles(false)
+                val foreground = if (labSubtitleStyle == 1) AndroidColor.YELLOW else AndroidColor.WHITE
+                val background = if (labSubtitleStyle == 2) AndroidColor.BLACK else AndroidColor.argb(170, 25, 30, 34)
+                subtitleView.setStyle(CaptionStyleCompat(foreground, background, AndroidColor.TRANSPARENT, CaptionStyleCompat.EDGE_TYPE_OUTLINE, AndroidColor.BLACK, null))
+            }
         }
     }
     LaunchedEffect(exoPlayer, nextEpisode?.id) {
@@ -1086,11 +1115,79 @@ private fun NativePlayerScreen(
         focusedButton = (focusedButton + delta).coerceIn(0, buttonCount - 1)
         runCatching { buttonFocusRequesters[focusedButton].requestFocus() }
     }
+    fun applyLabAudio(index: Int) {
+        labAudioSelected = index.coerceIn(0, 1)
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .setPreferredAudioLanguage(if (labAudioSelected == 0) "es" else "en").build()
+    }
+    fun applyLabSubtitleLanguage(index: Int) {
+        labSubtitleLanguage = index.coerceIn(0, 1)
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .setPreferredTextLanguage(if (labSubtitleLanguage == 0) "es" else "en")
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
+    }
+    fun moveLabFocus(delta: Int) {
+        labFocusRow = (labFocusRow + delta).coerceIn(0, 5)
+        labFocusOption = when (labFocusRow) {
+            0 -> labAudioSelected
+            2 -> labSubtitleLanguage
+            3 -> labSubtitleSize
+            4 -> labSubtitleStyle
+            else -> 0
+        }
+    }
+    fun moveLabOption(delta: Int) {
+        val max = when (labFocusRow) { 0, 2 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
+        labFocusOption = (labFocusOption + delta + max + 1) % (max + 1)
+    }
+    fun confirmLabFocus() {
+        when (labFocusRow) {
+            0 -> applyLabAudio(labFocusOption)
+            1 -> {
+                labSubtitlesEnabled = !labSubtitlesEnabled
+                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
+            }
+            2 -> applyLabSubtitleLanguage(labFocusOption)
+            3 -> labSubtitleSize = labFocusOption
+            4 -> labSubtitleStyle = labFocusOption
+            5 -> labSettingsOpen = false
+        }
+    }
+    BackHandler(enabled = labMode && (labSettingsOpen || labPanelOpen)) {
+        if (labSettingsOpen) labSettingsOpen = false else labPanelOpen = false
+    }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (labMode) {
+                    when (event.nativeKeyEvent.keyCode) {
+                        AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
+                            if (labSettingsOpen) labSettingsOpen = false else if (labPanelOpen) labPanelOpen = false else onExit()
+                            return@onPreviewKeyEvent true
+                        }
+                    }
+                    when (event.key) {
+                        Key.DirectionDown -> {
+                            if (labSettingsOpen) moveLabFocus(1) else if (!labPanelOpen) { labPanelOpen = true; labSettingsOpen = false }
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionUp -> {
+                            if (labSettingsOpen) moveLabFocus(-1) else if (labPanelOpen) labPanelOpen = false
+                            return@onPreviewKeyEvent true
+                        }
+                        Key.DirectionLeft -> { if (labSettingsOpen) moveLabOption(-1); return@onPreviewKeyEvent true }
+                        Key.DirectionRight -> { if (labSettingsOpen) moveLabOption(1); return@onPreviewKeyEvent true }
+                        Key.DirectionCenter, Key.Enter -> {
+                            if (labSettingsOpen) confirmLabFocus()
+                            else if (labPanelOpen) labSettingsOpen = true
+                            return@onPreviewKeyEvent true
+                        }
+                        else -> {}
+                    }
+                }
                 when (event.nativeKeyEvent.keyCode) {
                     AndroidKeyEvent.KEYCODE_CHANNEL_UP -> { changeChannelBy(1); return@onPreviewKeyEvent true }
                     AndroidKeyEvent.KEYCODE_CHANNEL_DOWN -> { changeChannelBy(-1); return@onPreviewKeyEvent true }
@@ -1140,13 +1237,14 @@ private fun NativePlayerScreen(
                     isFocusable = true
                     isFocusableInTouchMode = true
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
-                    setOnClickListener { showControls = true }
+                    setOnClickListener { if (!labMode) showControls = true }
                     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                    labPlayerView = this
                 }
             },
-            update = { it.player = exoPlayer },
+            update = { it.player = exoPlayer; if (labMode) labPlayerView = it },
         )
-        if (showControls) {
+        if (showControls && !labMode) {
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xB8000000), Color.Transparent, Color(0xE6000000)))))
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth().padding(horizontal = 38.dp, vertical = 26.dp)) {
                 Text("XUPER  ·  $name", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
@@ -1189,7 +1287,45 @@ private fun NativePlayerScreen(
                 }
             }
         }
-        if (showNextEpisode && nextEpisode != null) {
+        if (labMode && labPanelOpen) {
+            Column(
+                Modifier.align(Alignment.BottomStart).padding(start = 42.dp, bottom = 34.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                Text("IDIOMA", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Box(
+                    Modifier.width(190.dp).background(
+                        if (!labSettingsOpen) Color(0xFF83E6D2) else Color(0xFF477E75), RoundedCornerShape(22.dp)
+                    ).padding(horizontal = 18.dp, vertical = 11.dp)
+                ) { Text("Configuración", color = Color(0xFF10221F), fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+                Text("RESOLUCIÓN", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Box(Modifier.width(190.dp).background(Color(0xFFE1E5E4), RoundedCornerShape(22.dp)).padding(horizontal = 18.dp, vertical = 10.dp)) {
+                    Text("●  720p", color = Color(0xFF26312F), fontSize = 14.sp)
+                }
+            }
+        }
+        if (labMode && labSettingsOpen) {
+            Box(Modifier.fillMaxSize().background(Color(0x99000000)))
+            Column(
+                Modifier.align(Alignment.Center).width(650.dp)
+                    .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(horizontal = 30.dp, vertical = 22.dp),
+                verticalArrangement = Arrangement.spacedBy(13.dp)
+            ) {
+                Text("Ajuste de reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
+                Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF53616A)))
+                LabSettingsRow("Audio", listOf("Español", "Inglés"), labAudioSelected, labFocusRow == 0, labFocusOption, false)
+                LabToggleRow(labSubtitlesEnabled, labFocusRow == 1)
+                LabSettingsRow("Idioma", listOf("Español", "Inglés"), labSubtitleLanguage, labFocusRow == 2, labFocusOption, true)
+                LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)
+                LabStyleRow(labSubtitleStyle, labFocusRow == 4, labFocusOption)
+                Box(Modifier.fillMaxWidth().padding(top = 3.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.width(220.dp).background(if (labFocusRow == 5) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                        Text("Salida", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+        if (showNextEpisode && nextEpisode != null && !labMode) {
             val secondsLeft = (((duration - position).coerceAtLeast(0L) + 999L) / 1000L).toInt().coerceIn(0, 30)
             NextEpisodeOverlay(
                 episode = nextEpisode,
@@ -1202,6 +1338,68 @@ private fun NativePlayerScreen(
                 },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = if (showControls) 158.dp else 24.dp),
             )
+        }
+    }
+}
+
+@Composable
+private fun LabSettingsRow(
+    label: String,
+    options: List<String>,
+    selected: Int,
+    rowFocused: Boolean,
+    focusedOption: Int,
+    checkmark: Boolean,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Color.White, fontSize = if (label == "Subtítulo") 18.sp else 15.sp, fontWeight = if (label == "Subtítulo") FontWeight.Bold else FontWeight.Medium, modifier = Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            options.forEachIndexed { index, option ->
+                val focused = rowFocused && focusedOption == index
+                val chosen = selected == index
+                Box(
+                    Modifier.widthIn(min = if (options.size == 3) 105.dp else 125.dp)
+                        .background(
+                            if (focused) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0)))
+                            else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)
+                        ).padding(horizontal = 13.dp, vertical = 9.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(option, color = Color.White, fontSize = 13.sp, maxLines = 1)
+                        if (chosen) Text(if (checkmark) "✓" else "●", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LabToggleRow(enabled: Boolean, focused: Boolean) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Subtítulo", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        Box(Modifier.width(125.dp).background(if (focused) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF245F91), Color(0xFF245F91))), RoundedCornerShape(22.dp)).padding(horizontal = 14.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
+            Text(if (enabled) "●  ON" else "○  OFF", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun LabStyleRow(selected: Int, rowFocused: Boolean, focusedOption: Int) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Estilo", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Aa", "Aa", "Aa").forEachIndexed { index, value ->
+                val focused = rowFocused && focusedOption == index
+                val normalBackground = when (index) { 1 -> Color(0xFF252D33); 2 -> Color.Black; else -> Color(0xFF59636A) }
+                Box(Modifier.width(82.dp).background(if (focused) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(normalBackground, normalBackground)), RoundedCornerShape(18.dp)).padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(value, color = if (index == 1) Color.Yellow else Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        if (selected == index) Text("✓", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+            }
         }
     }
 }
