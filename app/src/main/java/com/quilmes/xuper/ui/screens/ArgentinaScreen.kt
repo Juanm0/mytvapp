@@ -32,6 +32,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.nativeKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.text.font.FontWeight
@@ -112,10 +117,19 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
     var pendingSecondary by remember { mutableStateOf<Title?>(null) }
     var pinnedPrincipalId by remember { mutableStateOf<String?>(null) }
     var focusTargetId by remember { mutableStateOf<String?>(null) }
+    var movingGroupId by remember { mutableStateOf<String?>(null) }
+    var movingPrincipals by remember { mutableStateOf<List<Title>?>(null) }
+    var movingChannelId by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    BackHandler(enabled = pendingSecondary != null) { pendingSecondary = null }
+    BackHandler(enabled = movingGroupId != null || pendingSecondary != null) {
+        if (movingGroupId != null) {
+            movingGroupId = null
+            movingPrincipals = null
+            movingChannelId = null
+        } else pendingSecondary = null
+    }
 
     val current = data
     if (current == null) {
@@ -153,7 +167,64 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
     /** Sube al principio de la pantalla (para que no haya que ir subiendo a mano) y enfoca el canal indicado. */
     fun jumpToTop(targetId: String?) {
         focusTargetId = targetId
-        scope.launch { listState.animateScrollToItem(0) }
+        scope.launch { listState.scrollToItem(0) }
+    }
+
+    fun startReordering(groupId: String, principals: List<Title>, title: Title) {
+        movingGroupId = groupId
+        movingPrincipals = principals.toList()
+        movingChannelId = title.id
+        focusTargetId = title.id
+    }
+
+    fun moveDraft(delta: Int) {
+        val list = movingPrincipals?.toMutableList() ?: return
+        val index = list.indexOfFirst { it.id == movingChannelId }
+        val target = index + delta
+        if (index !in list.indices || target !in list.indices) return
+        val item = list.removeAt(index)
+        list.add(target, item)
+        movingPrincipals = list
+        focusTargetId = item.id
+    }
+
+    fun finishReordering() {
+        val groupId = movingGroupId ?: return
+        val draft = movingPrincipals ?: return
+        val currentGroup = groupOf(groupId)
+        val selectedId = movingChannelId
+        store.save(
+            groupId,
+            SavedChannelGroup(
+                principals = draft.map { it.streamUrl },
+                secondaries = currentGroup.secondaries.mapValues { (_, list) -> list.map { it.streamUrl } },
+            ),
+        )
+        movingGroupId = null
+        movingPrincipals = null
+        movingChannelId = null
+        layoutVersion += 1
+        jumpToTop(selectedId)
+    }
+
+    fun handleReorderKey(event: KeyEvent): Boolean {
+        if (movingGroupId == null || event.type != KeyEventType.KeyDown) return false
+        when (event.key) {
+            Key.DirectionLeft -> { moveDraft(-1); return true }
+            Key.DirectionRight -> { moveDraft(1); return true }
+            Key.Enter, Key.NumPadEnter, Key.DirectionCenter -> {
+                // Ignora las repeticiones del OK que inició el mantener apretado.
+                if (event.nativeKeyEvent.repeatCount == 0) finishReordering()
+                return true
+            }
+            Key.Back, Key.Escape -> {
+                movingGroupId = null
+                movingPrincipals = null
+                movingChannelId = null
+                return true
+            }
+        }
+        return false
     }
 
     fun defaultGroupFor(title: Title, from: String?): String =
@@ -206,7 +277,9 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
             pendingSecondary?.let { pending ->
                 item(key = "pick-banner") { PickBanner(title = pending, onCancel = { pendingSecondary = null }) }
             }
-            for (group in listOf(current.popular, current.sports)) {
+            for (sourceGroup in listOf(current.popular, current.sports)) {
+                val group = if (movingGroupId == sourceGroup.id && movingPrincipals != null)
+                    sourceGroup.copy(principals = movingPrincipals!!) else sourceGroup
                 if (group.principals.isEmpty()) continue
                 item(key = "group-${group.id}") {
                     ChannelGroupSection(
@@ -218,9 +291,9 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
                             if (pendingSecondary != null) attachSecondary(principal, group.id)
                             else playFrom(group.principals, principal)
                         },
-                        onPrincipalLong = { principal ->
-                            openMenu(MenuTarget(principal, MenuRole.PRINCIPAL, group.id))
-                        },
+                        onPrincipalLong = { principal -> startReordering(group.id, group.principals, principal) },
+                        onReorderKey = ::handleReorderKey,
+                        movingChannelId = if (movingGroupId == group.id) movingChannelId else null,
                         onSecondaryClick = { principal, secondary ->
                             val groupQueue = listOf(principal) + group.secondaries[principal.streamUrl].orEmpty()
                             playFrom(groupQueue, secondary)
@@ -275,19 +348,6 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
                 }
                 MenuRole.PRINCIPAL -> {
                     val groupId = target.groupId ?: GROUP_POPULAR
-                    val hasSecondaries = groupOf(groupId).secondaries[title.streamUrl].orEmpty().isNotEmpty()
-                    if (hasSecondaries) {
-                        if (pinnedPrincipalId == title.id) add("Ocultar secundarios" to { pinnedPrincipalId = null })
-                        else add("Ver secundarios" to { pinnedPrincipalId = title.id })
-                    }
-                    add("Mover a la izquierda" to {
-                        mutate(groupId) { it.movedPrincipal(title.streamUrl, -1) }
-                        jumpToTop(title.id)
-                    })
-                    add("Mover a la derecha" to {
-                        mutate(groupId) { it.movedPrincipal(title.streamUrl, 1) }
-                        jumpToTop(title.id)
-                    })
                     add("Pasar a secundario" to { startPickingPrincipal(title) })
                     add("Quitar de principales" to { mutate(groupId) { it.withoutPrincipal(title.streamUrl) } })
                     add("Restablecer este grupo" to {
@@ -315,6 +375,8 @@ private fun ChannelGroupSection(
     onFocusTargetConsumed: () -> Unit,
     onPrincipalClick: (Title) -> Unit,
     onPrincipalLong: (Title) -> Unit,
+    onReorderKey: (KeyEvent) -> Boolean,
+    movingChannelId: String?,
     onSecondaryClick: (Title, Title) -> Unit,
     onSecondaryLong: (Title, Title) -> Unit,
     modifier: Modifier = Modifier,
@@ -342,7 +404,17 @@ private fun ChannelGroupSection(
         onFocusTargetConsumed()
     }
 
-    Column(modifier = modifier.onFocusChanged { groupHasFocus = it.hasFocus }) {
+    Column(modifier = modifier
+        .onFocusChanged { groupHasFocus = it.hasFocus }
+        .onPreviewKeyEvent(onReorderKey)
+    ) {
+        if (movingChannelId != null) {
+            Text(
+                text = "ORDENANDO · ◀ ▶ para mover · OK para soltar · ATRÁS para cancelar",
+                color = XuperAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 48.dp, bottom = 6.dp),
+            )
+        }
         Text(
             text = group.title, color = XuperTextPrimary, fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 48.dp, bottom = 8.dp),
@@ -383,23 +455,49 @@ private fun SecondaryPanel(
     onClick: (Title) -> Unit,
     onLong: (Title) -> Unit,
 ) {
-    Column(
+    var selectedId by remember(principal.id) { mutableStateOf(secondaries.firstOrNull()?.id) }
+    val selected = secondaries.firstOrNull { it.id == selectedId } ?: secondaries.firstOrNull()
+    Row(
         modifier = Modifier
             .padding(horizontal = 48.dp, vertical = 4.dp)
             .fillMaxWidth()
             .background(Color(0xFF151B26), RoundedCornerShape(12.dp))
             .padding(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        verticalAlignment = Alignment.Top,
     ) {
-        Text(
-            text = "Secundarios de ${principal.name}", color = XuperTextSecondary, fontSize = 15.sp,
-            fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        LazyRow(
-            contentPadding = PaddingValues(top = 8.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(secondaries, key = { it.id }) { secondary ->
-                PosterCard(title = secondary, onClick = { onClick(secondary) }, onLongClick = { onLong(secondary) })
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Secundarios de ${principal.name}", color = XuperTextSecondary, fontSize = 15.sp,
+                fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            secondaries.forEach { secondary ->
+                Button(
+                    onClick = { onClick(secondary) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                        .onFocusChanged { if (it.hasFocus) selectedId = secondary.id },
+                ) {
+                    Text(
+                        text = secondary.name,
+                        color = XuperTextPrimary,
+                        fontSize = 15.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        if (selected != null) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("SELECCIONADO", color = XuperTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                PosterCard(
+                    title = selected,
+                    onClick = { onClick(selected) },
+                    onLongClick = { onLong(selected) },
+                )
             }
         }
     }
