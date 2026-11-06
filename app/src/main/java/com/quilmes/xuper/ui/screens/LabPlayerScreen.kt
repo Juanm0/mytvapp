@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -63,7 +64,9 @@ private data class LabStream(
 
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
 private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$))|[?&]format=(?:srt|vtt)\\b", RegexOption.IGNORE_CASE)
-private const val RESOLVE_TIMEOUT_MS = 30_000L
+// A los 30 s se avisa que tarda y se ofrecen las opciones, pero SIGUE cargando; recién a los 5 min se da por fallido.
+private const val SLOW_NOTICE_MS = 30_000L
+private const val RESOLVE_TIMEOUT_MS = 300_000L
 private val SUBTITLE_CAPTURE_JS = """
 (function(){
   if (window.__xuperSubtitleCapture) return; window.__xuperSubtitleCapture = true;
@@ -189,14 +192,18 @@ fun LabPlayerScreen(
             },
             onOriginal = { useOriginal = true },
         )
-        else -> LabResolving(
-            name = name,
-            embedUrl = embedUrl,
-            attempt = attempt,
-            onFound = { stream = it },
-            onFail = { failure = it },
-            onExit = onExit,
-        )
+        else -> key(attempt) {
+            LabResolving(
+                name = name,
+                embedUrl = embedUrl,
+                attempt = attempt,
+                onFound = { stream = it },
+                onFail = { failure = it },
+                onExit = onExit,
+                onRetry = { attempt += 1 },
+                onOriginal = { useOriginal = true },
+            )
+        }
     }
 }
 
@@ -210,6 +217,8 @@ private fun LabResolving(
     onFound: (LabStream) -> Unit,
     onFail: (String) -> Unit,
     onExit: () -> Unit,
+    onRetry: () -> Unit,
+    onOriginal: () -> Unit,
 ) {
     BackHandler { onExit() }
     val handler = remember { Handler(Looper.getMainLooper()) }
@@ -231,6 +240,7 @@ private fun LabResolving(
     val failState = rememberUpdatedState(onFail)
     var webViewRef by remember(embedUrl, attempt) { mutableStateOf<WebView?>(null) }
     var seconds by remember(embedUrl, attempt) { mutableStateOf(0) }
+    var slow by remember(embedUrl, attempt) { mutableStateOf(false) }
 
     // Tiempo de espera y, como en el lab, algunos toques en el centro por si el embed espera un "play".
     LaunchedEffect(embedUrl, attempt) {
@@ -240,12 +250,13 @@ private fun LabResolving(
             delay(250)
             val elapsed = SystemClock.uptimeMillis() - started
             seconds = (elapsed / 1000).toInt()
+            if (!slow && elapsed > SLOW_NOTICE_MS && !streamCaptured.get()) slow = true
             if (taps < 3 && elapsed > 3_500L * (taps + 1)) {
                 taps++
                 webViewRef?.let { tapCenter(it) }
             }
             if (elapsed > RESOLVE_TIMEOUT_MS && !streamCaptured.get() && done.compareAndSet(false, true)) {
-                failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 1000} s.")
+                failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 60_000} minutos.")
             }
         }
     }
@@ -342,7 +353,22 @@ private fun LabResolving(
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                Text("Cargando…  ${seconds}s", color = Color(0xFFB4C0CE), fontSize = 18.sp)
+                Text(
+                    "Cargando…  " + if (seconds >= 60) "${seconds / 60} min ${(seconds % 60).toString().padStart(2, '0')} s" else "${seconds}s",
+                    color = Color(0xFFB4C0CE), fontSize = 18.sp,
+                )
+                if (slow) {
+                    // Pasaron 30 s: se muestran las opciones, pero la carga sigue por detrás hasta los 5 minutos.
+                    Text(
+                        "Está tardando más de lo normal (puede ser la conexión). Sigue cargando…",
+                        color = Color(0xFFB4C0CE), fontSize = 16.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 6.dp)) {
+                        Button(onClick = onRetry) { Text("REINTENTAR") }
+                        Button(onClick = onOriginal) { Text("USAR REPRODUCTOR ORIGINAL") }
+                        Button(onClick = onExit) { Text("VOLVER") }
+                    }
+                }
             }
         }
     }
