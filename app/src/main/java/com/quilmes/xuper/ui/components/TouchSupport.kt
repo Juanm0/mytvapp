@@ -7,10 +7,16 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.tv.material3.CardBorder
 import androidx.tv.material3.CardDefaults
@@ -19,6 +25,9 @@ import androidx.tv.material3.CardShape
 import androidx.tv.material3.ClickableSurfaceColors
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ClickableSurfaceShape
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Soporte para celular (pantalla táctil).
@@ -87,6 +96,9 @@ fun Surface(
     )
 }
 
+/** Cuánto hay que mantener apretado OK (o el dedo) para que cuente como "mantener apretado". */
+private const val LONG_PRESS_MS = 600L
+
 @Composable
 fun Card(
     onClick: () -> Unit,
@@ -98,12 +110,63 @@ fun Card(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val fire = rememberDebouncedClick(onClick)
-    val fireLong = rememberDebouncedClick(onLongClick ?: {})
-    val longOrNull: (() -> Unit)? = if (onLongClick != null) fireLong else null
+    if (onLongClick == null) {
+        androidx.tv.material3.Card(
+            onClick = fire,
+            modifier = modifier.tapToClick(true, fire),
+            shape = shape,
+            scale = scale,
+            border = border,
+            content = content,
+        )
+        return
+    }
+
+    // Mantener apretado con el MANDO: el `onLongClick` de androidx.tv depende de que el control mande
+    // repeticiones de la tecla (muchos no lo hacen, y por eso "no dejaba mantener apretado"). Acá se mide
+    // con un temporizador: si OK sigue apretado a los 600 ms se dispara el "largo", y si se suelta antes es un
+    // clic normal. No importa si el control repite la tecla o no.
+    val scope = rememberCoroutineScope()
+    val longAction: () -> Unit = onLongClick
+    val currentLong by rememberUpdatedState(longAction)
+    val fireLong = rememberDebouncedClick { currentLong() }
+    var pressJob by remember { mutableStateOf<Job?>(null) }
+    var longDone by remember { mutableStateOf(false) }
+
     androidx.tv.material3.Card(
         onClick = fire,
-        onLongClick = longOrNull,
-        modifier = modifier.tapToClick(true, fire, longOrNull),
+        // El largo con el mando lo maneja el temporizador de abajo; con el dedo, tapToClick.
+        modifier = modifier
+            .tapToClick(true, fire, fireLong)
+            .onPreviewKeyEvent { event ->
+                val code = event.nativeKeyEvent.keyCode
+                val isSelect = code == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                    code == android.view.KeyEvent.KEYCODE_ENTER ||
+                    code == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+                if (!isSelect) return@onPreviewKeyEvent false
+                when (event.type) {
+                    KeyEventType.KeyDown -> {
+                        if (event.nativeKeyEvent.repeatCount == 0) {
+                            longDone = false
+                            pressJob?.cancel()
+                            pressJob = scope.launch {
+                                delay(LONG_PRESS_MS)
+                                longDone = true
+                                fireLong()
+                            }
+                        }
+                        true // se consumen también las repeticiones: el clic se decide al soltar
+                    }
+                    KeyEventType.KeyUp -> {
+                        pressJob?.cancel()
+                        pressJob = null
+                        if (!longDone) fire()
+                        longDone = false
+                        true
+                    }
+                    else -> false
+                }
+            },
         shape = shape,
         scale = scale,
         border = border,

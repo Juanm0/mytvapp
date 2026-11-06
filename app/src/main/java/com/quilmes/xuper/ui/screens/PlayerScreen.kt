@@ -89,6 +89,7 @@ import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
+import com.quilmes.xuper.data.ChannelQueueStore
 import com.quilmes.xuper.data.LabSubtitleStore
 import com.quilmes.xuper.data.LabSubtitleUploadServer
 import com.quilmes.xuper.data.SubtitleShiftDataSourceFactory
@@ -850,6 +851,8 @@ fun PlayerScreen(
     currentTitleId: String = "",
     nextEpisode: Title? = null,
     alternatePlayers: List<Title> = emptyList(),
+    /** Canal principal + sus secundarios (ARGENTINA). Si hay, el hub de un canal en vivo deja elegir uno. */
+    relatedChannels: List<Title> = emptyList(),
     onChangeChannel: (String) -> Unit = {},
     onChangePlayer: (String) -> Unit = {},
     onPlayNextEpisode: (String) -> Unit = {},
@@ -890,6 +893,7 @@ fun PlayerScreen(
         currentTitleId = currentTitleId,
         nextEpisode = nextEpisode,
         alternatePlayers = alternatePlayers,
+        relatedChannels = relatedChannels,
         onChangeChannel = onChangeChannel,
         onChangePlayer = onChangePlayer,
         onPlayNextEpisode = onPlayNextEpisode,
@@ -911,6 +915,7 @@ private fun NativePlayerScreen(
     currentTitleId: String,
     nextEpisode: Title?,
     alternatePlayers: List<Title>,
+    relatedChannels: List<Title>,
     onChangeChannel: (String) -> Unit,
     onChangePlayer: (String) -> Unit,
     onPlayNextEpisode: (String) -> Unit,
@@ -958,6 +963,14 @@ private fun NativePlayerScreen(
 
     // Canales en vivo (hay cola de canales): reconexión automática ante cortes/trabas.
     val isLive = channelQueue.size > 1
+    // Canal principal + secundarios (sin el que se está viendo): el hub deja elegir uno en vez de "cambiar de reproductor".
+    val secondaryChoices = remember(relatedChannels, currentTitleId) { relatedChannels.filter { it.id != currentTitleId } }
+    val otherChannelHint = if (secondaryChoices.isNotEmpty()) " (por ejemplo uno secundario)" else ""
+    var secondaryPickerOpen by remember(streamUrl) { mutableStateOf(false) }
+    var hubNotice by remember(streamUrl) { mutableStateOf<String?>(null) }
+    var hubTick by remember(streamUrl) { mutableStateOf(0) } // sube con cada tecla: reinicia el auto-ocultado del hub
+    val pickerFirstFocus = remember { FocusRequester() }
+    val pickerSeen = remember { booleanArrayOf(false) }
     val liveRetryDelaysMs = remember { longArrayOf(1_000, 2_000, 3_000, 5_000, 5_000, 8_000, 8_000, 10_000) }
     var reconnectAttempt by remember(streamUrl) { mutableStateOf(0) }
     var reconnectRequest by remember(streamUrl) { mutableStateOf(0) }
@@ -1069,7 +1082,7 @@ private fun NativePlayerScreen(
                 exoPlayer.playbackState == Player.STATE_ENDED -> {
                     playingTicks = 0
                     if (!requestLiveReconnect("el stream terminó")) {
-                        error = "Se cortó la transmisión de este canal. Elegí otro canal o probá de nuevo."
+                        error = "Se cortó la transmisión de este canal. Elegí otro canal$otherChannelHint o probá de nuevo."
                         showControls = true
                     }
                 }
@@ -1079,7 +1092,7 @@ private fun NativePlayerScreen(
                     if (bufferingTicks >= 15) {
                         bufferingTicks = 0
                         if (!requestLiveReconnect("trabado cargando")) {
-                            error = "Este canal no responde. Elegí otro canal o probá de nuevo."
+                            error = "Este canal no responde. Elegí otro canal$otherChannelHint o probá de nuevo."
                             showControls = true
                         }
                     }
@@ -1101,10 +1114,26 @@ private fun NativePlayerScreen(
             runCatching { buttonFocusRequesters[0].requestFocus() }
         }
     }
-    LaunchedEffect(exoPlayer, showControls, error) {
-        if (showControls && error == null) {
-            delay(6_000)
+    LaunchedEffect(exoPlayer, showControls, error, hubTick, secondaryPickerOpen) {
+        // Se oculta tras unos segundos SIN tocar nada: cada tecla reinicia la cuenta, y no se oculta con el selector abierto.
+        if (showControls && error == null && !secondaryPickerOpen) {
+            delay(if (isLive) 9_000 else 6_000)
             showControls = false
+        }
+    }
+    LaunchedEffect(showControls) { if (!showControls) hubNotice = null }
+    LaunchedEffect(secondaryPickerOpen) {
+        if (secondaryPickerOpen) {
+            pickerSeen[0] = true
+            delay(80)
+            runCatching { pickerFirstFocus.requestFocus() }
+        } else if (pickerSeen[0]) {
+            pickerSeen[0] = false
+            delay(60)
+            if (showControls) {
+                focusedButton = 1
+                runCatching { buttonFocusRequesters[1].requestFocus() }
+            } else runCatching { rootFocusRequester.requestFocus() }
         }
     }
     LaunchedEffect(labMode, labSubtitleSize, labSubtitleStyle, labPlayerView) {
@@ -1163,7 +1192,7 @@ private fun NativePlayerScreen(
                     showControls = true
                 } else {
                     // Canales en vivo (hay cola de canales): NO se cambia solo a otro; el usuario elige.
-                    error = if (channelQueue.size > 1) "No se puede reproducir este canal. Elegí otro canal o probá de nuevo."
+                    error = if (channelQueue.size > 1) "No se puede reproducir este canal. Elegí otro canal$otherChannelHint o probá de nuevo."
                     else "No se encontró otro enlace coincidente que no se haya probado. Puede que este contenido no esté disponible en las listas cargadas."
                     showControls = true
                 }
@@ -1331,11 +1360,17 @@ private fun NativePlayerScreen(
     BackHandler(enabled = labMode && (labSettingsOpen || labPanelOpen)) {
         if (labUploadOpen) labUploadOpen = false else if (labSettingsOpen) labSettingsOpen = false else labPanelOpen = false
     }
+    BackHandler(enabled = secondaryPickerOpen) {
+        secondaryPickerOpen = false
+        showControls = true
+    }
 
     Box(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (secondaryPickerOpen) return@onPreviewKeyEvent false // el selector usa la navegación normal por foco
+                if (showControls) hubTick += 1
                 if (labMode) {
                     when (event.nativeKeyEvent.keyCode) {
                         AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
@@ -1399,8 +1434,15 @@ private fun NativePlayerScreen(
                 val repeat = event.nativeKeyEvent.repeatCount
                 val jumpSeconds = when { repeat >= 5 -> 120; repeat >= 3 -> 30; repeat >= 1 -> 20; else -> 10 }
                 when (event.key) {
-                    Key.DirectionLeft -> { seekBy(-jumpSeconds * 1_000L); true }
-                    Key.DirectionRight -> { seekBy(jumpSeconds * 1_000L); true }
+                    // En un canal en vivo saltar ±10 s no sirve: ◀ ▶ abren el hub y, con el hub abierto, pasan de un botón al otro.
+                    Key.DirectionLeft -> {
+                        if (isLive) { if (!showControls) showControls = true else moveButtonFocus(-1) } else seekBy(-jumpSeconds * 1_000L)
+                        true
+                    }
+                    Key.DirectionRight -> {
+                        if (isLive) { if (!showControls) showControls = true else moveButtonFocus(1) } else seekBy(jumpSeconds * 1_000L)
+                        true
+                    }
                     Key.DirectionCenter, Key.Enter -> {
                         if (!showControls) { showControls = true; true } else false
                     }
@@ -1464,12 +1506,28 @@ private fun NativePlayerScreen(
                         Text("−${formatTime((duration - position).coerceAtLeast(0))}", color = Color.White, fontSize = 13.sp)
                     }
                 }
-                Text("◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir", color = Color(0x99FFFFFF), fontSize = 11.sp)
+                Text(
+                    if (isLive) "◀/▶  cambiar control · OK  elegir · CH+/CH−  cambiar de canal · Atrás  salir"
+                    else "◀/▶  saltar 10 s · ▲/▼  cambiar control · OK  ejecutar · Atrás  salir",
+                    color = Color(0x99FFFFFF), fontSize = 11.sp,
+                )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Button(modifier = Modifier.focusRequester(buttonFocusRequesters[0]), onClick = { togglePlayPause() }) {
                         Text(if (isPlaying) "Ⅱ  Pausar" else "▶  Reproducir")
                     }
-                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[1]), onClick = { changeSource() }) { Text("⟳  Cambiar reproductor") }
+                    Button(modifier = Modifier.focusRequester(buttonFocusRequesters[1]), onClick = {
+                        if (!isLive) changeSource()
+                        else if (secondaryChoices.isNotEmpty()) secondaryPickerOpen = true
+                        else hubNotice = "Este canal no tiene secundarios. En ARGENTINA, mantené apretado un canal y elegí «Añadir secundario»."
+                    }) {
+                        Text(
+                            when {
+                                !isLive -> "⟳  Cambiar reproductor"
+                                secondaryChoices.isEmpty() -> "📺  Sin canales secundarios"
+                                else -> "📺  Elegir canal secundario (${secondaryChoices.size})"
+                            }
+                        )
+                    }
                     Button(modifier = Modifier.focusRequester(buttonFocusRequesters[2]), onClick = {
                         showControls = true
                         TrackSelectionDialogBuilder(context, "Audio", exoPlayer, C.TRACK_TYPE_AUDIO).build().show()
@@ -1479,16 +1537,52 @@ private fun NativePlayerScreen(
                         TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
                     }) { Text("CC  Subtítulos") }
                 }
+                hubNotice?.let { notice ->
+                    Text(notice, color = Color.White, fontSize = 14.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
+                }
                 if (error != null) {
                     Text(error!!, color = Color.White, fontSize = 15.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(onClick = { reconnectAttempt = 0; reconnecting = false; setUrl(exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString() ?: streamUrl, streamHeaders) }) { Text("Reintentar") }
+                        if (isLive && secondaryChoices.isNotEmpty()) {
+                            Button(onClick = { secondaryPickerOpen = true }) { Text("📺  Canal secundario (${secondaryChoices.size})") }
+                        }
                         if (channelQueue.size > 1) {
                             Button(onClick = { changeChannelBy(-1) }) { Text("◀  Canal anterior") }
                             Button(onClick = { changeChannelBy(1) }) { Text("Canal siguiente  ▶") }
                         }
                     }
                 }
+            }
+        }
+        if (secondaryPickerOpen && isLive) {
+            Box(Modifier.fillMaxSize().background(Color(0xB3000000)))
+            Column(
+                Modifier.align(Alignment.Center).width(460.dp)
+                    .background(Color(0xF21B242B), RoundedCornerShape(18.dp)).padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Elegí un canal", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "Canal actual: $name", color = Color(0xFFB4C0CE), fontSize = 13.sp,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                secondaryChoices.forEachIndexed { index, choice ->
+                    val isPrincipal = choice.id == relatedChannels.firstOrNull()?.id
+                    Button(
+                        modifier = Modifier.fillMaxWidth().then(if (index == 0) Modifier.focusRequester(pickerFirstFocus) else Modifier),
+                        onClick = {
+                            secondaryPickerOpen = false
+                            // El zapping (CH+/CH−) queda dentro de este grupo: principal + secundarios.
+                            ChannelQueueStore.set(relatedChannels)
+                            onChangeChannel(choice.id)
+                        },
+                    ) { Text((if (isPrincipal) "★ Principal · " else "") + choice.name, maxLines = 1) }
+                }
+                Button(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { secondaryPickerOpen = false; showControls = true },
+                ) { Text("Cancelar") }
             }
         }
         if (labMode && labPanelOpen) {

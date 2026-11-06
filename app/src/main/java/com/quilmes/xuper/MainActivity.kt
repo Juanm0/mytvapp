@@ -743,6 +743,13 @@ class MainActivity : ComponentActivity() {
                                     ?: m3u?.getChannelQueue(playbackId).orEmpty()
                             }
                             val nextEpisode = remember(playbackId) { m3u?.getNextEpisode(playbackId) }
+                            // Canales relacionados (principal + secundarios armados en ARGENTINA): el hub del reproductor
+                            // los ofrece como "Elegir canal secundario".
+                            val relatedChannels = remember(playbackId, observedSections) {
+                                if (preferredPlayback.isLive)
+                                    com.quilmes.xuper.data.ChannelRelations.groupFor(this@MainActivity, observedSections, preferredPlayback.streamUrl)
+                                else emptyList()
+                            }
                             PlayerScreen(
                                 name = title.name,
                                 streamUrl = preferredPlayback.streamUrl,
@@ -751,6 +758,7 @@ class MainActivity : ComponentActivity() {
                                 currentTitleId = playbackId,
                                 nextEpisode = nextEpisode,
                                 alternatePlayers = alternatePlayers,
+                                relatedChannels = relatedChannels,
                                 onChangePlayer = { alternativeId ->
                                     navController.popBackStack("main", false)
                                     navController.navigate("player/$alternativeId")

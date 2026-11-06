@@ -292,7 +292,7 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
                             if (pendingSecondary != null) attachSecondary(principal, group.id)
                             else playFrom(group.principals, principal)
                         },
-                        onPrincipalLong = { principal -> startReordering(group.id, group.principals, principal) },
+                        onPrincipalLong = { principal -> openMenu(MenuTarget(principal, MenuRole.PRINCIPAL, group.id)) },
                         onReorderKey = ::handleReorderKey,
                         movingChannelId = if (movingGroupId == group.id) movingChannelId else null,
                         onSecondaryClick = { principal, secondary ->
@@ -349,6 +349,13 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
                 }
                 MenuRole.PRINCIPAL -> {
                     val groupId = target.groupId ?: GROUP_POPULAR
+                    val secondaryCount = groupOf(groupId).secondaries[title.streamUrl]?.size ?: 0
+                    // El movimiento ya no arranca solo al mantener apretado: se elige acá.
+                    add("Mover" to { startReordering(groupId, groupOf(groupId).principals, title) })
+                    if (secondaryCount > 0) {
+                        // Muestra el panel de secundarios de este canal aunque el foco no esté sobre él (útil con el dedo).
+                        add("Ver secundarios ($secondaryCount)" to { pinnedPrincipalId = title.id })
+                    }
                     add("Pasar a secundario" to { startPickingPrincipal(title) })
                     add("Quitar de principales" to { mutate(groupId) { it.withoutPrincipal(title.streamUrl) } })
                     add("Restablecer este grupo" to {
