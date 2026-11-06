@@ -242,3 +242,11 @@ Pedido del usuario (03/11/2026): llevar a Xuper lo que se probó en `cinesrc-lab
 - **Ahora** (`ChannelMenuDialog` en `ArgentinaScreen.kt`): el menú se abre **bloqueado**. Las opciones se ven pero no reciben foco (`focusProperties { canFocus = entered }`) y el contenedor (que tiene el foco) **se traga OK, ▲ y ▼**, así que soltar el OK no hace nada. **▶ (derecha)** entra al menú (una sola vez, ignora repeticiones) y el foco pasa a la primera opción; ahí **▲/▼** recorren las opciones y **OK** confirma. **◀ (izquierda)** cierra el menú en cualquier momento (también estando adentro) y **ATRÁS** lo cierra por el `onDismissRequest` del `Dialog`: para deshacer un mantener apretado sin querer sin romper nada. Un texto al pie indica qué tecla hacer según el estado.
 - **Celular**: tocar una opción funciona directo (el bloqueo solo afecta al foco del mando).
 - **No verificado**: compilación ni prueba en la TV (en especial que el foco inicial caiga en el contenedor del `Dialog`; el código reintenta hasta 6 veces cada 60 ms).
+
+
+## Actualización: logos manuales y sección +18 por M3U
+
+- En ARGENTINA, mantené apretado un canal y elegí **Robar icono**. Después seleccioná el canal destino: se le aplica el logo del primero y queda guardado entre reinicios.
+- El menú contextual ahora se abre con **flecha abajo**; la flecha derecha ya no es la tecla de entrada al menú.
+- La sección **+18** dejó de consultar el catálogo adulto de TMDb. Ahora muestra el contenido de `app/src/main/assets/mis-listas/xxx.m3u`.
+- Si `xxx.m3u` no existe o está vacío, la pantalla +18 muestra una indicación para agregarlo.

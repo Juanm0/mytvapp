@@ -93,7 +93,7 @@ fun MainScreen(
                 "lab" -> HomeScreen(repository = repository, onPlay = plainPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = plainPlay)
-                "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
+                "adult" -> if (adultEnabled) AdultScreen(sections = sections, onPlay = plainPlay)
                 "profile" -> ProfileScreen()
             }
         }

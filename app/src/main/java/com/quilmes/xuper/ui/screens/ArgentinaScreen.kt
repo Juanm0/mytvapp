@@ -52,6 +52,7 @@ import androidx.tv.material3.Text
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.Category
 import com.quilmes.xuper.data.ChannelLayoutStore
+import com.quilmes.xuper.data.ChannelIconStore
 import com.quilmes.xuper.data.ChannelQueueStore
 import com.quilmes.xuper.data.SavedChannelGroup
 import com.quilmes.xuper.data.Section
@@ -109,11 +110,13 @@ private data class MenuTarget(
 internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) {
     val context = LocalContext.current
     val store = remember { ChannelLayoutStore(context) }
+    val iconStore = remember { ChannelIconStore(context) }
+    var iconToCopy by remember { mutableStateOf<String?>(null) }
     var layoutVersion by remember { mutableStateOf(0) }
     var data by remember { mutableStateOf<ArgentinaData?>(null) }
     // Este cálculo recorre miles de entradas: va en segundo plano para no congelar la navegación.
     LaunchedEffect(sections, layoutVersion) {
-        data = withContext(Dispatchers.Default) { buildArgentinaData(sections, store) }
+        data = withContext(Dispatchers.Default) { buildArgentinaData(sections, store, iconStore) }
     }
 
     var menu by remember { mutableStateOf<MenuTarget?>(null) }
@@ -258,6 +261,13 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
             pendingSecondary = null
             return
         }
+        val copiedIcon = iconToCopy
+        if (copiedIcon != null) {
+            iconStore.set(title.streamUrl, copiedIcon)
+            iconToCopy = null
+            layoutVersion += 1
+            return
+        }
         ChannelQueueStore.set(queue)
         onPlay(title.id)
     }
@@ -279,6 +289,15 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
             }
             pendingSecondary?.let { pending ->
                 item(key = "pick-banner") { PickBanner(title = pending, onCancel = { pendingSecondary = null }) }
+            }
+            if (iconToCopy != null) {
+                item(key = "copy-icon-banner") {
+                    Text(
+                        "ICONO COPIADO · Seleccioná el canal al que querés aplicarlo",
+                        color = XuperAccent, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(start = 48.dp, top = 8.dp, bottom = 8.dp),
+                    )
+                }
             }
             for (sourceGroup in listOf(current.popular, current.sports)) {
                 val group = if (movingGroupId == sourceGroup.id && movingPrincipals != null)
@@ -371,6 +390,10 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
                     add("Quitar de secundarios" to { mutate(groupId) { it.withoutSecondary(title.streamUrl) } })
                 }
             }
+            // Copia el logo de este canal al siguiente canal que se seleccione.
+            add("Robar icono" to {
+                iconToCopy = title.posterUrl.takeIf { it.isNotBlank() }
+            })
         }
         ChannelMenuDialog(title = title.name, options = options, onDismiss = { menu = null })
     }
@@ -537,7 +560,7 @@ private fun PickBanner(title: Title, onCancel: () -> Unit) {
  *
  * Nace BLOQUEADO a propósito: al mantener apretado OK, el OK sigue apretado (y repitiendo) cuando el menú
  * aparece, y confirmaba la primera opción al instante. Mientras está bloqueado, OK y ▲/▼ se ignoran y las
- * opciones no reciben el foco. Se entra con ▶ (derecha); ahí ▲/▼ recorren las opciones y OK confirma.
+ * opciones no reciben el foco. Se entra con ▼ (abajo); ahí ▲/▼ recorren las opciones y OK confirma.
  * ◀ (izquierda) o ATRÁS cierran el menú en cualquier momento, para deshacer un mantener apretado sin querer.
  */
 @Composable
@@ -553,7 +576,7 @@ private fun ChannelMenuDialog(title: String, options: List<Pair<String, () -> Un
                 if (runCatching { root.requestFocus() }.isSuccess) return@LaunchedEffect
             }
         }
-        // Al entrar con ▶ el foco pasa a la primera opción.
+        // Al entrar con ▼ el foco pasa a la primera opción.
         LaunchedEffect(entered) {
             if (!entered) return@LaunchedEffect
             repeat(6) {
@@ -572,8 +595,8 @@ private fun ChannelMenuDialog(title: String, options: List<Pair<String, () -> Un
                             if (event.type == KeyEventType.KeyDown) onDismiss()
                             true
                         }
-                        // Derecha entra al menú (una sola vez, no con las repeticiones).
-                        !entered && key == Key.DirectionRight -> {
+                        // Abajo entra al menú (una sola vez, no con las repeticiones).
+                        !entered && key == Key.DirectionDown -> {
                             if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) entered = true
                             true
                         }
@@ -610,7 +633,7 @@ private fun ChannelMenuDialog(title: String, options: List<Pair<String, () -> Un
             ) { Text("Cancelar") }
             Text(
                 text = if (entered) "▲ ▼ moverte  ·  OK confirmar  ·  ◀ o ATRÁS cerrar"
-                else "▶ Derecha para elegir una opción  ·  ◀ o ATRÁS para cerrar",
+                else "▼ Abajo para elegir una opción  ·  ◀ o ATRÁS para cerrar",
                 color = XuperTextSecondary, fontSize = 13.sp,
             )
         }
@@ -660,9 +683,9 @@ private fun LazyListScope.channelGrid(
 // Armado de datos (corre en segundo plano)
 // ---------------------------------------------------------------------------------------------
 
-private fun buildArgentinaData(sections: List<Section>, store: ChannelLayoutStore): ArgentinaData {
+private fun buildArgentinaData(sections: List<Section>, store: ChannelLayoutStore, iconStore: ChannelIconStore): ArgentinaData {
     val argentina = sections.firstOrNull { it.name.equals("Argentina", ignoreCase = true) }
-        ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }
+        ?.categories.orEmpty().flatMap { it.items }.filter { it.isLive }.map(iconStore::apply)
     // Se normaliza el nombre UNA sola vez por canal (hacerlo dentro del ordenamiento trababa la pestaña).
     val keyed = argentina.distinctBy { it.streamUrl }.map { it to normalizeName(it.name) }
     val ordered = keyed.sortedWith(compareBy<Pair<Title, String>>({ argentinaPriority(it.second) }, { it.second }))
@@ -675,7 +698,7 @@ private fun buildArgentinaData(sections: List<Section>, store: ChannelLayoutStor
         .map { it.first }
         .ifEmpty { channels.take(12) }
 
-    val others = buildOthers(sections)
+    val others = buildOthers(sections).map { category -> category.copy(items = category.items.map(iconStore::apply)) }
     val lookup = HashMap<String, Title>()
     for (title in all + others.flatMap { it.items }) lookup.putIfAbsent(title.streamUrl, title)
 
