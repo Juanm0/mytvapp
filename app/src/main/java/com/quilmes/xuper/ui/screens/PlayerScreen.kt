@@ -83,6 +83,7 @@ import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
+import com.quilmes.xuper.data.SubtitleShiftDataSourceFactory
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebPageMediaResolver
@@ -915,13 +916,16 @@ private fun NativePlayerScreen(
     var showControls by remember(streamUrl, labMode) { mutableStateOf(!labMode) }
     var labPanelOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
     var labSettingsOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
-    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 resolución, 6 salida
+    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 sincronía, 6 resolución, 7 salida
     var labFocusOption by remember(streamUrl) { mutableStateOf(0) }
     var labAudioSelected by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleLanguage by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleSize by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleStyle by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitlesEnabled by remember(streamUrl) { mutableStateOf(true) }
+    // Sincronía de subtítulos: >0 los atrasa (aparecen más tarde), <0 los adelanta. Se aplica con una pausa corta tras el último cambio.
+    var labSubtitleDelayMs by remember { mutableStateOf(0L) }
+    var labAppliedDelayMs by remember { mutableStateOf(0L) }
     var labPlayerView by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
     var showNextEpisode by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
     var nextEpisodeTriggered by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
@@ -954,9 +958,14 @@ private fun NativePlayerScreen(
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
     }
+    val subtitleOffsetMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
+    val currentExternalSubtitles by rememberUpdatedState(externalSubtitles)
+    val subtitleShiftFactory = remember {
+        SubtitleShiftDataSourceFactory(dataSourceFactory, { currentExternalSubtitles.map { it.url }.toSet() }, subtitleOffsetMs)
+    }
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(subtitleShiftFactory))
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
@@ -990,6 +999,7 @@ private fun NativePlayerScreen(
             }
         }.build()
         attemptedUrls = attemptedUrls + url
+        subtitleOffsetMs.set(0L); labSubtitleDelayMs = 0L; labAppliedDelayMs = 0L
         val resumeKey = currentTitleId.ifBlank { streamUrl }
         val savedPosition = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
             .getLong(resumeKey, 0L).coerceAtLeast(0L)
@@ -1206,7 +1216,7 @@ private fun NativePlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
     }
     fun moveLabFocus(delta: Int) {
-        labFocusRow = (labFocusRow + delta).coerceIn(0, 6)
+        labFocusRow = (labFocusRow + delta).coerceIn(0, 7)
         labFocusOption = when (labFocusRow) {
             0 -> labAudioSelected
             2 -> 0
@@ -1216,6 +1226,10 @@ private fun NativePlayerScreen(
         }
     }
     fun moveLabOption(delta: Int) {
+        if (labFocusRow == 5) { // sincronía: ◀ adelanta 0,5 s · ▶ atrasa 0,5 s
+            labSubtitleDelayMs = (labSubtitleDelayMs + delta * 500L).coerceIn(-60_000L, 60_000L)
+            return
+        }
         val max = when (labFocusRow) { 0 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
         labFocusOption = (labFocusOption + delta + max + 1) % (max + 1)
     }
@@ -1230,9 +1244,22 @@ private fun NativePlayerScreen(
             2 -> TrackSelectionDialogBuilder(context, "Pistas de subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
-            5 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
-            6 -> labSettingsOpen = false
+            5 -> labSubtitleDelayMs = 0L
+            6 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
+            7 -> labSettingsOpen = false
         }
+    }
+    LaunchedEffect(labSubtitleDelayMs) {
+        if (!labMode || labSubtitleDelayMs == labAppliedDelayMs) return@LaunchedEffect
+        delay(1_000) // si siguen tocando ◀ ▶ este bloque se cancela y espera de nuevo
+        val item = exoPlayer.currentMediaItem ?: return@LaunchedEffect
+        val resumeAt = exoPlayer.currentPosition
+        val wasPlaying = exoPlayer.playWhenReady
+        subtitleOffsetMs.set(labSubtitleDelayMs)
+        labAppliedDelayMs = labSubtitleDelayMs
+        exoPlayer.setMediaItem(item, resumeAt)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = wasPlaying
     }
     BackHandler(enabled = labMode && (labSettingsOpen || labPanelOpen)) {
         if (labSettingsOpen) labSettingsOpen = false else labPanelOpen = false
@@ -1455,9 +1482,10 @@ private fun NativePlayerScreen(
                 LabSettingsRow("Pistas de subtítulos", listOf("Elegir pista"), 0, labFocusRow == 2, 0, true)
                 LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)
                 LabStyleRow(labSubtitleStyle, labFocusRow == 4, labFocusOption)
-                LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 5, 0, true)
+                LabSyncRow(labSubtitleDelayMs, labFocusRow == 5, labSubtitleDelayMs != labAppliedDelayMs)
+                LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 6, 0, true)
                 Box(Modifier.fillMaxWidth().padding(top = 3.dp), contentAlignment = Alignment.Center) {
-                    Box(Modifier.width(220.dp).background(if (labFocusRow == 6) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.width(220.dp).background(if (labFocusRow == 7) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                         Text("Salida", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
@@ -1509,6 +1537,32 @@ private fun LabSettingsRow(
                     }
                 }
             }
+        }
+    }
+}
+
+private fun formatLabDelay(ms: Long): String =
+    if (ms == 0L) "0,0 s" else String.format(java.util.Locale("es"), "%+.1f s", ms / 1000.0)
+
+@Composable
+private fun LabSyncRow(delayMs: Long, rowFocused: Boolean, pending: Boolean) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Sincronía de subtítulos", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+            Text(
+                if (pending) "Aplicando…" else "◀ adelantar · atrasar ▶ · OK = 0",
+                color = Color(0xFF9DB0BA), fontSize = 11.sp, maxLines = 1,
+            )
+        }
+        Box(
+            Modifier.width(190.dp)
+                .background(
+                    if (rowFocused) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0)))
+                    else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)
+                ).padding(horizontal = 14.dp, vertical = 9.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("◀   ${formatLabDelay(delayMs)}   ▶", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
         }
     }
 }
