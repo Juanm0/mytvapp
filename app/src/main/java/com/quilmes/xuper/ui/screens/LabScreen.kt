@@ -81,8 +81,11 @@ private val LAB_TABS = listOf(
  * Estado de LAB en memoria. Al reproducir, la navegación cierra esta pantalla; con esto, al volver desde el
  * reproductor se reencuentra la misma serie, la misma temporada y el mismo listado (sin recargar todo).
  */
+/** Pestaña especial "INICIO": en vez del listado en grilla muestra el inicio estilo Netflix ([LabHome]). */
+private const val LAB_HOME_TAB = "home"
+
 private object LabSession {
-    var tabId: String = "trending"
+    var tabId: String = LAB_HOME_TAB
     var query: String = ""
     var items: List<Title> = emptyList()
     var page: Int = 0
@@ -100,6 +103,8 @@ private object LabSession {
 fun LabScreen(
     catalogService: TmdbCatalogService,
     onPlay: (title: String, catalogId: String) -> Unit,
+    /** Alternativa a CineSrc: reproductor Latino (VideoAPI). Mismos argumentos que [onPlay]. */
+    onPlayLatino: (title: String, catalogId: String) -> Unit = { _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     var tabId by remember { mutableStateOf(LabSession.tabId) }
@@ -162,17 +167,30 @@ fun LabScreen(
         LabSession.season = null
     }
 
-    LaunchedEffect(Unit) {
-        if (items.isEmpty()) load(tabId, activeQuery, true)
+    fun goHome() {
+        searchText = ""
+        activeQuery = ""
+        tabId = LAB_HOME_TAB
+        items = emptyList()
+        page = 0
+        totalPages = 0
+        error = null
+        saveSession()
     }
 
-    // Atrás: de la ficha al listado; de una búsqueda al listado normal; del listado, MainScreen vuelve a Inicio.
-    BackHandler(enabled = selected != null || activeQuery.isNotEmpty()) {
+    LaunchedEffect(Unit) {
+        if (tabId != LAB_HOME_TAB && items.isEmpty()) load(tabId, activeQuery, true)
+    }
+
+    // Atrás: de la ficha al listado; de una búsqueda al listado normal; de un listado al inicio de LAB.
+    BackHandler(enabled = selected != null || activeQuery.isNotEmpty() || tabId != LAB_HOME_TAB) {
         if (selected != null) {
             closeTitle()
-        } else {
+        } else if (activeQuery.isNotEmpty()) {
             searchText = ""
             load(tabId, "", true)
+        } else {
+            goHome()
         }
     }
 
@@ -183,7 +201,42 @@ fun LabScreen(
             catalogService = catalogService,
             onBack = { closeTitle() },
             onPlay = onPlay,
+            onPlayLatino = onPlayLatino,
         )
+        return
+    }
+
+    // INICIO estilo Netflix: barra de pestañas arriba + banner y filas de TMDB.
+    if (tabId == LAB_HOME_TAB && activeQuery.isEmpty()) {
+        Column(
+            modifier = Modifier.fillMaxSize().background(XuperBackground)
+                .padding(start = 44.dp, end = 40.dp, top = 14.dp),
+        ) {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
+                item(key = "home") { Button(onClick = {}) { Text("● INICIO") } }
+                items(LAB_TABS, key = { it.id }) { tab ->
+                    Button(onClick = {
+                        searchText = ""
+                        load(tab.id, "", true)
+                    }) { Text(tab.label) }
+                }
+                item(key = "search") {
+                    Button(onClick = {
+                        searchText = ""
+                        load(LAB_TABS[0].id, "", true)
+                    }) { Text("🔍 BUSCAR") }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            LabHome(
+                catalogService = catalogService,
+                onOpenTitle = { openTitle(it) },
+                modifier = Modifier.weight(1f),
+            )
+        }
         return
     }
 
@@ -237,6 +290,7 @@ fun LabScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 6.dp),
         ) {
+            item(key = "home") { Button(onClick = { goHome() }) { Text("INICIO") } }
             items(LAB_TABS, key = { it.id }) { tab ->
                 val active = activeQuery.isEmpty() && tab.id == tabId
                 Button(onClick = {
@@ -287,8 +341,11 @@ private fun LabDetail(
     catalogService: TmdbCatalogService,
     onBack: () -> Unit,
     onPlay: (title: String, catalogId: String) -> Unit,
+    onPlayLatino: (title: String, catalogId: String) -> Unit,
 ) {
     val isSeries = title.contentKind == ContentKind.SERIES
+    // En series: qué reproductor usan los episodios (CineSrc por defecto, o Latino).
+    var useLatino by remember(title.id) { mutableStateOf(false) }
     var seasons by remember(title.id) { mutableStateOf<List<TmdbSeason>>(emptyList()) }
     var episodes by remember(title.id) { mutableStateOf<List<TmdbEpisode>>(emptyList()) }
     var selectedSeason by remember(title.id) { mutableStateOf<Int?>(LabSession.season) }
@@ -368,6 +425,11 @@ private fun LabDetail(
                                 onClick = { onPlay(title.name, title.id) },
                                 modifier = Modifier.focusRequester(firstFocus),
                             ) { Text("▶  REPRODUCIR") }
+                            Button(onClick = { onPlayLatino(title.name, title.id) }) { Text("▶  LATINO") }
+                        } else {
+                            Button(onClick = { useLatino = !useLatino }) {
+                                Text(if (useLatino) "Reproductor: LATINO (tocar para CineSrc)" else "Reproductor: CINESRC (tocar para Latino)")
+                            }
                         }
                     }
                 }
@@ -405,10 +467,9 @@ private fun LabDetail(
                     episode = episode,
                     onClick = {
                         val season = selectedSeason ?: 1
-                        onPlay(
-                            "${title.name} · T$season E${episode.number}",
-                            "${title.id}|s$season|e${episode.number}",
-                        )
+                        val playName = "${title.name} · T$season E${episode.number}"
+                        val playId = "${title.id}|s$season|e${episode.number}"
+                        if (useLatino) onPlayLatino(playName, playId) else onPlay(playName, playId)
                     },
                 )
             }
@@ -417,7 +478,7 @@ private fun LabDetail(
 }
 
 @Composable
-private fun LabPosterCard(title: Title, onClick: () -> Unit) {
+internal fun LabPosterCard(title: Title, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(10.dp)),

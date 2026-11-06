@@ -140,10 +140,7 @@ fun DetailScreen(
                             if (!hasTmdbSeasons) {
                                 Button(onClick = { onPlay("vidly:$videoApiPlaybackId") }) { Text("▶  Reproducir") }
                                 Button(onClick = { onPlay("videoapi:$videoApiPlaybackId") }) { Text("▶  Latino") }
-                                Button(onClick = { onPlay("vidlux:$videoApiPlaybackId") }) { Text("▶  Alternativo") }
                                 Button(onClick = { onPlay("prueba:$videoApiPlaybackId") }) { Text("▶  Prueba") }
-                                // LAB: CineSrc
-                                Button(onClick = { onPlay("cinesrc:$videoApiPlaybackId") }) { Text("▶  LAB") }
                             }
                             Button(onClick = {
                                 val ids = prefs.getStringSet("favorites", emptySet())?.toMutableSet() ?: mutableSetOf()
@@ -217,17 +214,8 @@ fun DetailScreen(
                                 }) { Text("▶  Latino") }
                                 Button(onClick = {
                                     selectedEpisode = episode.number
-                                    onPlay("vidlux:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                                }) { Text("▶  Alternativo") }
-                                Button(onClick = {
-                                    selectedEpisode = episode.number
                                     onPlay("prueba:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
                                 }) { Text("▶  Prueba") }
-                                // LAB: CineSrc
-                                Button(onClick = {
-                                    selectedEpisode = episode.number
-                                    onPlay("cinesrc:${title.id}|s${selectedSeason ?: 1}|e${episode.number}")
-                                }) { Text("▶  LAB") }
                             }
                         }
                     }

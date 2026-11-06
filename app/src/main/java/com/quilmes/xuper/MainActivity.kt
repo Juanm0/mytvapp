@@ -394,6 +394,14 @@ class MainActivity : ComponentActivity() {
                             onPlayLab = { labTitle, catalogId ->
                                 navController.navigate("lab-player/${Uri.encode(labTitle)}/${Uri.encode(catalogId)}")
                             },
+                            // LAB: alternativa Latino (VideoAPI) por si CineSrc falla; mismo flujo que el botón Latino de la ficha.
+                            onPlayLabLatino = { labTitle, catalogId ->
+                                val latinoUrl = WebSourceRegistry.videoApiUrl(catalogId)
+                                if (latinoUrl != null) {
+                                    val encodedLatino = Base64.encodeToString(latinoUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+                                    navController.navigate("external-player/${Uri.encode(labTitle)}/$encodedLatino/${Uri.encode(catalogId)}")
+                                }
+                            },
                         )
                     }
                     composable(

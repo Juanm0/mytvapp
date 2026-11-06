@@ -203,15 +203,7 @@ private fun buildHomeRows(sections: List<Section>): List<Category> {
         .filter { it.items.isNotEmpty() }
         .map { category -> Category("home-tmdb-${category.id}", category.title, category.items) }
 
-    // --- LAB: una fila mixta con películas y series de TMDB (para reproducción con CineSrc) ---
-    val tmdbCatalog = sections.firstOrNull { it.id == "tmdb-catalog" }
-    val labItems = tmdbCatalog?.categories.orEmpty()
-        .flatMap { it.items }
-        .take(HOME_VOD_ITEMS * 2) // más items para la fila LAB
-    val labRow = if (labItems.isNotEmpty()) Category("home-lab", "LAB · TMDB + CineSrc", labItems) else null
-
     return buildList {
-        if (labRow != null) add(labRow)
         addAll(tmdbRows)
         if (mainChannels.isNotEmpty()) add(Category("home-argentina", "ARGENTINA · CANALES EN VIVO", mainChannels))
         if (sports.isNotEmpty()) add(Category("home-deportes-argentina", "DEPORTES ARGENTINA", sports))
