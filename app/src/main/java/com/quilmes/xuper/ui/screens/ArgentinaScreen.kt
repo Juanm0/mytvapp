@@ -2,6 +2,7 @@ package com.quilmes.xuper.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -28,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
@@ -530,13 +532,58 @@ private fun PickBanner(title: Title, onCancel: () -> Unit) {
     }
 }
 
+/**
+ * Menú que se abre al mantener apretado un canal.
+ *
+ * Nace BLOQUEADO a propósito: al mantener apretado OK, el OK sigue apretado (y repitiendo) cuando el menú
+ * aparece, y confirmaba la primera opción al instante. Mientras está bloqueado, OK y ▲/▼ se ignoran y las
+ * opciones no reciben el foco. Se entra con ▶ (derecha); ahí ▲/▼ recorren las opciones y OK confirma.
+ * ◀ (izquierda) o ATRÁS cierran el menú en cualquier momento, para deshacer un mantener apretado sin querer.
+ */
 @Composable
 private fun ChannelMenuDialog(title: String, options: List<Pair<String, () -> Unit>>, onDismiss: () -> Unit) {
+    val root = remember { FocusRequester() }
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { first.requestFocus() } }
+    var entered by remember { mutableStateOf(false) }
     Dialog(onDismissRequest = onDismiss) {
+        // El foco arranca en el contenedor (que se traga las teclas) y no en una opción.
+        LaunchedEffect(Unit) {
+            repeat(6) {
+                delay(60)
+                if (runCatching { root.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+        // Al entrar con ▶ el foco pasa a la primera opción.
+        LaunchedEffect(entered) {
+            if (!entered) return@LaunchedEffect
+            repeat(6) {
+                delay(60)
+                if (runCatching { first.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
         Column(
             modifier = Modifier
+                .onPreviewKeyEvent { event ->
+                    val key = event.key
+                    val isOk = key == Key.Enter || key == Key.NumPadEnter || key == Key.DirectionCenter
+                    when {
+                        // Izquierda cierra siempre (también estando adentro). ATRÁS lo cierra el propio Dialog.
+                        key == Key.DirectionLeft -> {
+                            if (event.type == KeyEventType.KeyDown) onDismiss()
+                            true
+                        }
+                        // Derecha entra al menú (una sola vez, no con las repeticiones).
+                        !entered && key == Key.DirectionRight -> {
+                            if (event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0) entered = true
+                            true
+                        }
+                        // Bloqueado: el OK que se venía manteniendo apretado y las flechas verticales no hacen nada.
+                        !entered && (isOk || key == Key.DirectionUp || key == Key.DirectionDown) -> true
+                        else -> false
+                    }
+                }
+                .focusRequester(root)
+                .focusable()
                 .background(XuperSurface, RoundedCornerShape(16.dp))
                 .padding(horizontal = 32.dp, vertical = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -552,10 +599,20 @@ private fun ChannelMenuDialog(title: String, options: List<Pair<String, () -> Un
                         onDismiss()
                         option.second()
                     },
-                    modifier = (if (index == 0) Modifier.focusRequester(first) else Modifier).fillMaxWidth(),
+                    modifier = (if (index == 0) Modifier.focusRequester(first) else Modifier)
+                        .fillMaxWidth()
+                        .focusProperties { canFocus = entered },
                 ) { Text(option.first) }
             }
-            Button(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Cancelar") }
+            Button(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth().focusProperties { canFocus = entered },
+            ) { Text("Cancelar") }
+            Text(
+                text = if (entered) "▲ ▼ moverte  ·  OK confirmar  ·  ◀ o ATRÁS cerrar"
+                else "▶ Derecha para elegir una opción  ·  ◀ o ATRÁS para cerrar",
+                color = XuperTextSecondary, fontSize = 13.sp,
+            )
         }
     }
 }

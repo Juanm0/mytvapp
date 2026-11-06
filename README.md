@@ -234,3 +234,11 @@ Pedido del usuario (03/11/2026): llevar a Xuper lo que se probó en `cinesrc-lab
 - **Datos**: `data/ChannelRelations.kt` → `groupFor(context, sections, streamUrl)` busca en `ChannelLayoutStore` (grupos `popular`/`sports`) el principal con sus secundarios al que pertenece el canal (sea principal o secundario) y devuelve `[principal] + secundarios` resueltos por URL. `MainActivity` (ruta `player/{titleId}`) lo calcula y lo pasa como `relatedChannels`. Solo lee lo que se armó en ARGENTINA.
 - **Límite conocido**: al elegir un secundario desde un principal, el zapping CH+/CH− pasa a ser el del grupo (principal + secundarios) y no el de la fila de principales; para volver a esa fila, salir a ARGENTINA y elegir el canal.
 - **Verificado**: sintaxis Kotlin (tree-sitter), imports del proyecto y ausencia de declaraciones duplicadas. **No verificado**: compilación ni prueba en la TV (en especial el temporizador de 600 ms con el control real y el foco al volver del selector).
+
+
+### Menú de mantener apretado: nace bloqueado, se entra con ▶ (06/11/2026)
+
+- **Problema**: al mantener apretado OK sobre un canal, el menú aparecía con la primera opción ya enfocada y el OK que todavía estaba apretado (o su repetición/soltada) la confirmaba al instante ("Mover", "Añadir principal"…).
+- **Ahora** (`ChannelMenuDialog` en `ArgentinaScreen.kt`): el menú se abre **bloqueado**. Las opciones se ven pero no reciben foco (`focusProperties { canFocus = entered }`) y el contenedor (que tiene el foco) **se traga OK, ▲ y ▼**, así que soltar el OK no hace nada. **▶ (derecha)** entra al menú (una sola vez, ignora repeticiones) y el foco pasa a la primera opción; ahí **▲/▼** recorren las opciones y **OK** confirma. **◀ (izquierda)** cierra el menú en cualquier momento (también estando adentro) y **ATRÁS** lo cierra por el `onDismissRequest` del `Dialog`: para deshacer un mantener apretado sin querer sin romper nada. Un texto al pie indica qué tecla hacer según el estado.
+- **Celular**: tocar una opción funciona directo (el bloqueo solo afecta al foco del mando).
+- **No verificado**: compilación ni prueba en la TV (en especial que el foco inicial caiga en el contenedor del `Dialog`; el código reintenta hasta 6 veces cada 60 ms).
