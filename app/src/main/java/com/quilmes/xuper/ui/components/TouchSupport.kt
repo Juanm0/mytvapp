@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.tv.material3.CardBorder
 import androidx.tv.material3.CardDefaults
@@ -46,8 +47,11 @@ internal fun rememberDebouncedClick(onClick: () -> Unit): () -> Unit {
     }
 }
 
-internal fun Modifier.tapToClick(enabled: Boolean, onTap: () -> Unit): Modifier =
-    if (!enabled) this else this.pointerInput(Unit) { detectTapGestures(onTap = { onTap() }) }
+internal fun Modifier.tapToClick(enabled: Boolean, onTap: () -> Unit, onLongPress: (() -> Unit)? = null): Modifier =
+    if (!enabled) this else this.pointerInput(onLongPress != null) {
+        val longPress: ((Offset) -> Unit)? = onLongPress?.let { action -> { _: Offset -> action() } }
+        detectTapGestures(onLongPress = longPress, onTap = { onTap() })
+    }
 
 @Composable
 fun Button(
@@ -87,15 +91,19 @@ fun Surface(
 fun Card(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
     shape: CardShape = CardDefaults.shape(),
     scale: CardScale = CardDefaults.scale(),
     border: CardBorder = CardDefaults.border(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val fire = rememberDebouncedClick(onClick)
+    val fireLong = rememberDebouncedClick(onLongClick ?: {})
+    val longOrNull: (() -> Unit)? = if (onLongClick != null) fireLong else null
     androidx.tv.material3.Card(
         onClick = fire,
-        modifier = modifier.tapToClick(true, fire),
+        onLongClick = longOrNull,
+        modifier = modifier.tapToClick(true, fire, longOrNull),
         shape = shape,
         scale = scale,
         border = border,

@@ -41,9 +41,11 @@ fun ChannelGridCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     badge: String = "Argentina",
+    onLongClick: (() -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier.height(ChannelGridCardHeight),
         scale = CardDefaults.scale(focusedScale = 1.06f),
         border = CardDefaults.border(

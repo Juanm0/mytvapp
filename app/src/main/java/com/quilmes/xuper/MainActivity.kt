@@ -48,6 +48,7 @@ import java.nio.charset.StandardCharsets
  * ContentRepository y devolvela acá.
  */
 private const val MY_LISTS_DIR = "mis-listas"
+private const val OTHER_CHANNELS_DIR = "otros-canales"
 
 private fun buildRepository(cacheDir: File, assets: android.content.res.AssetManager): ContentRepository {
     val builtInSources = listOf(
@@ -60,7 +61,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             priorityNames = listOf("TN", "La Nación", "LN+", "Crónica", "El Trece", "Eltrece", "Telefe", "América", "C5N", "Canal 9", "TV Pública"),
             flattenIntoOneCategory = true,
             enrichMetadata = false,
-            maxPerRow = 100,
+            maxPerRow = 5000, // la lista propia entra completa: antes se recortaba a 100 canales
             maxRows = 1,
         ),
         M3uSource(
@@ -178,10 +179,27 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
                 maxRows = 200,
             )
         }
+    // "Otros canales para ver" (pestaña Argentina): cualquier .m3u de assets/otros-canales/ se registra sola.
+    // No aparece en Inicio (homeRows = 0); sus canales en vivo se agrupan por group-title abajo de todo en ARGENTINA.
+    val otherChannelSources = (runCatching { assets.list(OTHER_CHANNELS_DIR)?.toList() }.getOrNull().orEmpty())
+        .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
+        .sorted()
+        .map { file ->
+            M3uSource(
+                name = "Otros: " + file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim(),
+                url = File(File(cacheDir, OTHER_CHANNELS_DIR), file).toURI().toString(),
+                icon = "📺",
+                homeRows = 0,
+                enrichMetadata = false,
+                maxPerRow = 100_000,
+                maxRows = 100_000,
+                liveOthers = true,
+            )
+        }
     return M3uRepository(
         cacheDir = cacheDir,
         // Las cuentas del TXT siempre tienen prioridad sobre las fuentes públicas/integradas.
-        sources = accountSources + myListSources + loadCustomM3uSources(cacheDir) + builtInSources,
+        sources = accountSources + myListSources + otherChannelSources + loadCustomM3uSources(cacheDir) + builtInSources,
     )
 }
 
@@ -310,15 +328,18 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $name", error)
             }
         }
-        // Listas propias (assets/mis-listas/*.m3u): se copian a filesDir/mis-listas/.
-        runCatching {
-            val dir = File(filesDir, MY_LISTS_DIR).apply { mkdirs() }
-            assets.list(MY_LISTS_DIR).orEmpty().forEach { name ->
-                runCatching {
-                    assets.open("$MY_LISTS_DIR/$name").use { input ->
-                        File(dir, name).outputStream().use { output -> input.copyTo(output) }
-                    }
-                }.onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $MY_LISTS_DIR/$name", it) }
+        // Listas propias (assets/mis-listas/*.m3u) y "Otros canales para ver" (assets/otros-canales/*.m3u):
+        // se copian a filesDir/<carpeta>/.
+        for (folder in listOf(MY_LISTS_DIR, OTHER_CHANNELS_DIR)) {
+            runCatching {
+                val dir = File(filesDir, folder).apply { mkdirs() }
+                assets.list(folder).orEmpty().forEach { name ->
+                    runCatching {
+                        assets.open("$folder/$name").use { input ->
+                            File(dir, name).outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }.onFailure { android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $folder/$name", it) }
+                }
             }
         }
     }
@@ -715,7 +736,12 @@ class MainActivity : ComponentActivity() {
                                 alternatePlayers.firstOrNull { it.streamUrl == title.streamUrl } ?: title
                             }
                             val playbackId = preferredPlayback.id
-                            val channelQueue = remember(playbackId) { m3u?.getChannelQueue(playbackId).orEmpty() }
+                            // Si se tocó un canal en la pestaña Argentina, el zapping usa esa misma lista (el canal de al lado);
+                            // si no, la cola de siempre.
+                            val channelQueue = remember(playbackId) {
+                                com.quilmes.xuper.data.ChannelQueueStore.queueFor(playbackId)
+                                    ?: m3u?.getChannelQueue(playbackId).orEmpty()
+                            }
                             val nextEpisode = remember(playbackId) { m3u?.getNextEpisode(playbackId) }
                             PlayerScreen(
                                 name = title.name,

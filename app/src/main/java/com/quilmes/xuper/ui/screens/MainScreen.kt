@@ -75,18 +75,25 @@ fun MainScreen(
 
     BackHandler(enabled = dest != "home") { dest = "home" }
 
+    // La cola de "canal anterior/siguiente" de la pestaña Argentina solo vale para lo que se toca ahí:
+    // desde cualquier otra pantalla se limpia para que el reproductor use su cola de siempre.
+    val plainPlay: (String) -> Unit = { id ->
+        com.quilmes.xuper.data.ChannelQueueStore.clear()
+        onPlay(id)
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(XuperBackground)) {
         Box(modifier = Modifier.fillMaxSize().padding(start = 72.dp)) {
             when (dest) {
                 // INICIO y LAB están intercambiados: INICIO muestra el catálogo TMDB (antes LAB) y LAB el inicio de antes.
                 "home" -> LabScreen(catalogService = catalogService, onPlay = onPlayLab, onPlayLatino = onPlayLabLatino)
-                "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
-                "live" -> LibraryScreen(sections = sections, mode = LibraryMode.ARGENTINA, onPlay = onPlay)
+                "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
+                "live" -> ArgentinaScreen(sections = sections, onPlay = onPlay)
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
-                "lab" -> HomeScreen(repository = repository, onPlay = onPlay)
-                "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = onPlay)
-                "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = onPlay)
-                "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = onPlay)
+                "lab" -> HomeScreen(repository = repository, onPlay = plainPlay)
+                "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
+                "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = plainPlay)
+                "adult" -> if (adultEnabled) AdultScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
                 "profile" -> ProfileScreen()
             }
         }

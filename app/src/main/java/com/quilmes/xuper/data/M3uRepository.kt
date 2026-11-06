@@ -50,6 +50,8 @@ data class M3uSource(
     val enrichMetadata: Boolean = true,
     /** User-supplied IPTV accounts used as ordered per-content fallback sources. */
     val isUserIptvAccount: Boolean = false,
+    /** Sus canales en vivo se muestran en "Otros canales para ver" (pestaña Argentina), agrupados por group-title. */
+    val liveOthers: Boolean = false,
 )
 
 // ---------------------------------------------------------------------------------------------
@@ -536,7 +538,7 @@ class M3uRepository(
                 compareBy<Entry>({ if (isArgentina) argentinaRankNorm(it.norm) else Int.MAX_VALUE }, { it.norm })
             )
             val category = Category("s$i-argentina", "Canales argentinos", sorted.map { it.title })
-            return Section("s$i", source.name, source.icon, listOf(category), source.homeRows)
+            return Section("s$i", source.name, source.icon, listOf(category), source.homeRows, source.liveOthers)
         }
         val groups = entries.groupBy { it.group }
         val ordered = groups.keys.sortedWith(
@@ -557,7 +559,7 @@ class M3uRepository(
                 )
             }
         }.take(source.maxRows)
-        return Section("s$i", source.name, source.icon, categories, source.homeRows)
+        return Section("s$i", source.name, source.icon, categories, source.homeRows, source.liveOthers)
     }
 
     // ------------------------------------------------------------------- red

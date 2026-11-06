@@ -41,4 +41,6 @@ data class Section(
     val icon: String,
     val categories: List<Category>,
     val homeRows: Int,
+    /** Lista de "Otros canales para ver" (pestaña Argentina): no aparece en Inicio ni en la barra. */
+    val liveOthers: Boolean = false,
 )

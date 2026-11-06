@@ -45,9 +45,11 @@ fun PosterCard(
     title: Title,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Card(
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier
             .width(CardWidth)
             .height(if (title.isLive || title.contentKind == ContentKind.LIVE) CardHeight else VODCardHeight),

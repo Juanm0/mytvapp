@@ -78,7 +78,7 @@ android {
 val generateActiveIptvAccounts by tasks.registering {
     val sourceFile = rootProject.file("config/iptv-accounts-raw.txt")
     val generatedFile = layout.buildDirectory.file("generated/iptv-assets/iptv-accounts-raw.txt")
-    inputs.file(sourceFile)
+    inputs.files(sourceFile) // files(): si config/iptv-accounts-raw.txt no existe, no falla el build
     inputs.property("buildDate", LocalDate.now().toString())
     outputs.file(generatedFile)
 
