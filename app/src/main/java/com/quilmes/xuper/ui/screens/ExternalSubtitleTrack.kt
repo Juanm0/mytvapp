@@ -13,5 +13,7 @@ data class ExternalSubtitleTrack(
     companion object {
         const val FLAG_FORCED = 1
         const val FLAG_HEARING_IMPAIRED = 2
+        /** Pista subida por la persona: se prefiere sobre las capturadas. */
+        const val FLAG_DEFAULT = 4
     }
 }

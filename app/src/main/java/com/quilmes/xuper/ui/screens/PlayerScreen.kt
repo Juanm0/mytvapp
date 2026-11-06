@@ -32,7 +32,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -63,6 +67,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -72,6 +77,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -83,7 +89,10 @@ import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import coil.compose.AsyncImage
+import com.quilmes.xuper.data.LabSubtitleStore
+import com.quilmes.xuper.data.LabSubtitleUploadServer
 import com.quilmes.xuper.data.SubtitleShiftDataSourceFactory
+import com.quilmes.xuper.ui.components.qrImageBitmap
 import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebPageMediaResolver
@@ -916,7 +925,7 @@ private fun NativePlayerScreen(
     var showControls by remember(streamUrl, labMode) { mutableStateOf(!labMode) }
     var labPanelOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
     var labSettingsOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
-    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 sincronía, 6 resolución, 7 salida
+    var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 sincronía, 6 subir subtítulos, 7 resolución, 8 salida
     var labFocusOption by remember(streamUrl) { mutableStateOf(0) }
     var labAudioSelected by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleLanguage by remember(streamUrl) { mutableStateOf(0) }
@@ -926,6 +935,13 @@ private fun NativePlayerScreen(
     // Sincronía de subtítulos: >0 los atrasa (aparecen más tarde), <0 los adelanta. Se aplica con una pausa corta tras el último cambio.
     var labSubtitleDelayMs by remember { mutableStateOf(0L) }
     var labAppliedDelayMs by remember { mutableStateOf(0L) }
+    // Subtítulos subidos desde el celular (guardados por película/episodio) y panel del QR.
+    var labUploadOpen by remember { mutableStateOf(false) }
+    var labUploadUrl by remember { mutableStateOf<String?>(null) }
+    var labUploadStatus by remember { mutableStateOf("") }
+    var labSavedSubtitles by remember(currentTitleId) {
+        mutableStateOf(if (labMode) uploadedSubtitleTracks(context, currentTitleId) else emptyList())
+    }
     var labPlayerView by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
     var showNextEpisode by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
     var nextEpisodeTriggered by remember(streamUrl, nextEpisode?.id) { mutableStateOf(false) }
@@ -959,9 +975,14 @@ private fun NativePlayerScreen(
             .setUserAgent("Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
     }
     val subtitleOffsetMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
-    val currentExternalSubtitles by rememberUpdatedState(externalSubtitles)
+    val currentExternalSubtitles by rememberUpdatedState(labSavedSubtitles + externalSubtitles)
     val subtitleShiftFactory = remember {
-        SubtitleShiftDataSourceFactory(dataSourceFactory, { currentExternalSubtitles.map { it.url }.toSet() }, subtitleOffsetMs)
+        // DefaultDataSource: http(s) sigue yendo por dataSourceFactory y además lee los .srt/.vtt guardados en la tele (file://).
+        SubtitleShiftDataSourceFactory(
+            DefaultDataSource.Factory(context, dataSourceFactory),
+            { currentExternalSubtitles.map { it.url }.toSet() },
+            subtitleOffsetMs,
+        )
     }
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
@@ -986,17 +1007,8 @@ private fun NativePlayerScreen(
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
-            if (externalSubtitles.isNotEmpty()) {
-                setSubtitleConfigurations(externalSubtitles.distinctBy { it.url }.map { track ->
-                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(track.url))
-                        .setMimeType(track.mimeType)
-                        .setLanguage(track.language)
-                        .setLabel(track.label + (track.source?.let { " · $it" } ?: ""))
-                        .setSelectionFlags(if (track.flags and ExternalSubtitleTrack.FLAG_FORCED != 0) C.SELECTION_FLAG_FORCED else 0)
-                        .setRoleFlags(if (track.flags and ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED != 0) C.ROLE_FLAG_CAPTION else 0)
-                        .build()
-                })
-            }
+            val allSubtitles = labSavedSubtitles + externalSubtitles
+            if (allSubtitles.isNotEmpty()) setSubtitleConfigurations(subtitleConfigurations(allSubtitles))
         }.build()
         attemptedUrls = attemptedUrls + url
         subtitleOffsetMs.set(0L); labSubtitleDelayMs = 0L; labAppliedDelayMs = 0L
@@ -1216,7 +1228,7 @@ private fun NativePlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
     }
     fun moveLabFocus(delta: Int) {
-        labFocusRow = (labFocusRow + delta).coerceIn(0, 7)
+        labFocusRow = (labFocusRow + delta).coerceIn(0, 8)
         labFocusOption = when (labFocusRow) {
             0 -> labAudioSelected
             2 -> 0
@@ -1245,8 +1257,63 @@ private fun NativePlayerScreen(
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
             5 -> labSubtitleDelayMs = 0L
-            6 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
-            7 -> labSettingsOpen = false
+            6 -> labUploadOpen = !labUploadOpen
+            7 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
+            8 -> labSettingsOpen = false
+        }
+    }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    fun reloadWithSavedSubtitles() {
+        val item = exoPlayer.currentMediaItem ?: return
+        val resumeAt = exoPlayer.currentPosition
+        val wasPlaying = exoPlayer.playWhenReady
+        val all = labSavedSubtitles + externalSubtitles
+        exoPlayer.setMediaItem(item.buildUpon().setSubtitleConfigurations(subtitleConfigurations(all)).build(), resumeAt)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = wasPlaying
+    }
+    // Al cerrar el modal se cierra también el panel del QR (y se apaga el servidor).
+    LaunchedEffect(labSettingsOpen) { if (!labSettingsOpen) labUploadOpen = false }
+    // Servidor para subir subtítulos desde el celular: solo encendido mientras el panel del QR está abierto.
+    val labUploadActive = labMode && labSettingsOpen && labUploadOpen
+    DisposableEffect(labUploadActive, currentTitleId) {
+        var server: LabSubtitleUploadServer? = null
+        if (labUploadActive) {
+            labUploadStatus = "Esperando archivo…"
+            val created = LabSubtitleUploadServer(
+                titleName = name,
+                listSaved = { LabSubtitleStore.list(context, currentTitleId) },
+                onUpload = { subName, bytes ->
+                    try {
+                        val saved = LabSubtitleStore.add(context, currentTitleId, subName, bytes)
+                        mainHandler.post {
+                            labSavedSubtitles = uploadedSubtitleTracks(context, currentTitleId)
+                            labUploadStatus = "✓ Recibido: ${saved.name}"
+                            reloadWithSavedSubtitles()
+                        }
+                        null
+                    } catch (e: IllegalArgumentException) {
+                        e.message ?: "No se pudo guardar el archivo."
+                    } catch (e: Exception) {
+                        "No se pudo guardar el archivo."
+                    }
+                },
+                onDelete = { id ->
+                    runCatching { LabSubtitleStore.remove(context, currentTitleId, id) }
+                    mainHandler.post {
+                        labSavedSubtitles = uploadedSubtitleTracks(context, currentTitleId)
+                        labUploadStatus = "Subtítulo borrado"
+                        reloadWithSavedSubtitles()
+                    }
+                },
+            )
+            server = created
+            labUploadUrl = created.start()
+            if (labUploadUrl == null) labUploadStatus = "La tele no está conectada a una red WiFi/cable."
+        }
+        onDispose {
+            server?.stop()
+            labUploadUrl = null
         }
     }
     LaunchedEffect(labSubtitleDelayMs) {
@@ -1262,7 +1329,7 @@ private fun NativePlayerScreen(
         exoPlayer.playWhenReady = wasPlaying
     }
     BackHandler(enabled = labMode && (labSettingsOpen || labPanelOpen)) {
-        if (labSettingsOpen) labSettingsOpen = false else labPanelOpen = false
+        if (labUploadOpen) labUploadOpen = false else if (labSettingsOpen) labSettingsOpen = false else labPanelOpen = false
     }
 
     Box(
@@ -1272,7 +1339,7 @@ private fun NativePlayerScreen(
                 if (labMode) {
                     when (event.nativeKeyEvent.keyCode) {
                         AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
-                            if (labSettingsOpen) labSettingsOpen = false else if (labPanelOpen) labPanelOpen = false else onExit()
+                            if (labUploadOpen) labUploadOpen = false else if (labSettingsOpen) labSettingsOpen = false else if (labPanelOpen) labPanelOpen = false else onExit()
                             return@onPreviewKeyEvent true
                         }
                     }
@@ -1469,9 +1536,11 @@ private fun NativePlayerScreen(
             }
         }
         if (labMode && labSettingsOpen) {
+            // Con pantalla ancha (tele) el QR va al lado del modal; en pantallas angostas (celular) se superpone al centro.
+            val qrBeside = LocalConfiguration.current.screenWidthDp >= 960
             Box(Modifier.fillMaxSize().background(Color(0x99000000)))
             Column(
-                Modifier.align(Alignment.Center).width(650.dp)
+                Modifier.align(Alignment.Center).offset(x = if (labUploadOpen && qrBeside) (-145).dp else 0.dp).width(650.dp)
                     .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(horizontal = 30.dp, vertical = 22.dp),
                 verticalArrangement = Arrangement.spacedBy(13.dp)
             ) {
@@ -1483,11 +1552,33 @@ private fun NativePlayerScreen(
                 LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)
                 LabStyleRow(labSubtitleStyle, labFocusRow == 4, labFocusOption)
                 LabSyncRow(labSubtitleDelayMs, labFocusRow == 5, labSubtitleDelayMs != labAppliedDelayMs)
-                LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 6, 0, true)
+                LabSettingsRow("Subir subtítulos", listOf(if (labUploadOpen) "Cerrar QR" else "Subir desde el celular"), 0, labFocusRow == 6, 0, true)
+                LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 7, 0, true)
                 Box(Modifier.fillMaxWidth().padding(top = 3.dp), contentAlignment = Alignment.Center) {
-                    Box(Modifier.width(220.dp).background(if (labFocusRow == 7) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.width(220.dp).background(if (labFocusRow == 8) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                         Text("Salida", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     }
+                }
+            }
+            if (labUploadOpen) {
+                Column(
+                    Modifier.align(Alignment.Center).offset(x = if (qrBeside) 335.dp else 0.dp).width(270.dp)
+                        .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text("Subir subtítulos", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    val url = labUploadUrl
+                    val qr = remember(url) { url?.let { qrImageBitmap(it) } }
+                    if (qr != null) {
+                        Box(Modifier.background(Color.White, RoundedCornerShape(10.dp)).padding(6.dp)) {
+                            Image(bitmap = qr, contentDescription = "QR para subir subtítulos", modifier = Modifier.size(190.dp))
+                        }
+                        Text("Escaneá con el celular (mismo WiFi que la tele)", color = Color(0xFFB4C0CE), fontSize = 12.sp, textAlign = TextAlign.Center)
+                        Text(url.orEmpty().substringBefore("?"), color = Color(0xFF9DB0BA), fontSize = 11.sp, textAlign = TextAlign.Center)
+                    }
+                    Text(labUploadStatus, color = if (labUploadStatus.startsWith("✓")) Color(0xFF83E6D2) else Color(0xFFB4C0CE), fontSize = 13.sp, textAlign = TextAlign.Center)
+                    Text("Guardados para este título: ${labSavedSubtitles.size}", color = Color(0xFF9DB0BA), fontSize = 12.sp)
                 }
             }
         }
@@ -1507,6 +1598,34 @@ private fun NativePlayerScreen(
         }
     }
 }
+
+/** Pistas subidas desde el celular para este título (más la marca "Subido"), listas para el reproductor. */
+private fun uploadedSubtitleTracks(context: Context, titleId: String): List<ExternalSubtitleTrack> =
+    LabSubtitleStore.list(context, titleId).map { saved ->
+        ExternalSubtitleTrack(
+            url = android.net.Uri.fromFile(LabSubtitleStore.file(context, titleId, saved)).toString(),
+            referer = "",
+            language = "es",
+            label = saved.name,
+            mimeType = saved.mimeType,
+            flags = ExternalSubtitleTrack.FLAG_DEFAULT,
+            source = "Subido",
+        )
+    }
+
+private fun subtitleConfigurations(tracks: List<ExternalSubtitleTrack>): List<MediaItem.SubtitleConfiguration> =
+    tracks.distinctBy { it.url }.map { track ->
+        var selectionFlags = 0
+        if (track.flags and ExternalSubtitleTrack.FLAG_FORCED != 0) selectionFlags = selectionFlags or C.SELECTION_FLAG_FORCED
+        if (track.flags and ExternalSubtitleTrack.FLAG_DEFAULT != 0) selectionFlags = selectionFlags or C.SELECTION_FLAG_DEFAULT
+        MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(track.url))
+            .setMimeType(track.mimeType)
+            .setLanguage(track.language)
+            .setLabel(track.label + (track.source?.let { " · $it" } ?: ""))
+            .setSelectionFlags(selectionFlags)
+            .setRoleFlags(if (track.flags and ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED != 0) C.ROLE_FLAG_CAPTION else 0)
+            .build()
+    }
 
 @Composable
 private fun LabSettingsRow(

@@ -150,5 +150,8 @@ dependencies {
     // frames del WebView (también iframes de otro origen) para Latino, OK.ru y Simuladores.
     implementation("androidx.webkit:webkit:1.11.0")
 
+    // Código QR para subir subtítulos desde el celular (solo el núcleo de ZXing, sin cámara).
+    implementation("com.google.zxing:core:3.5.3")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
