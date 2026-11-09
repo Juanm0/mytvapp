@@ -71,18 +71,66 @@ private const val RESOLVE_TIMEOUT_MS = 300_000L
 private val SUBTITLE_CAPTURE_JS = """
 (function(){
   if (window.__xuperSubtitleCapture) return; window.__xuperSubtitleCapture = true;
-  function scan(text){ try {
-    text = String(text || '').replace(/\\\//g, '/').replace(/\\u0026/g, '&').replace(/\\u003d/gi, '=').replace(/\\u002f/gi, '/');
-    var re = /https?:[^\"'\s\\<>]+(?:format=(?:srt|vtt)|\.(?:srt|vtt)|[?&]m=[A-Za-z0-9_%=-]+)[^\"'\s\\<>]*/gi, m;
+  var URL_RE = /(?:\.srt(?:[?#]|$)|\.vtt(?:[?#]|$)|[?&]format=(?:srt|vtt)\b|[?&]m=[A-Za-z0-9_%=-]+)/i;
+  var sent = Object.create(null);
+  function cleanText(value){ return String(value || '')
+    .replace(/\\+\//g, '/')
+    .replace(/\\+u0026/gi, '&').replace(/\\+u003d/gi, '=').replace(/\\+u002f/gi, '/')
+    .replace(/&amp;/gi, '&'); }
+  function scan(text, ref){ try {
+    text = cleanText(text);
+    var re = /https?:\/\/[^\"'`\s\\<>]+/gi, m;
     while ((m = re.exec(text)) !== null) {
-      try { window.XuperSubtitleBridge.add(m[0], document.referrer || location.href); } catch(e) {}
+      var candidate = m[0].replace(/[),.;}\]]+$/, '');
+      sendUrl(candidate, ref);
     }
   } catch(e) {} }
-  function smallTextResponse(r){ try { var ct = r.headers.get('content-type') || ''; var len = Number(r.headers.get('content-length') || 0); return /json|text/i.test(ct) && (!len || len < 300000); } catch(e) { return false; } }
-  try { var f = window.fetch; if (f) window.fetch = function(){ return f.apply(this, arguments).then(function(r){ if (smallTextResponse(r)) { try { r.clone().text().then(scan).catch(function(){}); } catch(e) {} } return r; }); }; } catch(e) {}
-  try { var o = XMLHttpRequest.prototype.open, s = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(){ this.__xuperUrl = arguments[1]; return o.apply(this, arguments); };
-    XMLHttpRequest.prototype.send = function(){ this.addEventListener('load', function(){ var ct = this.getResponseHeader('content-type') || ''; if ((!this.responseType || this.responseType === 'text') && /json|text/i.test(ct) && (!this.responseText || this.responseText.length < 300000)) scan(this.responseText); }); return s.apply(this, arguments); };
+  function sendUrl(value, ref){
+    try {
+      var u = cleanText(value).replace(/[),.;}\]]+$/, '');
+      if (!URL_RE.test(u) || sent[u]) return;
+      sent[u] = true;
+      window.XuperSubtitleBridge.add(u, ref || location.href);
+    } catch(e) {}
+  }
+  function captureUrl(value, ref){
+    try { var u = typeof value === 'string' ? value : (value && value.url) || ''; sendUrl(u, ref); } catch(e) {}
+  }
+  function smallTextResponse(r){ try {
+    var ct = r.headers.get('content-type') || ''; var len = Number(r.headers.get('content-length') || 0);
+    return /json|text|javascript/i.test(ct) && (!len || len < 500000);
+  } catch(e) { return false; } }
+  try {
+    var originalFetch = window.fetch;
+    if (originalFetch) window.fetch = function(input, init){
+      captureUrl(input, location.href);
+      return originalFetch.apply(this, arguments).then(function(r){
+        if (smallTextResponse(r)) { try { r.clone().text().then(function(t){ scan(t, location.href); }).catch(function(){}); } catch(e) {} }
+        return r;
+      });
+    };
+  } catch(e) {}
+  try {
+    var originalOpen = XMLHttpRequest.prototype.open, originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(method, url){ this.__xuperUrl = url; captureUrl(url, location.href); return originalOpen.apply(this, arguments); };
+    XMLHttpRequest.prototype.send = function(){
+      this.addEventListener('load', function(){ try {
+        var ct = this.getResponseHeader('content-type') || '';
+        if (/json|text|javascript/i.test(ct)) {
+          var body = this.responseType === 'json' ? JSON.stringify(this.response) :
+            ((!this.responseType || this.responseType === 'text') ? this.responseText : '');
+          if (body && body.length < 500000) scan(body, location.href);
+        }
+      } catch(e) {} });
+      return originalSend.apply(this, arguments);
+    };
+  } catch(e) {}
+  // Fallback: algunos embeds agregan pistas al DOM sin usar fetch/XHR desde el frame principal.
+  try {
+    var scanResources = function(){ try {
+      (performance.getEntriesByType('resource') || []).forEach(function(entry){ captureUrl(entry.name, location.href); });
+    } catch(e) {} };
+    scanResources(); setInterval(scanResources, 700);
   } catch(e) {}
 })();
 """.trimIndent()
@@ -90,7 +138,7 @@ private val SUBTITLE_CAPTURE_JS = """
 /**
  * Reproductor único del Inicio: la persona nunca ve los embeds de VideoAPI ni CineSrc.
  * 1) Un WebView oculto captura el HLS de VideoAPI.
- * 2) Otro WebView oculto captura las pistas `.srt`/`.vtt` solicitadas por CineSrc, incluidos sus JSON.
+ * 2) Otro WebView oculto reproduce el método de CineSrc: observa pedidos directos y extrae URLs de respuestas JSON/texto.
  * 3) Media3 reproduce el HLS y carga las pistas externas en la misma sesión nativa.
  */
 @Composable
@@ -218,16 +266,20 @@ private fun HomeResolving(
     val streamCaptured = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
     val finishScheduled = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
     val capturedSubtitles = remember(subtitleEmbedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
+    val lastSubtitleCaptureAt = remember(subtitleEmbedUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
+    val resolveStartedAt = remember(videoApiUrl, subtitleEmbedUrl, attempt) { SystemClock.uptimeMillis() }
     val subtitleBridge = remember(subtitleEmbedUrl, attempt) {
         object {
             @JavascriptInterface
             fun add(url: String?, referer: String?) {
                 val value = url?.trim().orEmpty()
                 if (value.startsWith("https://", true) && SUBTITLE_URL.containsMatchIn(value)) {
-                    capturedSubtitles.putIfAbsent(
-                        value,
-                        subtitleFromUrl(value, referer?.takeIf { it.startsWith("https://") } ?: subtitleEmbedUrl),
-                    )
+                    val requestReferer = referer?.takeIf { it.startsWith("https://") } ?: subtitleEmbedUrl
+                    val previous = capturedSubtitles.putIfAbsent(value, subtitleFromUrl(value, requestReferer))
+                    if (previous == null) {
+                        lastSubtitleCaptureAt.set(SystemClock.uptimeMillis())
+                        android.util.Log.i("XuperSubtitles", "Pista CineSrc capturada: ${subtitleFromUrl(value, requestReferer).label}")
+                    }
                 }
             }
         }
@@ -243,18 +295,32 @@ private fun HomeResolving(
 
     fun finishWhenReady() {
         if (!streamCaptured.get() || !finishScheduled.compareAndSet(false, true)) return
-        // CineSrc suele disparar las pistas unos segundos después de cargar el reproductor.
-        handler.postDelayed({
-            if (done.compareAndSet(false, true)) {
-                val tracks = capturedSubtitles.values.toList()
-                    .filter { isSpanishOrEnglishSubtitle(it) }
-                    .distinctBy { it.url }
-                    .sortedWith(compareBy<ExternalSubtitleTrack> { if (isSpanishSubtitle(it)) 0 else 1 }.thenBy { it.label })
-                val captured = capturedVideo.get()
-                if (captured != null) foundState.value(captured.copy(subtitles = tracks))
-                else failState.value("VideoAPI no entregó un enlace de video válido.")
+        // Igual que el resolver original de CineSrc: espera a la primera lista de subtítulos
+        // y deja una ventana de gracia para capturar todas las pistas; máximo 25 s.
+        val poll = object : Runnable {
+            override fun run() {
+                if (done.get()) return
+                val now = SystemClock.uptimeMillis()
+                val last = lastSubtitleCaptureAt.get()
+                val hasTracks = capturedSubtitles.isNotEmpty()
+                val quietLongEnough = hasTracks && now - last >= 1_200L
+                val timedOut = now - resolveStartedAt >= 25_000L
+                if (quietLongEnough || timedOut) {
+                    if (done.compareAndSet(false, true)) {
+                        val tracks = capturedSubtitles.values.toList()
+                            .distinctBy { it.url }
+                            .sortedWith(compareBy<ExternalSubtitleTrack> {
+                                when { isSpanishSubtitle(it) -> 0; isEnglishSubtitle(it) -> 1; else -> 2 }
+                            }.thenBy { it.label })
+                        android.util.Log.i("XuperSubtitles", "Captura finalizada: ${tracks.size} pistas externas")
+                        val captured = capturedVideo.get()
+                        if (captured != null) foundState.value(captured.copy(subtitles = tracks))
+                        else failState.value("VideoAPI no entregó un enlace de video válido.")
+                    }
+                } else handler.postDelayed(this, 250L)
             }
-        }, 8_000L)
+        }
+        handler.postDelayed(poll, 250L)
     }
 
     LaunchedEffect(videoApiUrl, subtitleEmbedUrl, attempt) {
@@ -343,8 +409,16 @@ private fun HomeResolving(
                 if (subtitleMode) {
                     if (M3U8_URL.containsMatchIn(url)) return XuperBraveAdblock.blockedResponse()
                     if (SUBTITLE_URL.containsMatchIn(url)) {
-                        capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, subtitleEmbedUrl))
-                        return XuperBraveAdblock.blockedResponse()
+                        val headers = req.requestHeaders.orEmpty()
+                        val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
+                            ?.takeIf { it.startsWith("https://", true) } ?: view?.url ?: subtitleEmbedUrl
+                        val previous = capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, referer))
+                        if (previous == null) {
+                            lastSubtitleCaptureAt.set(SystemClock.uptimeMillis())
+                            android.util.Log.i("XuperSubtitles", "Request CineSrc capturado: ${capturedSubtitles[url]?.label}")
+                        }
+                        // No bloquear la descarga: CineSrc debe poder completar su propio request.
+                        return null
                     }
                 } else if (M3U8_URL.containsMatchIn(url)) {
                     if (streamCaptured.compareAndSet(false, true)) {
@@ -462,9 +536,6 @@ private fun isEnglishSubtitle(track: ExternalSubtitleTrack): Boolean {
     return Regex("(^|[^a-z])(en|eng|en-[a-z0-9-]+|english|ingles|inglés)([^a-z]|$)").containsMatchIn(value)
 }
 
-private fun isSpanishOrEnglishSubtitle(track: ExternalSubtitleTrack): Boolean =
-    isSpanishSubtitle(track) || isEnglishSubtitle(track)
-
 private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrack {
     var lang = "und"
     var display = ""
@@ -479,9 +550,9 @@ private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrac
             val meta = JSONObject(json)
             lang = meta.optString("lang", "und").lowercase().trim().ifBlank { "und" }
             display = meta.optString("display").trim()
-            source = meta.optString("src").takeIf { it.isNotBlank() }
-            if (meta.optString("hi") == "1") flags = flags or ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED
-            if (meta.optString("forced") == "1") flags = flags or ExternalSubtitleTrack.FLAG_FORCED
+            source = meta.optString("src").trim().takeIf { it.isNotBlank() }
+            if (meta.optString("hi") == "1" || meta.optBoolean("hi")) flags = flags or ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED
+            if (meta.optString("forced") == "1" || meta.optBoolean("forced")) flags = flags or ExternalSubtitleTrack.FLAG_FORCED
         }
     }
 
@@ -490,28 +561,33 @@ private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrac
         .containsMatchIn(evidence)
     val english = !spanish && Regex("(^|[^a-z])(en|eng|en-[a-z0-9-]+|english|ingles|inglés)([^a-z]|$)")
         .containsMatchIn(evidence)
-
-    // Normalizamos los alias que devuelve el proveedor, pero mantenemos la variante regional.
     val normalizedLanguage = when {
-        spanish -> "es"
-        english -> "en"
-        else -> lang.takeIf { it != "und" } ?: "und"
+        spanish -> if (lang.startsWith("es-")) lang else "es"
+        english -> if (lang.startsWith("en-")) lang else "en"
+        lang != "und" -> lang
+        else -> "und"
     }
-    val normalizedLabel = when {
-        spanish && Regex("\\b(la|419|latin|latino|latinoamerica|latin american)\\b|spanish\\s*\\(\\s*la\\s*\\)", RegexOption.IGNORE_CASE).containsMatchIn(display + " " + lang + " " + source.orEmpty()) -> "Español (Latinoamérica)"
+
+    val rawDisplay = display.trim()
+    val alias = rawDisplay.lowercase().replace('_', ' ').trim()
+    val fullLabel = when {
+        alias in setOf("ea", "es spanish", "spanish", "espanol", "español", "castellano") -> "Español"
+        alias in setOf("spanish (la)", "spanish la", "es-la", "es-419", "latin spanish", "latin american", "latino", "español latino") -> "Español (Latinoamérica)"
+        alias in setOf("en", "eng", "english") -> "English"
+        rawDisplay.length > 2 -> rawDisplay // conservar el nombre completo: SDH, forced, release, variante, etc.
         spanish -> "Español"
         english -> "English"
-        display.isNotBlank() && display.length > 2 -> display
-        normalizedLanguage != "und" -> normalizedLanguage.uppercase()
+        normalizedLanguage != "und" -> normalizedLanguage
         else -> "Subtítulo del reproductor"
     }
-    val mime = if (url.substringBefore('?').endsWith(".vtt", true) || url.contains("format=vtt", true))
+    val mime = if (url.substringBefore('?').substringBefore('#').endsWith(".vtt", true) ||
+        android.net.Uri.parse(url).getQueryParameter("format")?.equals("vtt", true) == true)
         androidx.media3.common.MimeTypes.TEXT_VTT else androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
     return ExternalSubtitleTrack(
         url = url,
         referer = embedUrl,
         language = normalizedLanguage,
-        label = normalizedLabel,
+        label = fullLabel,
         mimeType = mime,
         flags = flags,
         source = source,

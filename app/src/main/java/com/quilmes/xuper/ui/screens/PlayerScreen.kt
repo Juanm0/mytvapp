@@ -1033,7 +1033,8 @@ private fun NativePlayerScreen(
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
                 // HLS suele tener puntos de sincronización por segmento/keyframe.
-                // CLOSEST_SYNC evita esperar un punto exacto que el stream quizá no ofrece.
+                // El modo base conserva el comportamiento del avance que ya funciona.
+                // seekBy() cambia a PREVIOUS_SYNC solamente para retrocesos.
                 setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .apply {
@@ -1083,7 +1084,19 @@ private fun NativePlayerScreen(
             // Agrupa las repeticiones del mando: no dispara decenas de seeks concurrentes.
             delay(220)
             val finalTarget = pendingSeekPosition ?: boundedTarget
-            runCatching { exoPlayer.seekTo(finalTarget) }
+            runCatching {
+                // En HLS algunos streams se quedan esperando al retroceder si se usa el
+                // punto de sincronización más cercano. Para atrás elegimos el keyframe
+                // anterior; para adelante, el siguiente. La búsqueda queda simétrica.
+                val current = exoPlayer.currentPosition.coerceAtLeast(0L)
+                exoPlayer.setSeekParameters(
+                    when {
+                        finalTarget < current -> SeekParameters.PREVIOUS_SYNC
+                        else -> SeekParameters.CLOSEST_SYNC
+                    }
+                )
+                exoPlayer.seekTo(finalTarget)
+            }
             pendingSeekPosition = null
             seekCommitJob = null
         }

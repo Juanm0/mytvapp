@@ -247,3 +247,13 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 - El menú contextual ahora se abre con **flecha abajo**; la flecha derecha ya no es la tecla de entrada al menú.
 - La sección **+18** dejó de consultar el catálogo adulto de TMDb. Ahora muestra el contenido de `app/src/main/assets/mis-listas/xxx.m3u`.
 - Si `xxx.m3u` no existe o está vacío, la pantalla +18 muestra una indicación para agregarlo.
+
+
+### Reproductor principal: retroceso HLS y captura completa de subtítulos CineSrc (09/11/2026)
+
+- **Retroceso** (`ui/screens/PlayerScreen.kt`): el seek hacia atrás usa `SeekParameters.PREVIOUS_SYNC` para caer en el keyframe anterior; el avance conserva `CLOSEST_SYNC`, que ya estaba funcionando. Se mantiene el agrupamiento de pulsaciones para ejecutar un único seek al terminar la ráfaga del mando.
+- **Subtítulos** (`ui/screens/HomePlayerScreen.kt`): VideoAPI sigue aportando exclusivamente el HLS y CineSrc se abre en un WebView independiente por ID TMDB. La captura ahora observa pedidos directos y respuestas JSON/texto mediante `fetch`, `XMLHttpRequest` y recursos del frame, siguiendo el método del resolvedor original de CineSrc.
+- **No se bloquean las descargas de subtítulos**: se registra la URL y se deja que CineSrc complete el request. Solo se bloquea el HLS del WebView auxiliar para que no compita con el reproductor nativo.
+- **Ventana de captura**: espera a que aparezcan pistas y 1,2 s sin nuevas pistas; límite de 25 s, como el resolvedor CineSrc. Se registran cantidades y nombres en Logcat con la etiqueta `XuperSubtitles`.
+- **Pistas**: se pasan todas las pistas capturadas a Media3, sin filtrarlas por idioma ni depender de la pista de audio seleccionada. Se conserva `display` completo; alias como `Ea`, `Es Spanish` y `Spanish` se normalizan a `Español`, mientras `Spanish (LA)` se muestra como `Español (Latinoamérica)`.
+- **Pruebas estáticas**: el JavaScript de captura pasó `node --check` y una prueba local confirmó la extracción de dos URLs de subtítulos desde una respuesta JSON. No se pudo compilar el APK ni probar el comportamiento en una TV en este entorno.
