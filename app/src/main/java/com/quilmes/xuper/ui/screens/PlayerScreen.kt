@@ -48,6 +48,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,6 +77,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -98,7 +100,9 @@ import com.quilmes.xuper.data.WebSourceRegistry
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.WebPageMediaResolver
 import java.net.URI
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private data class AudioTrackOption(val language: String, val label: String, val selected: Boolean)
 
@@ -958,6 +962,11 @@ private fun NativePlayerScreen(
     }
     var position by remember(streamUrl) { mutableStateOf(0L) }
     var duration by remember(streamUrl) { mutableStateOf(0L) }
+    // En Android TV el control remoto puede emitir muchas pulsaciones repetidas.
+    // Acumulamos el destino y ejecutamos un único seek cuando el usuario deja de pulsar.
+    var pendingSeekPosition by remember(streamUrl) { mutableStateOf<Long?>(null) }
+    var seekCommitJob by remember(streamUrl) { mutableStateOf<Job?>(null) }
+    val seekScope = rememberCoroutineScope()
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
     var labSeekDirection by remember(streamUrl) { mutableStateOf(0) }
     var labSeekLabel by remember(streamUrl) { mutableStateOf("") }
@@ -1023,6 +1032,9 @@ private fun NativePlayerScreen(
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
+                // HLS suele tener puntos de sincronización por segmento/keyframe.
+                // CLOSEST_SYNC evita esperar un punto exacto que el stream quizá no ofrece.
+                setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .apply {
                         if (labMode) {
@@ -1062,9 +1074,19 @@ private fun NativePlayerScreen(
     }
 
     fun seekBy(deltaMs: Long) {
-        val target = (exoPlayer.currentPosition + deltaMs).coerceAtLeast(0L)
+        val basePosition = pendingSeekPosition ?: exoPlayer.currentPosition.coerceAtLeast(0L)
+        val target = (basePosition + deltaMs).coerceAtLeast(0L)
         val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost(exoPlayer.duration) else target
-        exoPlayer.seekTo(boundedTarget)
+        pendingSeekPosition = boundedTarget
+        seekCommitJob?.cancel()
+        seekCommitJob = seekScope.launch {
+            // Agrupa las repeticiones del mando: no dispara decenas de seeks concurrentes.
+            delay(220)
+            val finalTarget = pendingSeekPosition ?: boundedTarget
+            runCatching { exoPlayer.seekTo(finalTarget) }
+            pendingSeekPosition = null
+            seekCommitJob = null
+        }
         if (!labMode) showControls = true
     }
 
