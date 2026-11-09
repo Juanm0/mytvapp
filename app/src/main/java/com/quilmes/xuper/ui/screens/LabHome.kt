@@ -55,7 +55,7 @@ import kotlinx.coroutines.delay
 /**
  * Inicio estilo Netflix para INICIO (LabScreen en modo "home"): banner destacado grande y filas de TMDB
  * (Top 10, estrenos en cartelera, próximamente, series al aire, populares y mejor valoradas).
- * Tocar un título abre la ficha de LAB (CineSrc / Latino), igual que en el listado.
+ * Tocar un título abre la ficha del Inicio y usa el reproductor único de Xuper.
  */
 private data class LabHomeRow(val id: String, val title: String, val items: List<Title>, val numbered: Boolean)
 

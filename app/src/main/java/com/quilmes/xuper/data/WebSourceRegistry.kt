@@ -1,6 +1,6 @@
 package com.quilmes.xuper.data
 
-/** Fuentes web de reproducción: Vidly (Reproducir), VideoAPI (Latino), VidLux (Alternativo), Prueba (VideoAPI con navegación de fábrica) y CineSrc (solo categoría LAB). */
+/** Fuentes web de reproducción: VideoAPI aporta el video del Inicio; CineSrc se usa para capturar subtítulos. Vidly/VidLux quedan como fuentes heredadas. */
 object WebSourceRegistry {
     private const val VIDEOAPI_HOST = "videoapi.la"
     /** VideoAPI sirve el anime desde otro dominio y con otra ruta: /e/anime/<id>/<temporada>/<episodio>. */
@@ -76,9 +76,8 @@ object WebSourceRegistry {
         }
         return "$base?autoplay=1"
     }
-    // ---- CineSrc (categoría LAB) ----
-    // Embed por ID de TMDB: /embed/movie/{id} y /embed/tv/{id}?s={temporada}&e={episodio} (ver cinesrc-lab).
-    // Se usa solo desde la sección LAB; los botones de la ficha normal no lo muestran.
+    // ---- CineSrc (captura de subtítulos para el reproductor único del Inicio) ----
+    // Embed por ID de TMDB: /embed/movie/{id} y /embed/tv/{id}?s={temporada}&e={episodio}.
     private const val CINESRC_HOST = "cinesrc.st"
 
     fun isCineSrcHost(host: String?): Boolean {

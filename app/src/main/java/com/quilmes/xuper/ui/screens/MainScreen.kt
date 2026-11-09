@@ -50,10 +50,8 @@ fun MainScreen(
     jkanimeService: JkanimeService,
     onPlayAnimeEpisode: (title: String, streamUrl: String, episodeUrl: String) -> Unit,
     adultAnimeService: JkanimeService? = null,
-    /** LAB: (nombre a mostrar, ID de catálogo `tmdb-movie-<id>` / `tmdb-tv-<id>|s<T>|e<E>`). */
-    onPlayLab: (title: String, catalogId: String) -> Unit = { _, _ -> },
-    /** LAB: lo mismo pero con el reproductor Latino (VideoAPI) como alternativa a CineSrc. */
-    onPlayLabLatino: (title: String, catalogId: String) -> Unit = { _, _ -> },
+    /** Inicio: nombre a mostrar e ID TMDB del título/episodio. */
+    onPlayHomeTitle: (title: String, catalogId: String) -> Unit = { _, _ -> },
 ) {
     val sections by repository.sections.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
@@ -85,8 +83,8 @@ fun MainScreen(
     Box(modifier = Modifier.fillMaxSize().background(XuperBackground)) {
         Box(modifier = Modifier.fillMaxSize().padding(start = 72.dp)) {
             when (dest) {
-                // INICIO y LAB están intercambiados: INICIO muestra el catálogo TMDB (antes LAB) y LAB el inicio de antes.
-                "home" -> LabScreen(catalogService = catalogService, onPlay = onPlayLab, onPlayLatino = onPlayLabLatino)
+                // Inicio usa el catálogo TMDB y un único flujo de reproducción VideoAPI + subtítulos CineSrc.
+                "home" -> LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle)
                 "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
                 "live" -> ArgentinaScreen(sections = sections, onPlay = onPlay)
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)

@@ -59,6 +59,7 @@ private data class LabStream(
     val url: String,
     val referer: String,
     val userAgent: String,
+    val cookie: String = "",
     val subtitles: List<ExternalSubtitleTrack> = emptyList(),
 )
 
@@ -87,11 +88,10 @@ private val SUBTITLE_CAPTURE_JS = """
 """.trimIndent()
 
 /**
- * Reproductor de LAB: la persona nunca ve el reproductor de CineSrc.
- * 1) Un WebView oculto abre el embed y observa el `.m3u8` y las pistas `.srt`/`.vtt` que pide la página.
- *    También inspecciona respuestas JSON pequeñas vía fetch/XHR, igual que el laboratorio de escritorio.
- * 2) Tras una breve ventana de captura, pasa video, encabezados y pistas externas al reproductor nativo Media3.
- * 3) Si no aparece ningún enlace de video, se ofrece Reintentar o el reproductor original de CineSrc.
+ * Reproductor único del Inicio: la persona nunca ve los embeds de VideoAPI ni CineSrc.
+ * 1) Un WebView oculto captura el HLS de VideoAPI.
+ * 2) Otro WebView oculto captura las pistas `.srt`/`.vtt` solicitadas por CineSrc, incluidos sus JSON.
+ * 3) Media3 reproduce el HLS y carga las pistas externas en la misma sesión nativa.
  */
 @Composable
 fun LabPlayerScreen(
@@ -102,17 +102,17 @@ fun LabPlayerScreen(
     onExit: () -> Unit,
 ) {
     val context = LocalContext.current
-    val embedUrl = remember(catalogId) { WebSourceRegistry.cineSrcUrl(catalogId) }
+    val videoApiUrl = remember(catalogId) { WebSourceRegistry.videoApiUrl(catalogId) }
+    val subtitleEmbedUrl = remember(catalogId) { WebSourceRegistry.cineSrcUrl(catalogId) }
     var attempt by remember(catalogId) { mutableStateOf(0) }
     var stream by remember(catalogId) { mutableStateOf<LabStream?>(null) }
     var failure by remember(catalogId) { mutableStateOf<String?>(null) }
-    var useOriginal by remember(catalogId) { mutableStateOf(false) }
     var nextEpisode by remember(catalogId) { mutableStateOf<Title?>(null) }
     val baseName = remember(name) { name.substringBefore(" · ") }
 
     // "Continuar viendo": mismo registro que usan los demás reproductores web (sin el enlace temporal del video).
     LaunchedEffect(catalogId) {
-        val url = embedUrl ?: return@LaunchedEffect
+        val url = videoApiUrl ?: return@LaunchedEffect
         runCatching { saveRecent(context, catalogId, name, url) }
     }
 
@@ -158,15 +158,7 @@ fun LabPlayerScreen(
 
     val found = stream
     when {
-        embedUrl == null -> LabMessage("No se pudo armar el enlace de este título.", onExit, null, null)
-        useOriginal -> PlayerScreen(
-            name = name,
-            streamUrl = embedUrl,
-            currentTitleId = catalogId,
-            nextEpisode = nextEpisode,
-            onPlayNextEpisode = playNext,
-            onExit = onExit,
-        )
+        videoApiUrl == null || subtitleEmbedUrl == null -> LabMessage("No se pudo preparar el video o los subtítulos de este título.", onExit, null)
         found != null -> PlayerScreen(
             name = name,
             streamUrl = found.url,
@@ -174,6 +166,7 @@ fun LabPlayerScreen(
                 put("Referer", found.referer)
                 originOf(found.referer)?.let { put("Origin", it) }
                 put("User-Agent", found.userAgent)
+                if (found.cookie.isNotBlank()) put("Cookie", found.cookie)
             },
             currentTitleId = catalogId,
             nextEpisode = nextEpisode,
@@ -190,60 +183,81 @@ fun LabPlayerScreen(
                 failure = null
                 attempt += 1
             },
-            onOriginal = { useOriginal = true },
         )
         else -> key(attempt) {
             LabResolving(
                 name = name,
-                embedUrl = embedUrl,
+                videoApiUrl = videoApiUrl.orEmpty(),
+                subtitleEmbedUrl = subtitleEmbedUrl.orEmpty(),
                 attempt = attempt,
                 onFound = { stream = it },
                 onFail = { failure = it },
                 onExit = onExit,
                 onRetry = { attempt += 1 },
-                onOriginal = { useOriginal = true },
             )
         }
     }
 }
 
-/** Pantalla "Cargando…" con el WebView oculto debajo. */
+/** Captura en paralelo el HLS de VideoAPI y los subtítulos que solicita CineSrc. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun LabResolving(
     name: String,
-    embedUrl: String,
+    videoApiUrl: String,
+    subtitleEmbedUrl: String,
     attempt: Int,
     onFound: (LabStream) -> Unit,
     onFail: (String) -> Unit,
     onExit: () -> Unit,
     onRetry: () -> Unit,
-    onOriginal: () -> Unit,
 ) {
     BackHandler { onExit() }
     val handler = remember { Handler(Looper.getMainLooper()) }
-    val done = remember(embedUrl, attempt) { AtomicBoolean(false) }
-    val streamCaptured = remember(embedUrl, attempt) { AtomicBoolean(false) }
-    val capturedSubtitles = remember(embedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
-    val subtitleBridge = remember(embedUrl, attempt) {
+    val done = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
+    val streamCaptured = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
+    val finishScheduled = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
+    val capturedSubtitles = remember(subtitleEmbedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
+    val subtitleBridge = remember(subtitleEmbedUrl, attempt) {
         object {
             @JavascriptInterface
             fun add(url: String?, referer: String?) {
                 val value = url?.trim().orEmpty()
                 if (value.startsWith("https://", true) && SUBTITLE_URL.containsMatchIn(value)) {
-                    capturedSubtitles.putIfAbsent(value, subtitleFromUrl(value, referer?.takeIf { it.startsWith("https://") } ?: embedUrl))
+                    capturedSubtitles.putIfAbsent(
+                        value,
+                        subtitleFromUrl(value, referer?.takeIf { it.startsWith("https://") } ?: subtitleEmbedUrl),
+                    )
                 }
             }
         }
     }
     val foundState = rememberUpdatedState(onFound)
     val failState = rememberUpdatedState(onFail)
-    var webViewRef by remember(embedUrl, attempt) { mutableStateOf<WebView?>(null) }
-    var seconds by remember(embedUrl, attempt) { mutableStateOf(0) }
-    var slow by remember(embedUrl, attempt) { mutableStateOf(false) }
+    // Se conserva el HLS encontrado junto con sus encabezados para que Media3 pueda abrirlo.
+    val capturedVideo = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicReference<LabStream?>(null) }
+    var videoWebView by remember(videoApiUrl, attempt) { mutableStateOf<WebView?>(null) }
+    var subtitleWebView by remember(subtitleEmbedUrl, attempt) { mutableStateOf<WebView?>(null) }
+    var seconds by remember(videoApiUrl, attempt) { mutableStateOf(0) }
+    var slow by remember(videoApiUrl, attempt) { mutableStateOf(false) }
 
-    // Tiempo de espera y, como en el lab, algunos toques en el centro por si el embed espera un "play".
-    LaunchedEffect(embedUrl, attempt) {
+    fun finishWhenReady() {
+        if (!streamCaptured.get() || !finishScheduled.compareAndSet(false, true)) return
+        // CineSrc suele disparar las pistas unos segundos después de cargar el reproductor.
+        handler.postDelayed({
+            if (done.compareAndSet(false, true)) {
+                val tracks = capturedSubtitles.values.toList()
+                    .filter { isSpanishOrEnglishSubtitle(it) }
+                    .distinctBy { it.url }
+                    .sortedWith(compareBy<ExternalSubtitleTrack> { if (isSpanishSubtitle(it)) 0 else 1 }.thenBy { it.label })
+                val captured = capturedVideo.get()
+                if (captured != null) foundState.value(captured.copy(subtitles = tracks))
+                else failState.value("VideoAPI no entregó un enlace de video válido.")
+            }
+        }, 5_000L)
+    }
+
+    LaunchedEffect(videoApiUrl, subtitleEmbedUrl, attempt) {
         val started = SystemClock.uptimeMillis()
         var taps = 0
         while (!done.get()) {
@@ -253,18 +267,19 @@ private fun LabResolving(
             if (!slow && elapsed > SLOW_NOTICE_MS && !streamCaptured.get()) slow = true
             if (taps < 3 && elapsed > 3_500L * (taps + 1)) {
                 taps++
-                webViewRef?.let { tapCenter(it) }
+                videoWebView?.let { tapCenter(it) }
+                subtitleWebView?.let { tapCenter(it) }
             }
             if (elapsed > RESOLVE_TIMEOUT_MS && !streamCaptured.get() && done.compareAndSet(false, true)) {
-                failState.value("No se pudo obtener el video de CineSrc en ${RESOLVE_TIMEOUT_MS / 60_000} minutos.")
+                failState.value("VideoAPI no entregó el video en ${RESOLVE_TIMEOUT_MS / 60_000} minutos.")
             }
         }
     }
 
-    DisposableEffect(embedUrl, attempt) {
+    DisposableEffect(videoApiUrl, subtitleEmbedUrl, attempt) {
         onDispose {
             done.set(true)
-            webViewRef?.let { view ->
+            videoWebView?.let { view ->
                 runCatching {
                     view.stopLoading()
                     view.loadUrl("about:blank")
@@ -272,100 +287,110 @@ private fun LabResolving(
                     view.destroy()
                 }
             }
-            webViewRef = null
+            subtitleWebView?.let { view ->
+                runCatching {
+                    view.stopLoading()
+                    view.loadUrl("about:blank")
+                    (view.parent as? ViewGroup)?.removeView(view)
+                    view.destroy()
+                }
+            }
+            videoWebView = null
+            subtitleWebView = null
+        }
+    }
+
+    fun configureWebView(view: WebView, subtitleMode: Boolean) {
+        view.setBackgroundColor(android.graphics.Color.BLACK)
+        view.isFocusable = false
+        view.isFocusableInTouchMode = false
+        view.settings.javaScriptEnabled = true
+        view.settings.domStorageEnabled = true
+        view.settings.mediaPlaybackRequiresUserGesture = false
+        view.settings.javaScriptCanOpenWindowsAutomatically = false
+        view.settings.setSupportMultipleWindows(false)
+        view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        view.settings.userAgentString = view.settings.userAgentString + " XuperQuilmesTV/1.0"
+        if (subtitleMode) {
+            view.addJavascriptInterface(subtitleBridge, "XuperSubtitleBridge")
+            if (runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
+                runCatching { WebViewCompat.addDocumentStartJavaScript(view, SUBTITLE_CAPTURE_JS, setOf("*")) }
+            }
+        }
+        CookieManager.getInstance().setAcceptCookie(true)
+        CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
+        val webUserAgent = view.settings.userAgentString
+        view.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, pageUrl: String?) {
+                if (subtitleMode && !runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
+                    view?.evaluateJavascript(SUBTITLE_CAPTURE_JS, null)
+                }
+            }
+
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                val req = request ?: return null
+                val url = req.url.toString()
+                if (done.get()) return XuperBraveAdblock.blockedResponse()
+                if (subtitleMode) {
+                    if (M3U8_URL.containsMatchIn(url)) return XuperBraveAdblock.blockedResponse()
+                    if (SUBTITLE_URL.containsMatchIn(url)) {
+                        capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, subtitleEmbedUrl))
+                        return XuperBraveAdblock.blockedResponse()
+                    }
+                } else if (M3U8_URL.containsMatchIn(url)) {
+                    if (streamCaptured.compareAndSet(false, true)) {
+                        val headers = req.requestHeaders.orEmpty()
+                        val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value ?: videoApiUrl
+                        val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: webUserAgent
+                        val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
+                        capturedVideo.set(LabStream(url, referer, ua, cookie))
+                        finishWhenReady()
+                    }
+                    return XuperBraveAdblock.blockedResponse()
+                }
+                return runCatching {
+                    if (XuperBraveAdblock.shouldBlock(req, view?.url)) XuperBraveAdblock.blockedResponse() else null
+                }.getOrNull()
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val target = request?.url?.toString() ?: return true
+                val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
+                if (scheme != "http" && scheme != "https") return true
+                return runCatching { XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document") }.getOrDefault(false)
+            }
         }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // Va a pantalla completa (algunos reproductores no arrancan en una vista diminuta) pero tapado por el
-        // "Cargando…" de abajo y sin foco, así que nunca se ve ni recibe el mando.
+        // Dos páginas ocultas: VideoAPI entrega únicamente el HLS; CineSrc aporta las pistas externas.
         AndroidView(
             modifier = Modifier.fillMaxSize(),
-            factory = { viewContext ->
-                WebView(viewContext).apply {
-                    setBackgroundColor(android.graphics.Color.BLACK)
-                    isFocusable = false
-                    isFocusableInTouchMode = false
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.javaScriptCanOpenWindowsAutomatically = false
-                    settings.setSupportMultipleWindows(false)
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    settings.userAgentString = settings.userAgentString + " XuperQuilmesTV/1.0"
-                    addJavascriptInterface(subtitleBridge, "XuperSubtitleBridge")
-                    if (runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
-                        runCatching { WebViewCompat.addDocumentStartJavaScript(this, SUBTITLE_CAPTURE_JS, setOf("*")) }
-                    }
-                    CookieManager.getInstance().setAcceptCookie(true)
-                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                    val webUserAgent = settings.userAgentString
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                            if (!runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
-                                view?.evaluateJavascript(SUBTITLE_CAPTURE_JS, null)
-                            }
-                        }
-
-                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
-                            val req = request ?: return null
-                            val url = req.url.toString()
-                            // Al finalizar la ventana de captura se corta el resto de solicitudes del WebView oculto.
-                            if (done.get()) return XuperBraveAdblock.blockedResponse()
-                            if (SUBTITLE_URL.containsMatchIn(url)) {
-                                capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, embedUrl))
-                                // El WebView deja que el reproductor solicite el subtítulo; Media3 lo cargará luego.
-                                return XuperBraveAdblock.blockedResponse()
-                            }
-                            if (M3U8_URL.containsMatchIn(url)) {
-                                if (streamCaptured.compareAndSet(false, true)) {
-                                    val headers = req.requestHeaders.orEmpty()
-                                    val referer = headers["Referer"] ?: headers["referer"] ?: embedUrl
-                                    val ua = headers["User-Agent"] ?: headers["user-agent"] ?: webUserAgent
-                                    // Esperar un poco después del m3u8 permite capturar las solicitudes de subtítulos
-                                    // que el embed dispara en paralelo o inmediatamente después.
-                                    handler.postDelayed({
-                                        if (done.compareAndSet(false, true)) {
-                                            foundState.value(LabStream(url, referer, ua, capturedSubtitles.values.toList().filter { isSpanishOrEnglishSubtitle(it) }.distinctBy { it.url }.sortedWith(compareBy<ExternalSubtitleTrack> { if (isSpanishSubtitle(it)) 0 else 1 }.thenBy { it.label })))
-                                        }
-                                    }, 2_200L)
-                                }
-                                return XuperBraveAdblock.blockedResponse()
-                            }
-                            return runCatching {
-                                if (XuperBraveAdblock.shouldBlock(req, view?.url)) XuperBraveAdblock.blockedResponse() else null
-                            }.getOrNull()
-                        }
-
-                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                            // Sin redirecciones ni popups: el embed se queda en su página.
-                            val target = request?.url?.toString() ?: return true
-                            val scheme = runCatching { URI(target).scheme?.lowercase() }.getOrNull()
-                            if (scheme != "http" && scheme != "https") return true
-                            return runCatching { XuperBraveAdblock.shouldBlockUrl(target, view?.url, "document") }.getOrDefault(false)
-                        }
-                    }
-                    webViewRef = this
-                    loadUrl(embedUrl)
-                }
-            },
+            factory = { viewContext -> WebView(viewContext).apply {
+                configureWebView(this, false)
+                videoWebView = this
+                loadUrl(videoApiUrl)
+            } },
+        )
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { viewContext -> WebView(viewContext).apply {
+                configureWebView(this, true)
+                subtitleWebView = this
+                loadUrl(subtitleEmbedUrl)
+            } },
         )
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(name, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
                 Text(
-                    "Cargando…  " + if (seconds >= 60) "${seconds / 60} min ${(seconds % 60).toString().padStart(2, '0')} s" else "${seconds}s",
+                    "Preparando video y subtítulos…  " + if (seconds >= 60) "${seconds / 60} min ${(seconds % 60).toString().padStart(2, '0')} s" else "${seconds}s",
                     color = Color(0xFFB4C0CE), fontSize = 18.sp,
                 )
                 if (slow) {
-                    // Pasaron 30 s: se muestran las opciones, pero la carga sigue por detrás hasta los 5 minutos.
-                    Text(
-                        "Está tardando más de lo normal (puede ser la conexión). Sigue cargando…",
-                        color = Color(0xFFB4C0CE), fontSize = 16.sp,
-                    )
+                    Text("Está tardando más de lo normal. Sigue intentando…", color = Color(0xFFB4C0CE), fontSize = 16.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 6.dp)) {
                         Button(onClick = onRetry) { Text("REINTENTAR") }
-                        Button(onClick = onOriginal) { Text("USAR REPRODUCTOR ORIGINAL") }
                         Button(onClick = onExit) { Text("VOLVER") }
                     }
                 }
@@ -379,7 +404,6 @@ private fun LabMessage(
     message: String,
     onExit: () -> Unit,
     onRetry: (() -> Unit)?,
-    onOriginal: (() -> Unit)?,
 ) {
     BackHandler { onExit() }
     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -391,7 +415,6 @@ private fun LabMessage(
             Text(message, color = Color.White, fontSize = 20.sp)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (onRetry != null) Button(onClick = onRetry) { Text("REINTENTAR") }
-                if (onOriginal != null) Button(onClick = onOriginal) { Text("USAR REPRODUCTOR ORIGINAL") }
                 Button(onClick = onExit) { Text("VOLVER") }
             }
         }

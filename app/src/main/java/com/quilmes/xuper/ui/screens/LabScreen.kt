@@ -64,7 +64,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
-/** Una pestaña del catálogo LAB: ruta de TMDB y, si el listado es de un solo tipo, cuál es. */
+/** Una pestaña del catálogo principal: ruta de TMDB y, si el listado es de un solo tipo, cuál es. */
 private data class LabTab(val id: String, val label: String, val heading: String, val endpoint: String, val kind: ContentKind?)
 
 private val LAB_TABS = listOf(
@@ -78,7 +78,7 @@ private val LAB_TABS = listOf(
 )
 
 /**
- * Estado de LAB en memoria. Al reproducir, la navegación cierra esta pantalla; con esto, al volver desde el
+ * Estado del catálogo principal en memoria. Al reproducir, la navegación cierra esta pantalla; con esto, al volver desde el
  * reproductor se reencuentra la misma serie, la misma temporada y el mismo listado (sin recargar todo).
  */
 /** Pestaña especial "INICIO": en vez del listado en grilla muestra el inicio estilo Netflix ([LabHome]). */
@@ -95,16 +95,14 @@ private object LabSession {
 }
 
 /**
- * Categoría LAB: catálogo completo de TMDB (películas y series) que se reproduce con CineSrc.
- * Es independiente del resto de Xuper (igual que ANIME): no usa el repositorio M3U ni la ficha normal.
+ * Inicio: catálogo completo de TMDB (películas y series). El flujo único obtiene el video de VideoAPI
+ * y las pistas de subtítulos desde CineSrc, y entrega todo al reproductor nativo de Xuper.
  * [onPlay] recibe el nombre a mostrar y el ID de catálogo (`tmdb-movie-<id>` o `tmdb-tv-<id>|s<T>|e<E>`).
  */
 @Composable
 fun LabScreen(
     catalogService: TmdbCatalogService,
     onPlay: (title: String, catalogId: String) -> Unit,
-    /** Alternativa a CineSrc: reproductor Latino (VideoAPI). Mismos argumentos que [onPlay]. */
-    onPlayLatino: (title: String, catalogId: String) -> Unit = { _, _ -> },
 ) {
     val scope = rememberCoroutineScope()
     var tabId by remember { mutableStateOf(LabSession.tabId) }
@@ -182,7 +180,7 @@ fun LabScreen(
         if (tabId != LAB_HOME_TAB && items.isEmpty()) load(tabId, activeQuery, true)
     }
 
-    // Atrás: de la ficha al listado; de una búsqueda al listado normal; de un listado al inicio de LAB.
+    // Atrás: de la ficha al listado; de una búsqueda al listado normal; de un listado al inicio del catálogo principal.
     BackHandler(enabled = selected != null || activeQuery.isNotEmpty() || tabId != LAB_HOME_TAB) {
         if (selected != null) {
             closeTitle()
@@ -201,7 +199,6 @@ fun LabScreen(
             catalogService = catalogService,
             onBack = { closeTitle() },
             onPlay = onPlay,
-            onPlayLatino = onPlayLatino,
         )
         return
     }
@@ -251,8 +248,8 @@ fun LabScreen(
             .padding(start = 44.dp, end = 40.dp, top = 28.dp, bottom = 22.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Text("LAB", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = XuperTextPrimary)
-            Text("TMDB + CineSrc · Películas y series", fontSize = 15.sp, color = XuperTextSecondary)
+            Text("INICIO", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = XuperTextPrimary)
+            Text("TMDB · VideoAPI + subtítulos CineSrc", fontSize = 15.sp, color = XuperTextSecondary)
         }
         Spacer(Modifier.height(14.dp))
         Row(
@@ -334,18 +331,15 @@ fun LabScreen(
     }
 }
 
-/** Ficha de una película o serie de LAB. En series: temporadas y episodios; cada uno abre CineSrc. */
+/** Ficha del catálogo principal. En series: temporadas y episodios; todos usan el mismo flujo de reproducción. */
 @Composable
 private fun LabDetail(
     title: Title,
     catalogService: TmdbCatalogService,
     onBack: () -> Unit,
     onPlay: (title: String, catalogId: String) -> Unit,
-    onPlayLatino: (title: String, catalogId: String) -> Unit,
 ) {
     val isSeries = title.contentKind == ContentKind.SERIES
-    // En series: qué reproductor usan los episodios (CineSrc por defecto, o Latino).
-    var useLatino by remember(title.id) { mutableStateOf(false) }
     var seasons by remember(title.id) { mutableStateOf<List<TmdbSeason>>(emptyList()) }
     var episodes by remember(title.id) { mutableStateOf<List<TmdbEpisode>>(emptyList()) }
     var selectedSeason by remember(title.id) { mutableStateOf<Int?>(LabSession.season) }
@@ -401,7 +395,7 @@ private fun LabDetail(
                     modifier = Modifier.width(150.dp).height(222.dp).clip(RoundedCornerShape(10.dp)).background(XuperSurfaceVariant),
                 )
                 Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Text("FICHA · LAB", color = XuperAccentBright, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text("FICHA", color = XuperAccentBright, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Text(title.name, color = XuperTextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Text(
                         listOfNotNull(title.year, title.rating?.let { "★ $it" }, if (isSeries) "Serie" else "Película")
@@ -425,11 +419,6 @@ private fun LabDetail(
                                 onClick = { onPlay(title.name, title.id) },
                                 modifier = Modifier.focusRequester(firstFocus),
                             ) { Text("▶  REPRODUCIR") }
-                            Button(onClick = { onPlayLatino(title.name, title.id) }) { Text("▶  LATINO") }
-                        } else {
-                            Button(onClick = { useLatino = !useLatino }) {
-                                Text(if (useLatino) "Reproductor: LATINO (tocar para CineSrc)" else "Reproductor: CINESRC (tocar para Latino)")
-                            }
                         }
                     }
                 }
@@ -469,7 +458,7 @@ private fun LabDetail(
                         val season = selectedSeason ?: 1
                         val playName = "${title.name} · T$season E${episode.number}"
                         val playId = "${title.id}|s$season|e${episode.number}"
-                        if (useLatino) onPlayLatino(playName, playId) else onPlay(playName, playId)
+                        onPlay(playName, playId)
                     },
                 )
             }

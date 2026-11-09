@@ -411,17 +411,9 @@ class MainActivity : ComponentActivity() {
                                 val key = "jkanime-$encodedEpisode"
                                 navController.navigate("external-player/${Uri.encode(title)}/$encodedStream/$key")
                             },
-                            // LAB: catálogo TMDB + CineSrc. Pantalla "Cargando…" + reproductor propio (ver LabPlayerScreen).
-                            onPlayLab = { labTitle, catalogId ->
-                                navController.navigate("lab-player/${Uri.encode(labTitle)}/${Uri.encode(catalogId)}")
-                            },
-                            // LAB: alternativa Latino (VideoAPI) por si CineSrc falla; mismo flujo que el botón Latino de la ficha.
-                            onPlayLabLatino = { labTitle, catalogId ->
-                                val latinoUrl = WebSourceRegistry.videoApiUrl(catalogId)
-                                if (latinoUrl != null) {
-                                    val encodedLatino = Base64.encodeToString(latinoUrl.toByteArray(StandardCharsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-                                    navController.navigate("external-player/${Uri.encode(labTitle)}/$encodedLatino/${Uri.encode(catalogId)}")
-                                }
+                            // Inicio: un solo reproductor nativo. VideoAPI aporta el video y CineSrc los subtítulos.
+                            onPlayHomeTitle = { titleName, catalogId ->
+                                navController.navigate("lab-player/${Uri.encode(titleName)}/${Uri.encode(catalogId)}")
                             },
                         )
                     }

@@ -100,6 +100,8 @@ import com.quilmes.xuper.data.WebPageMediaResolver
 import java.net.URI
 import kotlinx.coroutines.delay
 
+private data class AudioTrackOption(val language: String, val label: String, val selected: Boolean)
+
 private fun isWebPageUrl(raw: String): Boolean {
     val parsed = runCatching { URI(raw) }.getOrNull() ?: return false
     if (parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank()) return false
@@ -933,6 +935,7 @@ private fun NativePlayerScreen(
     var labFocusRow by remember(streamUrl) { mutableStateOf(0) } // 0 audio, 1 toggle, 2 subtítulos, 3 tamaño, 4 estilo, 5 sincronía, 6 subir subtítulos, 7 resolución, 8 salida
     var labFocusOption by remember(streamUrl) { mutableStateOf(0) }
     var labAudioSelected by remember(streamUrl) { mutableStateOf(0) }
+    var labAudioOptions by remember(streamUrl) { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
     var labSubtitleLanguage by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleSize by remember(streamUrl) { mutableStateOf(0) }
     var labSubtitleStyle by remember(streamUrl) { mutableStateOf(0) }
@@ -995,6 +998,23 @@ private fun NativePlayerScreen(
             DefaultDataSource.Factory(context, dataSourceFactory),
             { currentExternalSubtitles.map { it.url }.toSet() },
             subtitleOffsetMs,
+            { uri ->
+                val track = currentExternalSubtitles.firstOrNull { it.url == uri.toString() || android.net.Uri.parse(it.url) == uri }
+                val referer = track?.referer.orEmpty()
+                val origin = runCatching {
+                    val parsed = URI(referer)
+                    if (parsed.scheme != null && parsed.host != null) "${parsed.scheme}://${parsed.host}" else ""
+                }.getOrDefault("")
+                buildMap {
+                    if (referer.isNotBlank()) put("Referer", referer)
+                    if (origin.isNotBlank()) put("Origin", origin)
+                    val cookieManager = android.webkit.CookieManager.getInstance()
+                    val cookie = cookieManager.getCookie(uri.toString()).orEmpty()
+                        .ifBlank { if (referer.isNotBlank()) cookieManager.getCookie(referer).orEmpty() else "" }
+                    if (cookie.isNotBlank()) put("Cookie", cookie)
+                    put("User-Agent", "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36 XuperQuilmesTV/1.0")
+                }
+            },
         )
     }
     val exoPlayer = remember {
@@ -1004,7 +1024,13 @@ private fun NativePlayerScreen(
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
-                    .apply { if (labMode) setPreferredAudioLanguage("es") }
+                    .apply {
+                        if (labMode) {
+                            val preferred = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
+                                .getString("preferred_audio_language", "es") ?: "es"
+                            setPreferredAudioLanguage(preferred)
+                        }
+                    }
                     .setPreferredTextLanguage("es")
                     .setSelectUndeterminedTextLanguage(false)
                     .build()
@@ -1169,8 +1195,50 @@ private fun NativePlayerScreen(
         }
     }
 
+    fun refreshLabAudioOptions() {
+        if (!labMode) return
+        val detected = exoPlayer.currentTracks.groups
+            .filter { it.type == C.TRACK_TYPE_AUDIO }
+            .flatMap { group ->
+                (0 until group.length).mapNotNull { trackIndex ->
+                    val format = group.getTrackFormat(trackIndex)
+                    val language = format.language?.lowercase()?.takeIf { it.isNotBlank() && it != "und" } ?: "und"
+                    val label = format.label?.takeIf { it.isNotBlank() } ?: when {
+                        language.startsWith("es") || language == "spa" -> "Español"
+                        language.startsWith("en") || language == "eng" -> "Original / Inglés"
+                        language == "und" -> "Audio disponible"
+                        else -> language.uppercase()
+                    }
+                    AudioTrackOption(language, label, group.isTrackSelected(trackIndex))
+                }
+            }
+            .groupBy { it.language to it.label }
+            .values
+            .map { duplicates -> duplicates.first().copy(selected = duplicates.any { it.selected }) }
+        labAudioOptions = detected
+        if (detected.isNotEmpty()) {
+            val actuallySelected = detected.indexOfFirst { it.selected }
+            val preferred = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
+                .getString("preferred_audio_language", "es") ?: "es"
+            val matching = detected.indexOfFirst { option ->
+                option.language == preferred || option.language.startsWith(preferred, true) ||
+                    (preferred.startsWith("es") && (option.language == "spa" || option.label.contains("español", true))) ||
+                    (preferred.startsWith("en") && (option.language == "eng" || option.label.contains("inglés", true)))
+            }
+            labAudioSelected = when {
+                actuallySelected >= 0 -> actuallySelected
+                matching >= 0 -> matching
+                else -> 0
+            }
+            labFocusOption = labAudioSelected
+        }
+    }
+
     DisposableEffect(exoPlayer, alternatePlayers, sourceIndex, directOnly, onResolveAsWebPage, channelQueue) {
         val listener = object : Player.Listener {
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                refreshLabAudioOptions()
+            }
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
                 if (!directOnly && currentUrl == streamUrl && isWebPageUrl(streamUrl)) {
@@ -1200,6 +1268,15 @@ private fun NativePlayerScreen(
         }
         exoPlayer.addListener(listener)
         onDispose { exoPlayer.removeListener(listener) }
+    }
+    LaunchedEffect(streamUrl, labMode) {
+        if (labMode) {
+            repeat(20) {
+                refreshLabAudioOptions()
+                if (labAudioOptions.isNotEmpty()) return@LaunchedEffect
+                delay(250)
+            }
+        }
     }
     DisposableEffect(exoPlayer) { onDispose { exoPlayer.release() } }
 
@@ -1246,9 +1323,23 @@ private fun NativePlayerScreen(
         runCatching { buttonFocusRequesters[focusedButton].requestFocus() }
     }
     fun applyLabAudio(index: Int) {
-        labAudioSelected = index.coerceIn(0, 1)
+        val option = labAudioOptions.getOrNull(index) ?: return
+        labAudioSelected = index.coerceIn(0, labAudioOptions.lastIndex)
+        // Guardamos la preferencia elegida; si un título no ofrece ese idioma, Media3 usa
+        // automáticamente la única pista disponible sin inventar una opción inexistente.
+        val preferredCode = when {
+            option.language.startsWith("es", true) || option.language == "spa" -> "es"
+            option.language.startsWith("en", true) || option.language == "eng" -> "en"
+            else -> option.language
+        }
+        if (preferredCode != "und") {
+            context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE).edit()
+                .putString("preferred_audio_language", preferredCode)
+                .apply()
+        }
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
-            .setPreferredAudioLanguage(if (labAudioSelected == 0) "es" else "en").build()
+            .setPreferredAudioLanguage(preferredCode.takeUnless { it == "und" })
+            .build()
     }
     fun applyLabSubtitleLanguage(index: Int) {
         labSubtitleLanguage = index.coerceIn(0, 1)
@@ -1259,7 +1350,7 @@ private fun NativePlayerScreen(
     fun moveLabFocus(delta: Int) {
         labFocusRow = (labFocusRow + delta).coerceIn(0, 8)
         labFocusOption = when (labFocusRow) {
-            0 -> labAudioSelected
+            0 -> labAudioSelected.coerceAtMost(labAudioOptions.lastIndex.coerceAtLeast(0))
             2 -> 0
             3 -> labSubtitleSize
             4 -> labSubtitleStyle
@@ -1271,7 +1362,7 @@ private fun NativePlayerScreen(
             labSubtitleDelayMs = (labSubtitleDelayMs + delta * 500L).coerceIn(-60_000L, 60_000L)
             return
         }
-        val max = when (labFocusRow) { 0 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
+        val max = when (labFocusRow) { 0 -> labAudioOptions.lastIndex.coerceAtLeast(0); 3 -> 2; 4 -> 2; else -> 0 }
         labFocusOption = (labFocusOption + delta + max + 1) % (max + 1)
     }
     fun confirmLabFocus() {
@@ -1640,7 +1731,14 @@ private fun NativePlayerScreen(
             ) {
                 Text("Ajuste de reproducir", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.CenterHorizontally))
                 Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF53616A)))
-                LabSettingsRow("Audio", listOf("Español", "Inglés"), labAudioSelected, labFocusRow == 0, labFocusOption, false)
+                LabSettingsRow(
+                    "Audio",
+                    labAudioOptions.map { it.label }.ifEmpty { listOf("Detectando pistas…") },
+                    labAudioSelected.coerceAtMost((labAudioOptions.size - 1).coerceAtLeast(0)),
+                    labFocusRow == 0,
+                    labFocusOption.coerceAtMost((labAudioOptions.size - 1).coerceAtLeast(0)),
+                    false,
+                )
                 LabToggleRow(labSubtitlesEnabled, labFocusRow == 1)
                 LabSettingsRow("Pistas de subtítulos", listOf("Elegir pista"), 0, labFocusRow == 2, 0, true)
                 LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)

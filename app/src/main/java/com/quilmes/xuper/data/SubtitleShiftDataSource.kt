@@ -12,7 +12,7 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Sincronía de subtítulos (LAB).
+ * Sincronía y encabezados de subtítulos externos del reproductor principal.
  *
  * Media3 no tiene "retardo de subtítulos", así que se corrige el archivo antes de que el reproductor lo lea:
  * los pedidos de pistas externas `.srt` / `.vtt` pasan por acá, se descargan completos, se les suma
@@ -28,6 +28,7 @@ class SubtitleShiftDataSourceFactory(
     private val upstream: DataSource.Factory,
     private val subtitleUrls: () -> Set<String>,
     private val offsetMs: AtomicLong,
+    private val subtitleRequestHeaders: (Uri) -> Map<String, String> = { emptyMap() },
 ) : DataSource.Factory {
 
     override fun createDataSource(): DataSource = ShiftingDataSource(upstream.createDataSource())
@@ -45,13 +46,18 @@ class SubtitleShiftDataSourceFactory(
         override fun open(dataSpec: DataSpec): Long {
             val offset = offsetMs.get()
             buffer = null
-            if (offset == 0L || !isSubtitle(dataSpec.uri)) {
-                val length = inner.open(dataSpec)
+            val subtitle = isSubtitle(dataSpec.uri)
+            val headers = if (subtitle) subtitleRequestHeaders(dataSpec.uri) else emptyMap()
+            val request = if (headers.isNotEmpty()) {
+                dataSpec.buildUpon().setHttpRequestHeaders(headers).build()
+            } else dataSpec
+            if (offset == 0L || !subtitle) {
+                val length = inner.open(request)
                 innerOpen = true
                 return length
             }
             val bytes = try {
-                inner.open(dataSpec)
+                inner.open(request)
                 readFully(inner)
             } finally {
                 runCatching { inner.close() }
