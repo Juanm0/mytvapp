@@ -30,7 +30,7 @@ import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.screens.MainScreen
-import com.quilmes.xuper.ui.screens.LabPlayerScreen
+import com.quilmes.xuper.ui.screens.HomePlayerScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
 import com.quilmes.xuper.ui.screens.XuperBraveAdblock
@@ -413,24 +413,24 @@ class MainActivity : ComponentActivity() {
                             },
                             // Inicio: un solo reproductor nativo. VideoAPI aporta el video y CineSrc los subtítulos.
                             onPlayHomeTitle = { titleName, catalogId ->
-                                navController.navigate("lab-player/${Uri.encode(titleName)}/${Uri.encode(catalogId)}")
+                                navController.navigate("home-player/${Uri.encode(titleName)}/${Uri.encode(catalogId)}")
                             },
                         )
                     }
                     composable(
-                        route = "lab-player/{labName}/{labId}",
+                        route = "home-player/{homeName}/{homeId}",
                         arguments = listOf(
-                            navArgument("labName") { type = NavType.StringType },
-                            navArgument("labId") { type = NavType.StringType },
+                            navArgument("homeName") { type = NavType.StringType },
+                            navArgument("homeId") { type = NavType.StringType },
                         ),
                     ) { entry ->
-                        LabPlayerScreen(
-                            name = entry.arguments?.getString("labName").orEmpty(),
-                            catalogId = entry.arguments?.getString("labId").orEmpty(),
+                        HomePlayerScreen(
+                            name = entry.arguments?.getString("homeName").orEmpty(),
+                            catalogId = entry.arguments?.getString("homeId").orEmpty(),
                             catalogService = tmdbCatalogService,
                             onPlayNext = { nextName, nextId ->
                                 navController.popBackStack()
-                                navController.navigate("lab-player/${Uri.encode(nextName)}/${Uri.encode(nextId)}")
+                                navController.navigate("home-player/${Uri.encode(nextName)}/${Uri.encode(nextId)}")
                             },
                             onExit = { navController.popBackStack() },
                         )
