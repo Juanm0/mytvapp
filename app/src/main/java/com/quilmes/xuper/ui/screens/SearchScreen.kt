@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.DeveloperMode
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.Title
@@ -44,7 +45,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-/** Buscador principal: catálogo TMDB del Inicio; xxx.m3u solo cuando el modo +18 está activo. */
+/**
+ * Buscador principal: catálogo TMDB del Inicio; xxx.m3u solo con el modo +18 activo; contenido de LAB solo con las
+ * opciones de desarrollador desbloqueadas.
+ */
 @Composable
 fun SearchScreen(
     repository: ContentRepository,
@@ -55,6 +59,7 @@ fun SearchScreen(
     var results by remember { mutableStateOf<List<Title>>(emptyList()) }
     val focusRequester = remember { FocusRequester() }
     val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
+    val devEnabled by DeveloperMode.enabledFlow.collectAsState()
     val sections by repository.sections.collectAsState()
     val adultPlaylistLoaded = sections.any {
         it.name.equals("xxx", ignoreCase = true) || it.name.equals("+18", ignoreCase = true) || it.name.equals("18+", ignoreCase = true)
@@ -63,13 +68,13 @@ fun SearchScreen(
 
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
 
-    LaunchedEffect(query, adultEnabled, adultPlaylistLoaded) {
+    LaunchedEffect(query, adultEnabled, adultPlaylistLoaded, devEnabled) {
         delay(250) // espera a que termine de escribir
         if (query.isBlank()) {
             results = emptyList()
         } else {
-            // BUSCAR usa el mismo catálogo TMDB que alimenta el Inicio. No mezcla las listas
-            // experimentales/locales del LAB ni las listas M3U normales.
+            // BUSCAR usa el mismo catálogo TMDB que alimenta el Inicio. Las listas de LAB solo participan con el modo
+            // desarrollador activo; apagado, ni siquiera se consultan (la compuerta también está en M3uRepository).
             val tmdb = catalogService.search(query)
             withContext(Dispatchers.Default) {
                 // Registra las fichas TMDB para que puedan abrirse desde el resultado.
@@ -79,7 +84,11 @@ fun SearchScreen(
             val adultPlaylistResults = if (adultEnabled) {
                 withContext(Dispatchers.Default) { m3uRepository?.searchAdultSources(query).orEmpty() }
             } else emptyList()
-            results = (tmdb + adultPlaylistResults).distinctBy { it.id }
+            // Contenido de LAB: solo con las opciones de desarrollador. Se combina después del catálogo normal.
+            val labResults = if (devEnabled) {
+                withContext(Dispatchers.Default) { m3uRepository?.searchLabSources(query).orEmpty() }
+            } else emptyList()
+            results = (tmdb + labResults + adultPlaylistResults).distinctBy { it.id }
                 .filterNot { AdultContentSettings.isHiddenAdult(it) }.take(120)
         }
     }

@@ -25,6 +25,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.DeveloperMode
+import com.quilmes.xuper.data.DeveloperUnlockSound
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.components.NavItem
@@ -39,7 +41,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import kotlinx.coroutines.delay
 import androidx.tv.material3.ClickableSurfaceDefaults
 import com.quilmes.xuper.ui.components.Surface
 
@@ -62,18 +66,32 @@ fun MainScreen(
 
     // La sección +18 existe en la barra lateral solo con el ajuste activado (Perfil, protegido con PIN).
     val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
+    // LAB (🧪) está oculto: solo existe en la barra con las opciones de desarrollador desbloqueadas (Easter Egg,
+    // ver DeveloperMode). La pantalla y sus funciones se conservan; solo se quita su acceso.
+    val devEnabled by DeveloperMode.enabledFlow.collectAsState()
+    val kittenArmed by DeveloperMode.kittenArmedFlow.collectAsState()
+    val context = LocalContext.current
+    var notice by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(notice) {
+        if (notice != null) {
+            delay(3_000)
+            notice = null
+        }
+    }
     val items = buildList {
         add(NavItem("home", "⌂", "INICIO"))
         add(NavItem("search", "⌕", "BUSCAR"))
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
         add(NavItem("anime", "🎌", "ANIME"))
-        add(NavItem("lab", "🧪", "LAB"))
+        if (devEnabled) add(NavItem("lab", "🧪", "LAB"))
         add(NavItem("favorites", "♡", "MI LISTA"))
         add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
         add(NavItem("profile", "●", "PERFIL"))
         if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
     }
     LaunchedEffect(adultEnabled) { if (!adultEnabled && dest == "adult") dest = "home" }
+    // Si se apaga el modo desarrollador (o quedó "lab" guardado de antes), LAB deja de mostrarse.
+    LaunchedEffect(devEnabled) { if (!devEnabled && dest == "lab") dest = "home" }
 
     BackHandler(enabled = dest != "home") { dest = "home" }
 
@@ -92,7 +110,7 @@ fun MainScreen(
                 "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
                 "live" -> ArgentinaScreen(sections = sections, onPlay = onPlay)
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
-                "lab" -> HomeScreen(repository = repository, onPlay = plainPlay)
+                "lab" -> if (devEnabled) HomeScreen(repository = repository, onPlay = plainPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = plainPlay)
                 "adult" -> if (adultEnabled) AdultScreen(sections = sections, loading = repositoryLoading, onPlay = plainPlay)
@@ -100,11 +118,41 @@ fun MainScreen(
             }
         }
         SideBar(items = items, selectedId = dest, onSelect = { selected ->
+            // Easter Egg, paso 1: 3 toques seguidos en INICIO => sonido y gatito habilitado.
+            if (selected == "home") {
+                if (DeveloperMode.onHomePressed() == DeveloperMode.Event.HOME_UNLOCKED) DeveloperUnlockSound.play(context)
+            } else {
+                DeveloperMode.onOtherNavPressed()
+            }
             // +18 también dispara la carga inicial de las listas M3U locales.
             // Antes solo se refrescaban al entrar en ARGENTINA, dejando xxx.m3u vacío.
             if (selected == "live" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
             dest = selected
-        }, modifier = Modifier.align(Alignment.CenterStart))
+        },
+            modifier = Modifier.align(Alignment.CenterStart),
+            // Easter Egg, paso 2: el gatito solo cuenta toques una vez habilitado (antes no hace nada).
+            logoEnabled = kittenArmed && !devEnabled,
+            logoTogglesLabels = devEnabled,
+            onLogoClick = {
+                when (DeveloperMode.onKittenPressed()) {
+                    DeveloperMode.Event.KITTEN_HINT -> notice = "Usted es desarrollador en 3.2.1"
+                    DeveloperMode.Event.DEVELOPER_ENABLED -> notice = "Opciones de desarrollador habilitadas"
+                    else -> Unit
+                }
+            },
+        )
+        notice?.let { text ->
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 72.dp, bottom = 32.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(XuperSurfaceVariant)
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+            ) {
+                Text(text, color = XuperTextPrimary, fontSize = 18.sp)
+            }
+        }
     }
 }
 

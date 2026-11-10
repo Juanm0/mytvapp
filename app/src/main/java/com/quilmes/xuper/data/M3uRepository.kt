@@ -443,6 +443,8 @@ class M3uRepository(
         for ((name, title) in searchIndex) {
             // Las listas +18 nunca se filtran en la búsqueda común si el modo está apagado.
             if (isAdultPlaylistTitle(title) && !AdultContentSettings.isEnabled()) continue
+            // Las fuentes de LAB tampoco: se descartan ANTES de comparar, no se ocultan después.
+            if (isLabTitle(title) && !DeveloperMode.isEnabled()) continue
             if (tokens.all { name.contains(it) }) {
                 val shown = resolveForDisplay(title)
                 if (seen.add(shown.streamUrl.ifBlank { shown.id })) {
@@ -471,6 +473,37 @@ class M3uRepository(
             }
         }
         return out
+    }
+
+    /**
+     * Busca en el contenido de LAB: las listas M3U de películas/series/VOD que muestra la pantalla LAB (las que
+     * tienen filas ahí), sin canales en vivo. Con el modo desarrollador apagado devuelve SIEMPRE vacío: la compuerta
+     * está acá y no en la UI, así que las fuentes de LAB no pueden entrar a la búsqueda normal.
+     */
+    fun searchLabSources(query: String, limit: Int = 120): List<Title> {
+        if (!DeveloperMode.isEnabled()) return emptyList()
+        val tokens = normalizeText(query).split(' ').filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return emptyList()
+        val out = ArrayList<Title>()
+        val seen = HashSet<String>()
+        for ((name, title) in searchIndex) {
+            if (!isLabTitle(title) || title.isLive || title.streamUrl.isBlank()) continue
+            if (!tokens.all { name.contains(it) }) continue
+            val shown = resolveForDisplay(title)
+            if (seen.add(shown.streamUrl.ifBlank { shown.id })) {
+                out.add(shown)
+                if (out.size >= limit) break
+            }
+        }
+        return out
+    }
+
+    /** true si el título viene de una fuente que LAB (HomeScreen) muestra. Catálogo TMDB, +18, Argentina y "otros canales" no. */
+    private fun isLabTitle(title: Title): Boolean {
+        val source = sources.getOrNull(sourceIndexOf(title.id)) ?: return false
+        if (source.homeRows <= 0 || source.liveOthers || source.isUserIptvAccount || source.mergeIntoArgentina) return false
+        if (source.name.startsWith("Argentina", ignoreCase = true)) return false
+        return !isAdultPlaylistTitle(title)
     }
 
     private fun isAdultPlaylistTitle(title: Title): Boolean {

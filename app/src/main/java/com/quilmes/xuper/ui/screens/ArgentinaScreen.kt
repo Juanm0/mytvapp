@@ -87,7 +87,7 @@ private data class ArgentinaData(
     val sports: ChannelGroupData,
     /** Todos los canales de argentina.m3u (populares primero, después alfabético). */
     val all: List<Title>,
-    /** "Otros canales para ver": una categoría por group-title, juntando todas las listas de otros-canales. */
+    /** "Otros canales para ver": una categoría por group-title, juntando las listas de assets/listas/ que no son de nombre fijo. */
     val others: List<Category>,
 )
 
@@ -104,7 +104,7 @@ private data class MenuTarget(
 /**
  * Pestaña ARGENTINA: Canales populares y Deportes Argentina (principales + secundarios que se
  * personalizan manteniendo apretado un canal), grilla con TODOS los canales de argentina.m3u y,
- * abajo de todo, "Otros canales para ver" con el contenido de las listas de assets/otros-canales/.
+ * abajo de todo, "Otros canales para ver" con el contenido de las listas de assets/listas/.
  */
 @Composable
 internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) {
@@ -149,7 +149,7 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
             Column {
                 Text("No hay canales argentinos disponibles", color = XuperTextPrimary, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Text(
-                    "La lista argentina no devolvió canales. Revisá la conexión o la fuente M3U.",
+                    "La categoria Argentina no devolvió canales.",
                     color = XuperTextSecondary, fontSize = 17.sp, modifier = Modifier.padding(top = 10.dp),
                 )
             }
@@ -729,7 +729,7 @@ private fun resolveGroup(
     return ChannelGroupData(id, title, principals, secondaries)
 }
 
-/** Canales en vivo de las listas de assets/otros-canales/, agrupados por group-title (sin repetir URLs ni Gran Hermano). */
+/** Canales en vivo de las listas de assets/listas/, agrupados por group-title (sin repetir URLs ni Gran Hermano). */
 private fun buildOthers(sections: List<Section>): List<Category> {
     val groups = LinkedHashMap<String, MutableList<Title>>()
     val seen = HashSet<String>()

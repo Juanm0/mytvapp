@@ -20,7 +20,7 @@ import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 
 /**
- * +18 muestra exclusivamente los canales/contenidos de mis-listas/xxx.m3u.
+ * +18 muestra exclusivamente los canales/contenidos de contenido_oculto/xxx.m3u.
  * Ya no consulta el catálogo adulto de TMDb.
  */
 @Composable

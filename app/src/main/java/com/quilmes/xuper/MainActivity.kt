@@ -19,6 +19,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
 import androidx.navigation.navArgument
 import com.quilmes.xuper.data.ContentRepository
+import com.quilmes.xuper.data.DeveloperMode
 import com.quilmes.xuper.data.ContentKind
 import com.quilmes.xuper.data.M3uRepository
 import com.quilmes.xuper.data.M3uSource
@@ -47,8 +48,31 @@ import java.nio.charset.StandardCharsets
  * a la barra lateral. Para otra fuente (Xtream, backend propio), implementá
  * ContentRepository y devolvela acá.
  */
-private const val MY_LISTS_DIR = "mis-listas"
-private const val OTHER_CHANNELS_DIR = "otros-canales"
+/** assets/listas/: todas las listas M3U. Las de nombre fijo (abajo) son fuentes propias; el resto son "Otros canales para ver". */
+private const val LISTS_DIR = "listas"
+/** assets/contenido_oculto/: contenido que no sale en los menús normales (xxx.m3u => sección +18). Cada .m3u se registra sola. */
+private const val MY_LISTS_DIR = "contenido_oculto"
+/** "Otros canales para ver" (pestaña Argentina) sale de assets/listas/, menos las de nombre fijo y las ignoradas. */
+private const val OTHER_CHANNELS_DIR = LISTS_DIR
+
+/** Listas que `buildRepository` lee por nombre (se copian de assets/listas/ a filesDir/). No se repiten en "Otros canales". */
+private val FIXED_LIST_FILES = listOf(
+    "argentina.m3u", "iptv-extra.m3u", "lista-extendida.m3u",
+    "mi-lista.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u",
+)
+
+/**
+ * Archivos de assets/listas/ que NO se registran como fuente: son copias de otras listas o catálogos enormes que
+ * nunca estuvieron activos (index.m3u son 11.470 canales de todo el mundo). Para activar uno, sacalo de esta lista.
+ */
+private val IGNORED_LIST_FILES = setOf("index.m3u", "iptv-accounts-raw.m3u", "tv-online2.m3u", "tv argentinas.m3u")
+
+/** .m3u/.m3u8 de assets/listas/ que van a "Otros canales para ver". */
+private fun otherChannelFiles(assets: android.content.res.AssetManager): List<String> =
+    (runCatching { assets.list(OTHER_CHANNELS_DIR)?.toList() }.getOrNull().orEmpty())
+        .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
+        .filter { it.lowercase() !in FIXED_LIST_FILES && it.lowercase() !in IGNORED_LIST_FILES }
+        .sorted()
 
 private fun buildRepository(cacheDir: File, assets: android.content.res.AssetManager): ContentRepository {
     val builtInSources = listOf(
@@ -162,7 +186,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             isUserIptvAccount = true,
         )
     }
-    // Listas propias: cualquier .m3u que se suelte en app/src/main/assets/mis-listas/ se registra sola.
+    // Listas ocultas: cualquier .m3u que se suelte en app/src/main/assets/contenido_oculto/ se registra sola (xxx.m3u = +18).
     // El nombre del archivo es el nombre de la fuente; el tipo (película/serie/canal) se detecta
     // por cada entrada (.mp4 => película, S01E02 => serie, el resto => TV en vivo).
     val myListSources = (runCatching { assets.list(MY_LISTS_DIR)?.toList() }.getOrNull().orEmpty())
@@ -184,11 +208,9 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
                 maxRows = if (isAdultPlaylist) 1_000 else 200,
             )
         }
-    // "Otros canales para ver" (pestaña Argentina): cualquier .m3u de assets/otros-canales/ se registra sola.
+    // "Otros canales para ver" (pestaña Argentina): los .m3u de assets/listas/ que no son de nombre fijo ni están ignorados.
     // No aparece en Inicio (homeRows = 0); sus canales en vivo se agrupan por group-title abajo de todo en ARGENTINA.
-    val otherChannelSources = (runCatching { assets.list(OTHER_CHANNELS_DIR)?.toList() }.getOrNull().orEmpty())
-        .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
-        .sorted()
+    val otherChannelSources = otherChannelFiles(assets)
         .map { file ->
             M3uSource(
                 name = "Otros: " + file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim(),
@@ -321,24 +343,27 @@ class MainActivity : ComponentActivity() {
         filesDir.listFiles { f -> f.name.startsWith("catalog_") && f.name.contains("argentina") }?.forEach { it.delete() }
         // Instala/actualiza todas las listas empaquetadas en el APK en el almacenamiento privado.
         // Cada una se registra como fuente en buildRepository(); TMDB solo aporta metadatos.
-        for (name in listOf(
-            "argentina.m3u", "iptv-extra.m3u", "lista-extendida.m3u",
-            "mi-lista.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u"
-        )) {
+        // Listas de nombre fijo: se leen de assets/listas/ (si alguna quedó suelta en la raíz de assets/, también sirve).
+        for (name in FIXED_LIST_FILES) {
             runCatching {
-                assets.open(name).use { input ->
-                    File(filesDir, name).outputStream().use { output -> input.copyTo(output) }
+                val input = runCatching { assets.open("$LISTS_DIR/$name") }.getOrElse { assets.open(name) }
+                input.use { src ->
+                    File(filesDir, name).outputStream().use { output -> src.copyTo(output) }
                 }
             }.onFailure { error ->
-                android.util.Log.e("XuperQuilmesTV", "No se pudo instalar $name", error)
+                android.util.Log.w("XuperQuilmesTV", "Lista no incluida en el APK: $name (assets/$LISTS_DIR/$name)", error)
             }
         }
-        // Listas propias (assets/mis-listas/*.m3u) y "Otros canales para ver" (assets/otros-canales/*.m3u):
-        // se copian a filesDir/<carpeta>/.
-        for (folder in listOf(MY_LISTS_DIR, OTHER_CHANNELS_DIR)) {
+        // Contenido oculto (assets/contenido_oculto/*.m3u) y "Otros canales para ver" (assets/listas/*.m3u que no son
+        // de nombre fijo ni están ignoradas): se copian a filesDir/<carpeta>/.
+        val copies = listOf(
+            MY_LISTS_DIR to (runCatching { assets.list(MY_LISTS_DIR)?.toList() }.getOrNull().orEmpty()),
+            OTHER_CHANNELS_DIR to otherChannelFiles(assets),
+        )
+        for ((folder, names) in copies) {
             runCatching {
                 val dir = File(filesDir, folder).apply { mkdirs() }
-                assets.list(folder).orEmpty().forEach { name ->
+                names.forEach { name ->
                     runCatching {
                         assets.open("$folder/$name").use { input ->
                             File(dir, name).outputStream().use { output -> input.copyTo(output) }
@@ -353,6 +378,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Ajuste +18: debe inicializarse antes de que cualquier servicio de TMDb lea include_adult.
         AdultContentSettings.init(applicationContext)
+        // Opciones de desarrollador (LAB oculto): leer el estado guardado antes de componer la UI.
+        DeveloperMode.init(applicationContext)
         XuperBraveAdblock.initialize(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
