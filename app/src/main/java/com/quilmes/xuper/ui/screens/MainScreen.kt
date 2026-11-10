@@ -2,6 +2,8 @@ package com.quilmes.xuper.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.tv.material3.Text
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.quilmes.xuper.data.AdultContentSettings
@@ -67,8 +70,8 @@ fun MainScreen(
         add(NavItem("lab", "🧪", "LAB"))
         add(NavItem("favorites", "♡", "MI LISTA"))
         add(NavItem("continue", "▶", "CONTINUAR VIENDO"))
-        if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
         add(NavItem("profile", "●", "PERFIL"))
+        if (adultEnabled) add(NavItem("adult", "🔞", "+18"))
     }
     LaunchedEffect(adultEnabled) { if (!adultEnabled && dest == "adult") dest = "home" }
 
@@ -109,7 +112,8 @@ fun MainScreen(
 private fun ProfileScreen() {
     // Perfil simple: no depende de servicios externos ni de integraciones retiradas.
     Column(
-        modifier = Modifier.fillMaxSize().padding(start = 52.dp, end = 48.dp, top = 52.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 52.dp, end = 48.dp, top = 52.dp, bottom = 36.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
         Text("¿Quién está viendo?", fontSize = 32.sp)
@@ -136,7 +140,51 @@ private fun ProfileScreen() {
             "Tus favoritos, historial y fuentes de reproducción se gestionan localmente en este dispositivo.",
             fontSize = 16.sp,
         )
+        IptvProfilePreference()
+        // Mantener siempre las opciones +18 al final de Perfil.
         AdultContentPreference()
+    }
+}
+
+@Composable
+private fun IptvProfilePreference() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("xuper-iptv", android.content.Context.MODE_PRIVATE) }
+    var selected by remember { mutableStateOf(prefs.getString("profile", "normal") ?: "normal") }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Reproducción IPTV", fontSize = 20.sp)
+        Text(
+            "Elegí cómo administrar el buffer de los canales en vivo. Se aplica al abrir el próximo canal.",
+            fontSize = 14.sp,
+            color = XuperTextSecondary,
+        )
+        PreferenceRow(
+            check = if (selected == "fast") "●" else "○",
+            title = "Rápido",
+            subtitle = "Menos espera al iniciar; necesita una conexión más estable.",
+            onClick = {
+                selected = "fast"
+                prefs.edit().putString("profile", selected).apply()
+            },
+        )
+        PreferenceRow(
+            check = if (selected == "normal") "●" else "○",
+            title = "Normal",
+            subtitle = "Equilibrio entre inicio y tolerancia a cortes. Recomendado.",
+            onClick = {
+                selected = "normal"
+                prefs.edit().putString("profile", selected).apply()
+            },
+        )
+        PreferenceRow(
+            check = if (selected == "stable") "●" else "○",
+            title = "Estable",
+            subtitle = "Más buffer para conexiones variables; puede tardar más en iniciar.",
+            onClick = {
+                selected = "stable"
+                prefs.edit().putString("profile", selected).apply()
+            },
+        )
     }
 }
 

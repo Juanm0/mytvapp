@@ -82,6 +82,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.CaptionStyleCompat
@@ -966,6 +967,7 @@ private fun NativePlayerScreen(
     // Acumulamos el destino y ejecutamos un único seek cuando el usuario deja de pulsar.
     var pendingSeekPosition by remember(streamUrl) { mutableStateOf<Long?>(null) }
     var seekCommitJob by remember(streamUrl) { mutableStateOf<Job?>(null) }
+    var lastSeekAtMs by remember(streamUrl) { mutableStateOf(0L) }
     val seekScope = rememberCoroutineScope()
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
     var labSeekDirection by remember(streamUrl) { mutableStateOf(0) }
@@ -1026,15 +1028,32 @@ private fun NativePlayerScreen(
             },
         )
     }
+    // Los perfiles se aplican solo a IPTV en vivo. Películas, series y anime conservan
+    // el LoadControl estándar para no cambiar su comportamiento por una preferencia de IPTV.
+    val iptvLoadControl = remember(isLive) {
+        if (!isLive) DefaultLoadControl.Builder().build()
+        else {
+            val profile = context.getSharedPreferences("xuper-iptv", Context.MODE_PRIVATE)
+                .getString("profile", "normal") ?: "normal"
+            val (minBuffer, maxBuffer, startBuffer, rebuffer) = when (profile) {
+                "fast" -> listOf(3_000, 15_000, 500, 1_000)
+                "stable" -> listOf(10_000, 45_000, 1_500, 3_000)
+                else -> listOf(5_000, 25_000, 1_000, 2_000)
+            }
+            DefaultLoadControl.Builder()
+                .setBufferDurationsMs(minBuffer, maxBuffer, startBuffer, rebuffer)
+                .build()
+        }
+    }
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
+            .setLoadControl(iptvLoadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(subtitleShiftFactory))
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
-                // HLS suele tener puntos de sincronización por segmento/keyframe.
-                // El modo base conserva el comportamiento del avance que ya funciona.
-                // seekBy() cambia a PREVIOUS_SYNC solamente para retrocesos.
+                // Un criterio uniforme de sincronización para evitar cambios de estrategia
+                // entre avance y retroceso en streams HLS de Android TV.
                 setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .apply {
@@ -1067,6 +1086,7 @@ private fun NativePlayerScreen(
         val resumeKey = currentTitleId.ifBlank { streamUrl }
         val savedPosition = context.getSharedPreferences("xuper-playback", Context.MODE_PRIVATE)
             .getLong(resumeKey, 0L).coerceAtLeast(0L)
+        lastSeekAtMs = SystemClock.elapsedRealtime()
         exoPlayer.setMediaItem(item, savedPosition)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
@@ -1079,23 +1099,19 @@ private fun NativePlayerScreen(
         val target = (basePosition + deltaMs).coerceAtLeast(0L)
         val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost(exoPlayer.duration) else target
         pendingSeekPosition = boundedTarget
+        lastSeekAtMs = SystemClock.elapsedRealtime()
         seekCommitJob?.cancel()
         seekCommitJob = seekScope.launch {
             // Agrupa las repeticiones del mando: no dispara decenas de seeks concurrentes.
             delay(220)
             val finalTarget = pendingSeekPosition ?: boundedTarget
             runCatching {
-                // En HLS algunos streams se quedan esperando al retroceder si se usa el
-                // punto de sincronización más cercano. Para atrás elegimos el keyframe
-                // anterior; para adelante, el siguiente. La búsqueda queda simétrica.
-                val current = exoPlayer.currentPosition.coerceAtLeast(0L)
-                exoPlayer.setSeekParameters(
-                    when {
-                        finalTarget < current -> SeekParameters.PREVIOUS_SYNC
-                        else -> SeekParameters.CLOSEST_SYNC
-                    }
-                )
+                // Usar un único criterio en ambas direcciones evita alternar estrategias
+                // de sincronización en HLS, que en algunos decodificadores de Android TV
+                // puede dejar el seek esperando un keyframe anterior que nunca llega.
+                exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 exoPlayer.seekTo(finalTarget)
+                lastSeekAtMs = SystemClock.elapsedRealtime()
             }
             pendingSeekPosition = null
             seekCommitJob = null
@@ -1159,6 +1175,73 @@ private fun NativePlayerScreen(
                     }
                 }
                 else -> bufferingTicks = 0
+            }
+        }
+    }
+
+    // Recuperación para VOD (películas, series y anime). El vigilante no actúa durante
+    // pausas voluntarias, ni inmediatamente después de un seek. Si la posición queda
+    // inmóvil durante un periodo prolongado, reconstruye la sesión en torno a 5 s antes.
+    LaunchedEffect(exoPlayer, streamUrl, isLive) {
+        if (isLive) return@LaunchedEffect
+        var lastPosition = -1L
+        var stagnantMs = 0L
+        var recoveryCount = 0
+        var lastRecoveryAt = 0L
+        while (true) {
+            delay(1_000)
+            val now = SystemClock.elapsedRealtime()
+            val currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val item = exoPlayer.currentMediaItem
+            val seeking = pendingSeekPosition != null || seekCommitJob?.isActive == true ||
+                now - lastSeekAtMs < 8_000L
+            val shouldMonitor = exoPlayer.playWhenReady &&
+                exoPlayer.playbackState != Player.STATE_IDLE &&
+                exoPlayer.playbackState != Player.STATE_ENDED &&
+                item != null && !seeking
+
+            if (!shouldMonitor) {
+                stagnantMs = 0L
+                lastPosition = currentPosition
+                continue
+            }
+
+            if (currentPosition > lastPosition + 250L) {
+                stagnantMs = 0L
+                recoveryCount = 0
+            } else if (exoPlayer.playbackState == Player.STATE_BUFFERING ||
+                (exoPlayer.playbackState == Player.STATE_READY && !exoPlayer.isPlaying)) {
+                stagnantMs += 1_000L
+            } else {
+                stagnantMs = 0L
+            }
+            lastPosition = currentPosition
+
+            if (stagnantMs >= 15_000L && now - lastRecoveryAt >= 30_000L) {
+                if (recoveryCount >= 2) {
+                    error = "La reproducción sigue trabada. Probá cambiar de fuente o volver a entrar."
+                    showControls = true
+                    stagnantMs = 0L
+                    continue
+                }
+                recoveryCount++
+                lastRecoveryAt = now
+                val resumeAt = (currentPosition - 5_000L).coerceAtLeast(0L)
+                android.util.Log.w(
+                    "XuperPlayback",
+                    "VOD freeze recovery $recoveryCount/2 at ${currentPosition}ms -> ${resumeAt}ms"
+                )
+                runCatching {
+                    val currentItem = exoPlayer.currentMediaItem ?: return@runCatching
+                    exoPlayer.setMediaItem(currentItem, resumeAt)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }.onFailure {
+                    android.util.Log.e("XuperPlayback", "VOD recovery failed", it)
+                }
+                lastSeekAtMs = now
+                stagnantMs = 0L
+                lastPosition = resumeAt
             }
         }
     }
