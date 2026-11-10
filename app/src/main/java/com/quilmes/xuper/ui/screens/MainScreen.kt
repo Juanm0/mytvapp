@@ -150,7 +150,7 @@ private fun ProfileScreen() {
 private fun IptvProfilePreference() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("xuper-iptv", android.content.Context.MODE_PRIVATE) }
-    var selected by remember { mutableStateOf(prefs.getString("profile", "normal") ?: "normal") }
+    var selected by remember { mutableStateOf(prefs.getString("profile", "fast") ?: "fast") }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Reproducción IPTV", fontSize = 20.sp)
         Text(
@@ -161,7 +161,7 @@ private fun IptvProfilePreference() {
         PreferenceRow(
             check = if (selected == "fast") "●" else "○",
             title = "Rápido",
-            subtitle = "Menos espera al iniciar; necesita una conexión más estable.",
+            subtitle = "Predeterminado: inicia más rápido; necesita una conexión estable.",
             onClick = {
                 selected = "fast"
                 prefs.edit().putString("profile", selected).apply()
@@ -170,7 +170,7 @@ private fun IptvProfilePreference() {
         PreferenceRow(
             check = if (selected == "normal") "●" else "○",
             title = "Normal",
-            subtitle = "Equilibrio entre inicio y tolerancia a cortes. Recomendado.",
+            subtitle = "Equilibrio entre inicio y tolerancia a cortes.",
             onClick = {
                 selected = "normal"
                 prefs.edit().putString("profile", selected).apply()

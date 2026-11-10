@@ -968,6 +968,9 @@ private fun NativePlayerScreen(
     var openSubtitlesStatus by remember(streamUrl) { mutableStateOf("") }
     var openSubtitlesResults by remember(streamUrl) { mutableStateOf(emptyList<OpenSubtitleOption>()) }
     var openSubtitleDownloadingId by remember(streamUrl) { mutableStateOf<Long?>(null) }
+    var subtitlePickerOpen by remember(streamUrl) { mutableStateOf(false) }
+    var subtitlePickerVisibleCount by remember(streamUrl) { mutableStateOf(6) }
+    var subtitleTracksVersion by remember(streamUrl) { mutableStateOf(0) }
     val openSubtitleFirstFocus = remember { FocusRequester() }
     LaunchedEffect(openSubtitlesDialogOpen, openSubtitlesResults.size) {
         if (openSubtitlesDialogOpen) {
@@ -1054,7 +1057,7 @@ private fun NativePlayerScreen(
         if (!isLive) DefaultLoadControl.Builder().build()
         else {
             val profile = context.getSharedPreferences("xuper-iptv", Context.MODE_PRIVATE)
-                .getString("profile", "normal") ?: "normal"
+                .getString("profile", "fast") ?: "fast"
             val (minBuffer, maxBuffer, startBuffer, rebuffer) = when (profile) {
                 "fast" -> listOf(3_000, 15_000, 500, 1_000)
                 "stable" -> listOf(10_000, 45_000, 1_500, 3_000)
@@ -1376,6 +1379,8 @@ private fun NativePlayerScreen(
         val listener = object : Player.Listener {
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 refreshLabAudioOptions()
+                // Fuerza a refrescar el selector aunque el audio seleccionado no haya cambiado.
+                subtitleTracksVersion++
             }
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
@@ -1543,7 +1548,7 @@ private fun NativePlayerScreen(
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
             }
-            2 -> TrackSelectionDialogBuilder(context, "Pistas de subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
+            2 -> { subtitlePickerVisibleCount = 6; subtitlePickerOpen = true }
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
             5 -> labSubtitleDelayMs = 0L
@@ -1645,8 +1650,9 @@ private fun NativePlayerScreen(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = wasPlaying
     }
-    BackHandler(enabled = openSubtitlesDialogOpen || (labMode && (labSettingsOpen || labPanelOpen))) {
-        if (openSubtitlesDialogOpen) openSubtitlesDialogOpen = false
+    BackHandler(enabled = subtitlePickerOpen || openSubtitlesDialogOpen || (labMode && (labSettingsOpen || labPanelOpen))) {
+        if (subtitlePickerOpen) subtitlePickerOpen = false
+        else if (openSubtitlesDialogOpen) openSubtitlesDialogOpen = false
         else if (labUploadOpen) labUploadOpen = false
         else if (labSettingsOpen) labSettingsOpen = false
         else labPanelOpen = false
@@ -1829,7 +1835,8 @@ private fun NativePlayerScreen(
                     }) { Text("♫  Audio") }
                     Button(modifier = Modifier.focusRequester(buttonFocusRequesters[3]), onClick = {
                         showControls = true
-                        TrackSelectionDialogBuilder(context, "Subtítulos", exoPlayer, C.TRACK_TYPE_TEXT).build().show()
+                        subtitlePickerVisibleCount = 6
+                        subtitlePickerOpen = true
                     }) { Text("CC  Subtítulos") }
                     if (!isLive) {
                         Button(onClick = { searchOpenSubtitles() }) { Text("Buscar subtítulos") }
@@ -1881,6 +1888,81 @@ private fun NativePlayerScreen(
                     modifier = Modifier.fillMaxWidth(),
                     onClick = { secondaryPickerOpen = false; showControls = true },
                 ) { Text("Cancelar") }
+            }
+        }
+        if (subtitlePickerOpen) {
+            // Leer las pistas directamente de ExoPlayer, sin depender del idioma de audio activo.
+            val subtitleOptions = exoPlayer.currentTracks.groups
+                .filter { it.type == C.TRACK_TYPE_TEXT }
+                .flatMap { group ->
+                    (0 until group.length).map { trackIndex ->
+                        val format = group.getTrackFormat(trackIndex)
+                        val language = format.language?.takeIf { it.isNotBlank() && it != "und" }
+                        val label = format.label?.takeIf { it.isNotBlank() }
+                            ?: when {
+                                language?.startsWith("es", true) == true || language == "spa" -> "Español"
+                                language?.startsWith("en", true) == true || language == "eng" -> "Inglés"
+                                language == null -> "Idioma no especificado"
+                                else -> language.uppercase()
+                            }
+                        Triple(group, trackIndex, label)
+                    }
+                }
+            // La lectura de currentTracks cambia con onTracksChanged; esta referencia hace
+            // explícito que el selector se invalida también cuando llega una nueva pista.
+            @Suppress("UNUSED_VARIABLE") val tracksVersion = subtitleTracksVersion
+            Box(Modifier.fillMaxSize().background(Color(0xB8000000)))
+            Column(
+                Modifier.align(Alignment.Center).width(650.dp).heightIn(max = 620.dp)
+                    .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Subtítulos disponibles", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (subtitleOptions.isEmpty()) "Todavía no se detectaron pistas. Esperá unos segundos o probá después de que termine de cargar el video."
+                    else "Mostrando ${minOf(subtitlePickerVisibleCount, subtitleOptions.size)} de ${subtitleOptions.size} idiomas/pistas.",
+                    color = Color(0xFFB4C0CE), fontSize = 13.sp,
+                )
+                Column(
+                    Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                .build()
+                            subtitlePickerOpen = false
+                        },
+                    ) { Text("Desactivar subtítulos") }
+                    subtitleOptions.take(subtitlePickerVisibleCount).forEachIndexed { index, option ->
+                        val (group, trackIndex, label) = option
+                        val format = group.getTrackFormat(trackIndex)
+                        val detail = listOfNotNull(format.language?.takeIf { it.isNotBlank() && it != "und" }, format.label?.takeIf { it.isNotBlank() })
+                            .distinct().joinToString(" · ")
+                        Button(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+                                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                    .addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
+                                    .build()
+                                subtitlePickerOpen = false
+                            },
+                        ) { Text("${if (group.isTrackSelected(trackIndex)) "✓  " else ""}${index + 1}. $label${if (detail.isNotBlank()) " · $detail" else ""}", maxLines = 2) }
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    if (subtitlePickerVisibleCount < subtitleOptions.size) {
+                        Button(onClick = { subtitlePickerVisibleCount += 6 }) { Text("Cargar más idiomas") }
+                    } else {
+                        Text("", color = Color.White)
+                    }
+                    Button(onClick = { subtitlePickerOpen = false }) { Text("Aceptar") }
+                }
             }
         }
         if (openSubtitlesDialogOpen) {

@@ -1,4 +1,0 @@
-Soltá acá tus listas .m3u de canales en vivo (por ejemplo: tv-online.m3u) y compilá.
-Aparecen abajo de todo en la pestaña ARGENTINA, en "Otros canales para ver", agrupados por group-title.
-No salen en Inicio. Se descartan las URLs repetidas y los canales de Gran Hermano (ya no transmite).
-Las entradas deben ser URLs http(s) accesibles desde la tele.

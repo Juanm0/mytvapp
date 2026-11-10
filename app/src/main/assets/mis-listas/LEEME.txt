@@ -1,4 +1,0 @@
-Soltá acá tu archivo .m3u (por ejemplo: peliculas-pc.m3u) y compilá.
-El nombre del archivo es el nombre de la fuente en la app.
-Las entradas .mp4 se detectan como películas; las S01E02 / 1x02 como series; el resto como TV en vivo.
-Las entradas deben ser URLs http(s) accesibles desde la tele (no rutas tipo C:\...).
