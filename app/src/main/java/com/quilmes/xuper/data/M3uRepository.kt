@@ -441,6 +441,8 @@ class M3uRepository(
         val out = ArrayList<Title>()
         val seen = HashSet<String>()
         for ((name, title) in searchIndex) {
+            // Las listas +18 nunca se filtran en la búsqueda común si el modo está apagado.
+            if (isAdultPlaylistTitle(title) && !AdultContentSettings.isEnabled()) continue
             if (tokens.all { name.contains(it) }) {
                 val shown = resolveForDisplay(title)
                 if (seen.add(shown.streamUrl.ifBlank { shown.id })) {
@@ -450,6 +452,33 @@ class M3uRepository(
             }
         }
         return out
+    }
+
+
+    /** Busca exclusivamente en xxx.m3u / fuentes +18. Solo está disponible con el modo adulto activo. */
+    fun searchAdultSources(query: String, limit: Int = 120): List<Title> {
+        if (!AdultContentSettings.isEnabled()) return emptyList()
+        val tokens = normalizeText(query).split(' ').filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return emptyList()
+        val out = ArrayList<Title>()
+        val seen = HashSet<String>()
+        for ((name, title) in searchIndex) {
+            if (!isAdultPlaylistTitle(title) || !tokens.all { name.contains(it) }) continue
+            val shown = resolveForDisplay(title)
+            if (seen.add(shown.streamUrl.ifBlank { shown.id })) {
+                out.add(shown)
+                if (out.size >= limit) break
+            }
+        }
+        return out
+    }
+
+    private fun isAdultPlaylistTitle(title: Title): Boolean {
+        val sourceIndex = sourceIndexOf(title.id)
+        val sourceName = sources.getOrNull(sourceIndex)?.name?.trim().orEmpty()
+        return sourceName.equals("xxx", ignoreCase = true) ||
+            sourceName.equals("+18", ignoreCase = true) ||
+            sourceName.equals("18+", ignoreCase = true)
     }
 
     // ------------------------------------------------------------------ zapping

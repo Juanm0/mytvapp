@@ -54,6 +54,7 @@ fun MainScreen(
     onPlayHomeTitle: (title: String, catalogId: String) -> Unit = { _, _ -> },
 ) {
     val sections by repository.sections.collectAsState()
+    val repositoryLoading by repository.loading.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
 
     // La sección +18 existe en la barra lateral solo con el ajuste activado (Perfil, protegido con PIN).
@@ -91,12 +92,14 @@ fun MainScreen(
                 "lab" -> HomeScreen(repository = repository, onPlay = plainPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = plainPlay)
-                "adult" -> if (adultEnabled) AdultScreen(sections = sections, onPlay = plainPlay)
+                "adult" -> if (adultEnabled) AdultScreen(sections = sections, loading = repositoryLoading, onPlay = plainPlay)
                 "profile" -> ProfileScreen()
             }
         }
         SideBar(items = items, selectedId = dest, onSelect = { selected ->
-            if (selected == "live") onRequestIptv()
+            // +18 también dispara la carga inicial de las listas M3U locales.
+            // Antes solo se refrescaban al entrar en ARGENTINA, dejando xxx.m3u vacío.
+            if (selected == "live" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
             dest = selected
         }, modifier = Modifier.align(Alignment.CenterStart))
     }

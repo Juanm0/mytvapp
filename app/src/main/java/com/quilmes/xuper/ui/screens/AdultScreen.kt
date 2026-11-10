@@ -26,6 +26,7 @@ import com.quilmes.xuper.ui.theme.XuperTextSecondary
 @Composable
 fun AdultScreen(
     sections: List<Section>,
+    loading: Boolean = false,
     onPlay: (String) -> Unit,
 ) {
     val adultSection = sections.firstOrNull {
@@ -41,7 +42,7 @@ fun AdultScreen(
             modifier = Modifier.padding(horizontal = 48.dp))
         if (titles.isEmpty()) {
             Text(
-                "Agregá xxx.m3u en la carpeta mis-listas para mostrar contenido acá.",
+                if (loading) "Cargando…" else "No se encontraron entradas.",
                 color = XuperTextSecondary, fontSize = 18.sp,
                 modifier = Modifier.padding(start = 48.dp, top = 24.dp, end = 48.dp)
             )

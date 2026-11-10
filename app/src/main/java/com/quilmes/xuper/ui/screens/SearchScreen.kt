@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,7 +44,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-/** Buscador: escribís y filtra en todas las listas a la vez (sin tildes ni mayúsculas). */
+/** Buscador principal: catálogo TMDB del Inicio; xxx.m3u solo cuando el modo +18 está activo. */
 @Composable
 fun SearchScreen(
     repository: ContentRepository,
@@ -53,23 +54,32 @@ fun SearchScreen(
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Title>>(emptyList()) }
     val focusRequester = remember { FocusRequester() }
+    val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
+    val sections by repository.sections.collectAsState()
+    val adultPlaylistLoaded = sections.any {
+        it.name.equals("xxx", ignoreCase = true) || it.name.equals("+18", ignoreCase = true) || it.name.equals("18+", ignoreCase = true)
+    }
+    val m3uRepository = repository as? M3uRepository
 
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
 
-    LaunchedEffect(query) {
+    LaunchedEffect(query, adultEnabled, adultPlaylistLoaded) {
         delay(250) // espera a que termine de escribir
         if (query.isBlank()) {
             results = emptyList()
         } else {
+            // BUSCAR usa el mismo catálogo TMDB que alimenta el Inicio. No mezcla las listas
+            // experimentales/locales del LAB ni las listas M3U normales.
             val tmdb = catalogService.search(query)
-            // registerCatalogTitles reconstruye el índice: nunca en el hilo principal.
-            val localResults = withContext(Dispatchers.Default) {
-                (repository as? M3uRepository)?.registerCatalogTitles(tmdb)
-                repository.search(query)
+            withContext(Dispatchers.Default) {
+                // Registra las fichas TMDB para que puedan abrirse desde el resultado.
+                m3uRepository?.registerCatalogTitles(tmdb)
             }
-            // Conserva los resultados directos de TMDB: al buscar un ID numérico,
-            // el título se obtiene por ID y no coincide por texto con el índice local.
-            results = (tmdb + localResults).distinctBy { it.id }
+            // La única fuente M3U permitida en búsqueda es xxx.m3u, y solo con +18 activado.
+            val adultPlaylistResults = if (adultEnabled) {
+                withContext(Dispatchers.Default) { m3uRepository?.searchAdultSources(query).orEmpty() }
+            } else emptyList()
+            results = (tmdb + adultPlaylistResults).distinctBy { it.id }
                 .filterNot { AdultContentSettings.isHiddenAdult(it) }.take(120)
         }
     }
@@ -92,7 +102,7 @@ fun SearchScreen(
                 ) {
                     if (query.isEmpty()) {
                         Text(
-                            text = "🔍  Buscar título, serie, canal o ID de TMDB…",
+                            text = "🔍  Buscar películas y series…",
                             color = XuperTextSecondary,
                             fontSize = 24.sp,
                         )

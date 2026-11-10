@@ -169,14 +169,19 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
         .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
         .sorted()
         .map { file ->
+            val sourceName = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim().ifBlank { "Mi lista" }
+            val isAdultPlaylist = sourceName.equals("xxx", ignoreCase = true) ||
+                sourceName.equals("+18", ignoreCase = true) || sourceName.equals("18+", ignoreCase = true)
             M3uSource(
-                name = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim().ifBlank { "Mi lista" },
+                name = sourceName,
                 url = File(File(cacheDir, MY_LISTS_DIR), file).toURI().toString(),
-                icon = "🎬",
-                homeRows = 2,
+                icon = if (isAdultPlaylist) "🔞" else "🎬",
+                // Las listas adultas no se mezclan con Inicio/LAB; solo se muestran en +18.
+                homeRows = if (isAdultPlaylist) 0 else 2,
                 enrichMetadata = false,
                 maxPerRow = 60,
-                maxRows = 200,
+                // xxx.m3u contiene más de 16.000 entradas: 200 filas truncaban la lista.
+                maxRows = if (isAdultPlaylist) 1_000 else 200,
             )
         }
     // "Otros canales para ver" (pestaña Argentina): cualquier .m3u de assets/otros-canales/ se registra sola.
