@@ -82,6 +82,7 @@ fun MainScreen(
         add(NavItem("home", "⌂", "INICIO"))
         add(NavItem("search", "⌕", "BUSCAR"))
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
+        add(NavItem("playlists", "☷", "LISTAS IPTV"))
         add(NavItem("anime", "🎌", "ANIME"))
         if (devEnabled) add(NavItem("lab", "🧪", "LAB"))
         add(NavItem("favorites", "♡", "MI LISTA"))
@@ -107,7 +108,8 @@ fun MainScreen(
             when (dest) {
                 // Inicio usa el catálogo TMDB y un único flujo de reproducción VideoAPI + subtítulos CineSrc.
                 "home" -> LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle)
-                "search" -> SearchScreen(repository = repository, catalogService = catalogService, onPlay = plainPlay)
+                "search" -> key("search") { LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle, startInSearch = true) }
+                "playlists" -> PlaylistBrowserScreen(repository = repository, onPlay = plainPlay)
                 "live" -> ArgentinaScreen(sections = sections, onPlay = onPlay)
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
                 "lab" -> if (devEnabled) HomeScreen(repository = repository, onPlay = plainPlay)
@@ -126,7 +128,7 @@ fun MainScreen(
             }
             // +18 también dispara la carga inicial de las listas M3U locales.
             // Antes solo se refrescaban al entrar en ARGENTINA, dejando xxx.m3u vacío.
-            if (selected == "live" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
+            if (selected == "live" || selected == "playlists" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
             dest = selected
         },
             modifier = Modifier.align(Alignment.CenterStart),

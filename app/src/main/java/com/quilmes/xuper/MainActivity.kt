@@ -44,34 +44,33 @@ import java.io.File
 import java.nio.charset.StandardCharsets
 
 /**
- * Las listas M3U alimentan el catálogo y la búsqueda, pero no agregan opciones
- * a la barra lateral. Para otra fuente (Xtream, backend propio), implementá
- * ContentRepository y devolvela acá.
+ * Las listas M3U alimentan el catálogo y la pantalla LISTAS IPTV. Para otra fuente
+ * (Xtream, backend propio), implementá ContentRepository y devolvela acá.
  */
-/** assets/listas/: todas las listas M3U. Las de nombre fijo (abajo) son fuentes propias; el resto son "Otros canales para ver". */
+/** assets/listas/: todas las listas M3U del usuario. */
 private const val LISTS_DIR = "listas"
 /** assets/contenido_oculto/: contenido que no sale en los menús normales (xxx.m3u => sección +18). Cada .m3u se registra sola. */
 private const val MY_LISTS_DIR = "contenido_oculto"
-/** "Otros canales para ver" (pestaña Argentina) sale de assets/listas/, menos las de nombre fijo y las ignoradas. */
-private const val OTHER_CHANNELS_DIR = LISTS_DIR
+/** Subcarpeta privada donde se copian las listas M3U empaquetadas. */
+private const val LISTS_CACHE_DIR = LISTS_DIR
 
-/** Listas que `buildRepository` lee por nombre (se copian de assets/listas/ a filesDir/). No se repiten en "Otros canales". */
+/** Listas que `buildRepository` lee por nombre (se copian desde assets/listas/ a filesDir/). */
 private val FIXED_LIST_FILES = listOf(
     "argentina.m3u", "iptv-extra.m3u", "lista-extendida.m3u",
     "mi-lista.m3u", "peliculas-dominio-publico.m3u", "vod-original.m3u",
 )
 
 /**
- * Archivos de assets/listas/ que NO se registran como fuente: son copias de otras listas o catálogos enormes que
- * nunca estuvieron activos (index.m3u son 11.470 canales de todo el mundo). Para activar uno, sacalo de esta lista.
+ * Subconjunto curado que también se muestra en ARGENTINA → "Otros canales".
+ * Las demás listas se navegan desde LISTAS IPTV sin duplicar miles de canales en ARGENTINA.
  */
-private val IGNORED_LIST_FILES = setOf("index.m3u", "iptv-accounts-raw.m3u", "tv-online2.m3u", "tv argentinas.m3u")
+private val ARGENTINA_OTHER_LIST_FILES = setOf("tv-argentinas.m3u", "tv-online.m3u")
 
-/** .m3u/.m3u8 de assets/listas/ que van a "Otros canales para ver". */
-private fun otherChannelFiles(assets: android.content.res.AssetManager): List<String> =
-    (runCatching { assets.list(OTHER_CHANNELS_DIR)?.toList() }.getOrNull().orEmpty())
+/** Todas las listas .m3u/.m3u8 de assets/listas/, salvo las fuentes fijas ya registradas. */
+private fun allPlaylistFiles(assets: android.content.res.AssetManager): List<String> =
+    (runCatching { assets.list(LISTS_DIR)?.toList() }.getOrNull().orEmpty())
         .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
-        .filter { it.lowercase() !in FIXED_LIST_FILES && it.lowercase() !in IGNORED_LIST_FILES }
+        .filter { it.lowercase() !in FIXED_LIST_FILES }
         .sorted()
 
 private fun buildRepository(cacheDir: File, assets: android.content.res.AssetManager): ContentRepository {
@@ -129,7 +128,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             contentHint = com.quilmes.xuper.data.ContentKind.OTHER_VOD,
             enrichMetadata = false,
             maxPerRow = 80,
-            maxRows = 120,
+            maxRows = 100_000,
         ),
         // Listas locales que ya venían en el proyecto. Antes se borraban sus copias de filesDir
         // al iniciar, pero no se reinstalaban ni se registraban como fuentes del catálogo.
@@ -140,7 +139,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             homeRows = 1,
             enrichMetadata = false,
             maxPerRow = 80,
-            maxRows = 80,
+            maxRows = 100_000,
         ),
         M3uSource(
             name = "Lista extendida",
@@ -149,7 +148,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             homeRows = 0,
             enrichMetadata = false,
             maxPerRow = 80,
-            maxRows = 120,
+            maxRows = 100_000,
         ),
         M3uSource(
             name = "Mi lista",
@@ -158,7 +157,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             homeRows = 0,
             enrichMetadata = false,
             maxPerRow = 60,
-            maxRows = 20,
+            maxRows = 100_000,
         ),
         M3uSource(
             name = "Películas de dominio público",
@@ -168,7 +167,7 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             contentHint = com.quilmes.xuper.data.ContentKind.MOVIE,
             enrichMetadata = false,
             maxPerRow = 60,
-            maxRows = 10,
+            maxRows = 100_000,
         ),
     )
     val rawAccountText = runCatching {
@@ -208,19 +207,20 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
                 maxRows = if (isAdultPlaylist) 1_000 else 200,
             )
         }
-    // "Otros canales para ver" (pestaña Argentina): los .m3u de assets/listas/ que no son de nombre fijo ni están ignorados.
-    // No aparece en Inicio (homeRows = 0); sus canales en vivo se agrupan por group-title abajo de todo en ARGENTINA.
-    val otherChannelSources = otherChannelFiles(assets)
+    // Todas las listas adicionales se registran para LISTAS IPTV. Solo el subconjunto curado
+    // (liveOthers=true) también se muestra en "Otros canales" de ARGENTINA; index.m3u y duplicados
+    // siguen disponibles en el navegador sin inundar esa pestaña.
+    val otherChannelSources = allPlaylistFiles(assets)
         .map { file ->
             M3uSource(
-                name = "Otros: " + file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim(),
-                url = File(File(cacheDir, OTHER_CHANNELS_DIR), file).toURI().toString(),
+                name = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim(),
+                url = File(File(cacheDir, LISTS_CACHE_DIR), file).toURI().toString(),
                 icon = "📺",
                 homeRows = 0,
                 enrichMetadata = false,
-                maxPerRow = 100_000,
+                maxPerRow = 60,
                 maxRows = 100_000,
-                liveOthers = true,
+                liveOthers = file.lowercase() in ARGENTINA_OTHER_LIST_FILES,
             )
         }
     return M3uRepository(
@@ -354,11 +354,10 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.w("XuperQuilmesTV", "Lista no incluida en el APK: $name (assets/$LISTS_DIR/$name)", error)
             }
         }
-        // Contenido oculto (assets/contenido_oculto/*.m3u) y "Otros canales para ver" (assets/listas/*.m3u que no son
-        // de nombre fijo ni están ignoradas): se copian a filesDir/<carpeta>/.
+        // Contenido oculto y todas las listas adicionales se copian a filesDir/<carpeta>/.
         val copies = listOf(
             MY_LISTS_DIR to (runCatching { assets.list(MY_LISTS_DIR)?.toList() }.getOrNull().orEmpty()),
-            OTHER_CHANNELS_DIR to otherChannelFiles(assets),
+            LISTS_CACHE_DIR to allPlaylistFiles(assets),
         )
         for ((folder, names) in copies) {
             runCatching {

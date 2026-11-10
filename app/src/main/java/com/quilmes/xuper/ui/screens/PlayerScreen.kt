@@ -1075,8 +1075,8 @@ private fun NativePlayerScreen(
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
-                // Un criterio uniforme de sincronización para evitar cambios de estrategia
-                // entre avance y retroceso en streams HLS de Android TV.
+                // El avance usa el keyframe más cercano; el retroceso cae siempre en el
+                // keyframe anterior para no saltarse el punto solicitado.
                 setSeekParameters(SeekParameters.CLOSEST_SYNC)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .apply {
@@ -1129,10 +1129,11 @@ private fun NativePlayerScreen(
             delay(220)
             val finalTarget = pendingSeekPosition ?: boundedTarget
             runCatching {
-                // Usar un único criterio en ambas direcciones evita alternar estrategias
-                // de sincronización en HLS, que en algunos decodificadores de Android TV
-                // puede dejar el seek esperando un keyframe anterior que nunca llega.
-                exoPlayer.setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                // El criterio depende del sentido: atrás nunca salta al siguiente keyframe.
+                val seekFrom = exoPlayer.currentPosition.coerceAtLeast(0L)
+                exoPlayer.setSeekParameters(
+                    if (finalTarget < seekFrom) SeekParameters.PREVIOUS_SYNC else SeekParameters.CLOSEST_SYNC
+                )
                 exoPlayer.seekTo(finalTarget)
                 lastSeekAtMs = SystemClock.elapsedRealtime()
             }
@@ -1217,7 +1218,7 @@ private fun NativePlayerScreen(
             val currentPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
             val item = exoPlayer.currentMediaItem
             val seeking = pendingSeekPosition != null || seekCommitJob?.isActive == true ||
-                now - lastSeekAtMs < 8_000L
+                now - lastSeekAtMs < 3_000L
             val shouldMonitor = exoPlayer.playWhenReady &&
                 exoPlayer.playbackState != Player.STATE_IDLE &&
                 exoPlayer.playbackState != Player.STATE_ENDED &&
@@ -1240,7 +1241,7 @@ private fun NativePlayerScreen(
             }
             lastPosition = currentPosition
 
-            if (stagnantMs >= 15_000L && now - lastRecoveryAt >= 30_000L) {
+            if (stagnantMs >= 8_000L && now - lastRecoveryAt >= 20_000L) {
                 if (recoveryCount >= 2) {
                     error = "La reproducción sigue trabada. Probá cambiar de fuente o volver a entrar."
                     showControls = true
@@ -1249,7 +1250,7 @@ private fun NativePlayerScreen(
                 }
                 recoveryCount++
                 lastRecoveryAt = now
-                val resumeAt = (currentPosition - 5_000L).coerceAtLeast(0L)
+                val resumeAt = (currentPosition - 3_000L).coerceAtLeast(0L)
                 android.util.Log.w(
                     "XuperPlayback",
                     "VOD freeze recovery $recoveryCount/2 at ${currentPosition}ms -> ${resumeAt}ms"
@@ -1523,6 +1524,7 @@ private fun NativePlayerScreen(
             hubNotice = "OpenSubtitles está disponible para películas, series y episodios, no para canales en vivo."
             return
         }
+        subtitlePickerOpen = false
         openSubtitlesDialogOpen = true
         openSubtitlesLoading = true
         openSubtitlesStatus = "Buscando subtítulos en español e inglés…"
@@ -1584,6 +1586,7 @@ private fun NativePlayerScreen(
                     saveOpenSubtitleTrack(context, currentTitleId.ifBlank { name }, openSubtitleTracks)
                     reloadWithSavedSubtitles()
                     openSubtitlesDialogOpen = false
+                    subtitlePickerOpen = true
                     openSubtitlesStatus = "Subtítulo agregado al reproductor."
                     hubNotice = "✓ Subtítulo de OpenSubtitles agregado. Abrí CC para seleccionarlo."
                     showControls = true
@@ -1838,9 +1841,6 @@ private fun NativePlayerScreen(
                         subtitlePickerVisibleCount = 6
                         subtitlePickerOpen = true
                     }) { Text("CC  Subtítulos") }
-                    if (!isLive) {
-                        Button(onClick = { searchOpenSubtitles() }) { Text("Buscar subtítulos") }
-                    }
                 }
                 hubNotice?.let { notice ->
                     Text(notice, color = Color.White, fontSize = 14.sp, modifier = Modifier.background(Color(0xCC14202B), RoundedCornerShape(8.dp)).padding(12.dp))
@@ -1918,6 +1918,12 @@ private fun NativePlayerScreen(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Text("Subtítulos disponibles", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                if (!isLive) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { searchOpenSubtitles() },
+                    ) { Text("＋  Buscar en OpenSubtitles") }
+                }
                 Text(
                     if (subtitleOptions.isEmpty()) "Todavía no se detectaron pistas. Esperá unos segundos o probá después de que termine de cargar el video."
                     else "Mostrando ${minOf(subtitlePickerVisibleCount, subtitleOptions.size)} de ${subtitleOptions.size} idiomas/pistas.",
