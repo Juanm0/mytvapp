@@ -257,3 +257,9 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 - **Ventana de captura**: espera a que aparezcan pistas y 1,2 s sin nuevas pistas; límite de 25 s, como el resolvedor CineSrc. Se registran cantidades y nombres en Logcat con la etiqueta `XuperSubtitles`.
 - **Pistas**: se pasan todas las pistas capturadas a Media3, sin filtrarlas por idioma ni depender de la pista de audio seleccionada. Se conserva `display` completo; alias como `Ea`, `Es Spanish` y `Spanish` se normalizan a `Español`, mientras `Spanish (LA)` se muestra como `Español (Latinoamérica)`.
 - **Pruebas estáticas**: el JavaScript de captura pasó `node --check` y una prueba local confirmó la extracción de dos URLs de subtítulos desde una respuesta JSON. No se pudo compilar el APK ni probar el comportamiento en una TV en este entorno.
+
+## OpenSubtitles.com (subtítulos adicionales)
+
+Xuper incorpora el cliente REST de OpenSubtitles API v1. La API Key del Consumer se empaqueta como `BuildConfig.OPEN_SUBTITLES_API_KEY` desde `app/build.gradle.kts`; el usuario final no tiene que introducirla ni configurar una cuenta. En el reproductor nativo, `Buscar subtítulos` consulta español e inglés, permite elegir un resultado, descarga el archivo y lo agrega como pista local junto con las pistas capturadas desde CineSrc. La pista descargada queda registrada por título para volver a aparecer cuando se reabra ese contenido.
+
+Si se reemplaza la API Key del Consumer, actualizar el valor `openSubtitlesApiKey` en `app/build.gradle.kts`. La clave embebida en un APK puede extraerse inspeccionando el paquete; para distribuir Xuper públicamente conviene trasladar las llamadas a un backend propio y no compartir la clave directamente desde cada instalación.

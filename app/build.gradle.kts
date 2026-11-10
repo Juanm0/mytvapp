@@ -12,6 +12,8 @@ val xuperLocalProperties = Properties().apply {
 }
 val tmdbApiKey = xuperLocalProperties.getProperty("TMDB_API_KEY", "")
 val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
+val openSubtitlesApiKey = "am1oXmZFU0guGE0UCsQ0exQd3PGBDKNg"
+val escapedOpenSubtitlesApiKey = openSubtitlesApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.quilmes.xuper"
@@ -22,6 +24,7 @@ android {
     defaultConfig {
         applicationId = "com.quilmes.xuper"
         buildConfigField("String", "TMDB_API_KEY", "\"$escapedTmdbApiKey\"")
+        buildConfigField("String", "OPEN_SUBTITLES_API_KEY", "\"$escapedOpenSubtitlesApiKey\"")
         minSdk = 24
         targetSdk = 34
         versionCode = 1
