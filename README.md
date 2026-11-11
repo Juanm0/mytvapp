@@ -23,7 +23,7 @@ En la ficha de películas y en cada episodio, las opciones oficiales son, en est
 
 **Prueba 2 / Vidzy (`vidzy.org`) está eliminado** como opción de producto. No volver a agregarlo salvo pedido explícito del usuario. Las rutas, funciones y referencias a ese reproductor deben permanecer eliminadas.
 
-**CineSrc (`cinesrc.st`) NO es un botón de la ficha normal**: vive solo en la categoría **LAB** (ver sección "LAB"). El orden oficial de botones Reproducir, Latino, Alternativo, Prueba no cambia.
+**CineSrc (`cinesrc.st`) no es un botón de la ficha**: el flujo principal de INICIO lo usa en segundo plano para capturar subtítulos y reproducir el video con Media3. No debe confundirse con los reproductores alternativos de la ficha.
 
 Los identificadores internos de petición que usa `DetailScreen` y resuelve `MainActivity` son:
 
@@ -44,7 +44,7 @@ Para episodios, el ID lleva el formato `tmdb-tv-<id>|s<temporada>|e<episodio>`. 
 - `app/src/main/java/com/quilmes/xuper/ui/screens/WebHubKeyRouter.kt`: enrutamiento de teclas del mando para controles web.
 - `app/src/main/java/com/quilmes/xuper/ui/screens/XuperWebRequestFilter.kt` y `XuperBraveAdblock.kt`: filtrado de solicitudes y protección frente a publicidad/redirecciones.
 - `app/src/main/java/com/quilmes/xuper/data/TmdbCatalogService.kt`: metadatos TMDB de catálogo, temporadas, episodios y títulos relacionados.
-- `app/src/main/java/com/quilmes/xuper/ui/screens/LabScreen.kt`: categoría **LAB** (catálogo TMDB completo + reproducción con CineSrc). Ver sección "LAB".
+- `app/src/main/java/com/quilmes/xuper/ui/screens/LabScreen.kt`: pantalla de catálogo principal usada por INICIO y BUSCAR (TMDB + reproducción CineSrc/VideoAPI). El nombre de archivo es histórico.
 - `app/src/main/java/com/quilmes/xuper/data/M3uRepository.kt` e `IptvAccountTextParser.kt`: soporte de listas/fuentes IPTV y parsing de cuentas M3U.
 
 La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se eliminó (tenía código de FrameXTV). **Editar siempre** `app/src/main/java/com/quilmes/xuper/ui/screens/PlayerScreen.kt`.
@@ -260,7 +260,7 @@ La copia antigua `PlayerScreen.kt` que había en la raíz del proyecto se elimin
 
 ## OpenSubtitles.com (subtítulos adicionales)
 
-Xuper incorpora el cliente REST de OpenSubtitles API v1. La API Key del Consumer se empaqueta como `BuildConfig.OPEN_SUBTITLES_API_KEY` desde `app/build.gradle.kts`; el usuario final no tiene que introducirla ni configurar una cuenta. En el reproductor nativo, desde el selector `CC · Subtítulos` se accede a `Buscar en OpenSubtitles`; consulta español e inglés, permite elegir un resultado, descarga el archivo y lo agrega como pista local junto con las pistas capturadas desde CineSrc. La pista descargada queda registrada por título para volver a aparecer cuando se reabra ese contenido.
+Xuper incorpora el cliente REST de OpenSubtitles API v1. La API Key del Consumer se empaqueta como `BuildConfig.OPEN_SUBTITLES_API_KEY` desde `app/build.gradle.kts`; el usuario final no tiene que introducirla ni configurar una cuenta. En el reproductor nativo, `Buscar subtítulos` consulta español e inglés, permite elegir un resultado, descarga el archivo y lo agrega como pista local junto con las pistas capturadas desde CineSrc. La pista descargada queda registrada por título para volver a aparecer cuando se reabra ese contenido.
 
 Si se reemplaza la API Key del Consumer, actualizar el valor `openSubtitlesApiKey` en `app/build.gradle.kts`. La clave embebida en un APK puede extraerse inspeccionando el paquete; para distribuir Xuper públicamente conviene trasladar las llamadas a un backend propio y no compartir la clave directamente desde cada instalación.
 
@@ -269,9 +269,8 @@ Si se reemplaza la API Key del Consumer, actualizar el valor `openSubtitlesApiKe
 
 > **Reemplaza** las rutas de las secciones anteriores (`assets/mis-listas/`, `assets/otros-canales/` y `argentina.m3u` suelta en la raíz de assets): el usuario reorganizó las carpetas y el código se reapuntó (`MainActivity.kt`).
 
-- `app/src/main/assets/listas/`: todas las listas. Las de **nombre fijo** (`argentina.m3u`, `lista-extendida.m3u`, `mi-lista.m3u`, y `iptv-extra.m3u`, `peliculas-dominio-publico.m3u`, `vod-original.m3u` si existieran) se copian a `filesDir/` y las lee `buildRepository` por nombre. **Todas las demás listas `.m3u`/`.m3u8` de esta carpeta se registran como fuentes M3U y aparecen en la nueva pantalla lateral `LISTAS IPTV`**, incluidas `index.m3u`, `iptv-accounts-raw.m3u`, `tv argentinas.m3u` y `tv-online2.m3u`.
-- `ARGENTINA_OTHER_LIST_FILES` (`MainActivity.kt`) define el subconjunto curado que también se mezcla en ARGENTINA → "Otros canales" (`tv-argentinas.m3u` y `tv-online.m3u`). Las demás listas, incluidas las enormes y duplicadas, siguen disponibles en `LISTAS IPTV` sin llenar ARGENTINA de miles de señales repetidas. El índice lateral permite saltar a cada lista/grupo y el buscador filtra títulos, nombres de listas y categorías en todas las fuentes visibles.
-- Las fuentes locales fijas y las listas adicionales publican hasta 100.000 grupos para evitar el truncamiento por los límites anteriores (20/80/120/200 filas). El catálogo grande `index.m3u` se mantiene fuera de ARGENTINA para no inundar esa pestaña, pero queda navegable desde `LISTAS IPTV`.
+- `app/src/main/assets/listas/`: todas las listas. Las de **nombre fijo** (`argentina.m3u`, `lista-extendida.m3u`, `mi-lista.m3u`, y `iptv-extra.m3u`, `peliculas-dominio-publico.m3u`, `vod-original.m3u` si existieran) se copian a `filesDir/` y las lee `buildRepository` por nombre. Todo otro `.m3u` suelto en esta carpeta se registra solo como **"Otros canales para ver"** (hoy `tv-argentinas.m3u` y `tv-online.m3u`). Si una lista de nombre fijo está suelta en la raíz de assets, también se encuentra (respaldo).
+- **Ignorados a propósito** (`IGNORED_LIST_FILES` en `MainActivity.kt`): `tv argentinas.m3u` y `tv-online2.m3u` (copias exactas de `tv-argentinas.m3u` y `tv-online.m3u`). `iptv-accounts-raw.m3u` e `index.m3u` sí se registran como fuentes explorables.
 - `app/src/main/assets/contenido_oculto/`: cada `.m3u` se registra sola como fuente. `xxx.m3u` es la lista de la sección **+18** (el nombre de la fuente tiene que seguir siendo `xxx`, `+18` o `18+`).
 - **Causa del problema que hubo**: el commit "añadimos las listas" movió los archivos a estas carpetas pero el código seguía leyendo las carpetas viejas, y por eso desaparecieron Argentina, "Otros canales" y +18.
 
@@ -282,17 +281,21 @@ Si se reemplaza la API Key del Consumer, actualizar el valor `openSubtitlesApiKe
 - **Secuencia**: 3 toques seguidos en INICIO (sin otro ítem en medio y con menos de 2 s entre toques) -> suena `sonido.mp3` y el gatito de la barra (`SideBar`, `logo_splash`) queda habilitado -> 67 toques al gatito. Al llegar a 64 sale el cartel "Usted es desarrollador en 3.2.1"; al 67 sale "Opciones de desarrollador habilitadas", se guarda y LAB aparece en la barra.
 - **Gatito**: antes de habilitarse es una imagen inerte (sin foco ni toque). Habilitado usa `clickable` propio (no los envoltorios de `TouchSupport`, cuyo antirrebote de 250 ms perdería toques rápidos) y descarta las repeticiones de OK mantenido, así una pulsación larga cuenta una vez. Ya desbloqueado, tocar el logo vuelve a mostrar/ocultar los nombres en celular (función que antes estaba siempre activa).
 - **Sonido** (`data/DeveloperUnlockSound.kt`): lee `app/src/main/assets/sonido.mp3` en tiempo de ejecución. Si falta, no falla: deja un aviso en Logcat (`adb logcat -s XuperDev`).
-- **Buscador**: `BUSCAR` abre `LabScreen(startInSearch = true)`, es decir, el mismo buscador `search/multi` de TMDB que usa INICIO, la misma ficha de temporadas/episodios y el mismo flujo VideoAPI + CineSrc. No mezcla resultados de las listas M3U de LAB ni abre la ficha antigua de `DetailScreen`. El contenido +18 conserva su pantalla propia.
+- **Buscador**: el acceso BUSCAR abre el buscador del catálogo principal (`LabScreen`), con TMDB `search/multi` y reproducción CineSRC/VideoAPI. Las listas LAB no se mezclan en sus resultados. El antiguo `SearchScreen` queda como implementación legada.
 - **Verificado**: sintaxis Kotlin (tree-sitter) de los archivos tocados; la lógica de `DeveloperMode.kt` se compiló con kotlinc 1.9.24 contra stubs de Android y se ejecutó (contadores, ventana de 2 s, aviso en 64, desbloqueo en 67, persistencia entre procesos y `disable()`). **No verificado**: compilación del APK con Gradle ni comportamiento en una TV/celular (foco del gatito con el mando, sonido real, cartelitos).
 
 
 
-### Actualización: subtítulos unificados, navegador M3U y búsqueda de INICIO (10/11/2026)
+## Cambios de mantenimiento — 10/11/2026
 
-- **Un solo administrador de subtítulos para películas y episodios**: `HomePlayerScreen` ya no activa `labMode`; utiliza los controles nativos normales de `PlayerScreen`. Las pistas capturadas de CineSrc, las pistas descargadas de OpenSubtitles y las pistas externas guardadas se incorporan al mismo `MediaItem` de Media3 y se eligen desde **CC · Subtítulos**. Desde ese mismo selector se abre **Buscar en OpenSubtitles**; al descargar una pista se vuelve al selector para poder activarla. Se evita mostrar el panel experimental de subtítulos LAB en el reproductor principal.
-- **Ventana CineSrc**: la espera para recopilar pistas comienza cuando VideoAPI entrega el HLS, no desde que empezó toda la resolución. Se espera hasta 1,2 s sin nuevas pistas o un máximo de 12 s desde que se capturó el video. Así, una resolución lenta de VideoAPI no hace que CineSrc pierda su ventana de captura.
-- **LISTAS IPTV**: nueva opción en la barra lateral con buscador global y dos paneles. A la izquierda se muestran todas las categorías/grupos de las fuentes M3U cargadas; a la derecha hay un índice navegable para saltar directamente a una lista/grupo. La búsqueda incluye nombre de canal/título, categoría y nombre de fuente. No se incluyen las fuentes +18 ocultas en esta pantalla.
-- **Fuentes**: ahora `allPlaylistFiles()` registra todos los `.m3u`/`.m3u8` de `assets/listas/` que no estén ya registrados como fuentes fijas. `index.m3u` (11.470 canales), `iptv-accounts-raw.m3u`, `tv argentinas.m3u` y `tv-online2.m3u` ya no se descartan del catálogo: solo quedan fuera de la mezcla curada de ARGENTINA para que no inunden esa pestaña. Todas se copian a `filesDir/listas/`. Se ampliaron los límites de publicación de las listas locales a 100.000 grupos para que `maxRows` no recorte el final.
-- **BUSCAR**: ahora abre `LabScreen` en modo búsqueda, reutilizando `search/multi` de TMDB, sus fichas de películas/series y el flujo de reproducción del INICIO. Los resultados ya no se combinan con `searchLabSources` ni se reproducen mediante el buscador antiguo.
-- **Seek de películas/series**: el criterio se elige según el sentido: retroceso `PREVIOUS_SYNC`, avance `CLOSEST_SYNC`. El vigilante VOD comienza a recuperar antes cuando detecta que la posición no avanza después de un seek (3 s de gracia y 8 s de estancamiento), reintentando reconstruir el mismo MediaItem cerca de la posición actual.
-- **Verificación**: lectura del código y revisión estática de los archivos tocados. El ZIP de entrada no trae wrapper Gradle y este entorno no tiene `gradle`/Android SDK, por lo que **no se pudo compilar el APK ni probar los seeks, subtítulos o navegación con mando en una TV real**. Se debe ejecutar `gradle assembleRelease --no-daemon` en el entorno Android del usuario y probar especialmente el índice con `index.m3u`, la búsqueda de una película/serie y varios saltos adelante/atrás.
+- **Buscador lateral**: BUSCAR abre el mismo catálogo/pantalla de INICIO (`LabScreen`), que consulta TMDB con `search/multi` y utiliza el flujo de reproducción CineSRC/VideoAPI. Ya no deriva a resultados de listas LAB.
+- **OpenSubtitles unificado**: la búsqueda de OpenSubtitles está dentro del selector general **CC / Subtítulos disponibles**, para películas y episodios en el reproductor nativo. Se quitó la entrada duplicada de los ajustes exclusivos de LAB. Las pistas descargadas se guardan por ID del título y se agregan al mismo selector que las pistas del proveedor.
+- **Navegador de listas**: desde ARGENTINA se abre **Explorar todas las listas**. La pantalla muestra el contenido de las fuentes M3U cargadas, un índice a la derecha con nombre de fuente/categoría/cantidad y búsqueda que filtra listas, categorías y títulos. No crea una categoría nueva en la barra lateral.
+- **Listas de assets/listas**: `index.m3u` deja de estar ignorada y se incorpora al navegador. Se mantienen fuera únicamente las dos copias exactas (`tv-online2.m3u`, `tv argentinas.m3u`); `iptv-accounts-raw.m3u` también se incluye porque contiene entradas distintas. Las fuentes `liveOthers` siguen agrupadas en ARGENTINA para su presentación habitual, pero su VOD también queda accesible desde el navegador.
+- **Seek VOD**: se deja de forzar `CLOSEST_SYNC` en cada salto y se usa `SeekParameters.DEFAULT`, manteniendo el seek agrupado para evitar decenas de operaciones concurrentes en el mando. El watchdog de recuperación existente permanece activo.
+
+## Límites y verificación pendiente
+
+- `index.m3u` es una lista grande (aprox. 23.800 líneas en esta copia); se carga en segundo plano con el límite de concurrencia ya existente. Puede tardar más que listas pequeñas.
+- El navegador muestra todas las categorías que `M3uRepository` haya podido parsear; una URL caída o una lista con formato no compatible seguirá sin entradas y queda registrada en Logcat (`XuperM3U`).
+- El cambio de seek reduce una causa conocida de bloqueos, pero la pantalla negra tras saltos debe verificarse con los streams concretos que fallaban en la TV. No se reemplazó ni rediseñó la UI del reproductor.

@@ -107,7 +107,7 @@ private data class MenuTarget(
  * abajo de todo, "Otros canales para ver" con el contenido de las listas de assets/listas/.
  */
 @Composable
-internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) {
+internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit, onBrowsePlaylists: () -> Unit = {}) {
     val context = LocalContext.current
     val store = remember { ChannelLayoutStore(context) }
     val iconStore = remember { ChannelIconStore(context) }
@@ -280,6 +280,10 @@ internal fun ArgentinaScreen(sections: List<Section>, onPlay: (String) -> Unit) 
         // Columnas de la grilla: se adaptan al ancho (TV o celular en horizontal).
         val gridGap = 14.dp
         val gridColumns = (((maxWidth - 96.dp) + gridGap) / (172.dp + gridGap)).toInt().coerceAtLeast(2)
+        Button(
+            onClick = onBrowsePlaylists,
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = 18.dp, end = 28.dp),
+        ) { Text("☷  EXPLORAR TODAS LAS LISTAS", fontSize = 14.sp) }
         LazyColumn(state = listState, contentPadding = PaddingValues(top = 28.dp, bottom = 48.dp)) {
             item(key = "heading") {
                 Text(

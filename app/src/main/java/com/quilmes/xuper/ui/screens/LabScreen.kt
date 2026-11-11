@@ -106,8 +106,6 @@ fun LabScreen(
     startInSearch: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
-    // Buscar usa exactamente el catálogo, la ficha y el reproductor del Inicio; no consulta
-    // resultados M3U de LAB ni deriva a la ficha/reproductor antiguo.
     var tabId by remember(startInSearch) { mutableStateOf(if (startInSearch) LAB_TABS[0].id else LabSession.tabId) }
     var searchText by remember(startInSearch) { mutableStateOf(if (startInSearch) "" else LabSession.query) }
     var activeQuery by remember(startInSearch) { mutableStateOf(if (startInSearch) "" else LabSession.query) }
@@ -116,10 +114,9 @@ fun LabScreen(
     var totalPages by remember(startInSearch) { mutableStateOf(if (startInSearch) 0 else LabSession.totalPages) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var selected by remember(startInSearch) { mutableStateOf(if (startInSearch) null else LabSession.selected) }
+    var selected by remember { mutableStateOf(LabSession.selected) }
 
     fun saveSession() {
-        if (startInSearch) return
         LabSession.tabId = tabId
         LabSession.query = activeQuery
         LabSession.items = items
@@ -159,13 +156,13 @@ fun LabScreen(
 
     fun openTitle(title: Title) {
         selected = title
-        if (!startInSearch) LabSession.selected = title
+        LabSession.selected = title
         LabSession.season = null
     }
 
     fun closeTitle() {
         selected = null
-        if (!startInSearch) LabSession.selected = null
+        LabSession.selected = null
         LabSession.season = null
     }
 
@@ -181,11 +178,11 @@ fun LabScreen(
     }
 
     LaunchedEffect(startInSearch) {
-        if (tabId != LAB_HOME_TAB && items.isEmpty()) load(tabId, activeQuery, true)
+        if (startInSearch || (tabId != LAB_HOME_TAB && items.isEmpty())) load(tabId, activeQuery, true)
     }
 
     // Atrás: de la ficha al listado; de una búsqueda al listado normal; de un listado al inicio del catálogo principal.
-    BackHandler(enabled = selected != null || activeQuery.isNotEmpty() || (!startInSearch && tabId != LAB_HOME_TAB)) {
+    BackHandler(enabled = selected != null || activeQuery.isNotEmpty() || tabId != LAB_HOME_TAB) {
         if (selected != null) {
             closeTitle()
         } else if (activeQuery.isNotEmpty()) {

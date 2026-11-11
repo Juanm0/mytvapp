@@ -222,7 +222,7 @@ fun HomePlayerScreen(
             onExit = onExit,
             directOnly = true,
             externalSubtitles = found.subtitles,
-            labMode = false,
+            labMode = true,
         )
         failure != null -> HomeMessage(
             message = failure.orEmpty(),
@@ -267,7 +267,6 @@ private fun HomeResolving(
     val finishScheduled = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
     val capturedSubtitles = remember(subtitleEmbedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
     val lastSubtitleCaptureAt = remember(subtitleEmbedUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
-    val videoCapturedAt = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
     val resolveStartedAt = remember(videoApiUrl, subtitleEmbedUrl, attempt) { SystemClock.uptimeMillis() }
     val subtitleBridge = remember(subtitleEmbedUrl, attempt) {
         object {
@@ -305,10 +304,7 @@ private fun HomeResolving(
                 val last = lastSubtitleCaptureAt.get()
                 val hasTracks = capturedSubtitles.isNotEmpty()
                 val quietLongEnough = hasTracks && now - last >= 1_200L
-                // La espera de subtítulos empieza cuando ya tenemos el HLS, no cuando empezó
-                // la resolución: VideoAPI puede tardar bastante más que CineSrc.
-                val captureBase = videoCapturedAt.get().takeIf { it > 0L } ?: resolveStartedAt
-                val timedOut = now - captureBase >= 12_000L
+                val timedOut = now - resolveStartedAt >= 25_000L
                 if (quietLongEnough || timedOut) {
                     if (done.compareAndSet(false, true)) {
                         val tracks = capturedSubtitles.values.toList()
@@ -426,7 +422,6 @@ private fun HomeResolving(
                     }
                 } else if (M3U8_URL.containsMatchIn(url)) {
                     if (streamCaptured.compareAndSet(false, true)) {
-                        videoCapturedAt.set(SystemClock.uptimeMillis())
                         val headers = req.requestHeaders.orEmpty()
                         val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value ?: videoApiUrl
                         val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: webUserAgent

@@ -1075,9 +1075,9 @@ private fun NativePlayerScreen(
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
-                // El avance usa el keyframe más cercano; el retroceso cae siempre en el
-                // keyframe anterior para no saltarse el punto solicitado.
-                setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                // Mantener la estrategia predeterminada de Media3: forzar CLOSEST_SYNC
+                // puede dejar ciertos streams HLS/decodificadores TV en pantalla negra tras un seek.
+                setSeekParameters(SeekParameters.DEFAULT)
                 trackSelectionParameters = trackSelectionParameters.buildUpon()
                     .apply {
                         if (labMode) {
@@ -1129,11 +1129,10 @@ private fun NativePlayerScreen(
             delay(220)
             val finalTarget = pendingSeekPosition ?: boundedTarget
             runCatching {
-                // El criterio depende del sentido: atrás nunca salta al siguiente keyframe.
-                val seekFrom = exoPlayer.currentPosition.coerceAtLeast(0L)
-                exoPlayer.setSeekParameters(
-                    if (finalTarget < seekFrom) SeekParameters.PREVIOUS_SYNC else SeekParameters.CLOSEST_SYNC
-                )
+                // Usar un único criterio en ambas direcciones evita alternar estrategias
+                // de sincronización en HLS, que en algunos decodificadores de Android TV
+                // puede dejar el seek esperando un keyframe anterior que nunca llega.
+                exoPlayer.setSeekParameters(SeekParameters.DEFAULT)
                 exoPlayer.seekTo(finalTarget)
                 lastSeekAtMs = SystemClock.elapsedRealtime()
             }
@@ -1241,7 +1240,7 @@ private fun NativePlayerScreen(
             }
             lastPosition = currentPosition
 
-            if (stagnantMs >= 8_000L && now - lastRecoveryAt >= 20_000L) {
+            if (stagnantMs >= 10_000L && now - lastRecoveryAt >= 20_000L) {
                 if (recoveryCount >= 2) {
                     error = "La reproducción sigue trabada. Probá cambiar de fuente o volver a entrar."
                     showControls = true
@@ -1250,7 +1249,7 @@ private fun NativePlayerScreen(
                 }
                 recoveryCount++
                 lastRecoveryAt = now
-                val resumeAt = (currentPosition - 3_000L).coerceAtLeast(0L)
+                val resumeAt = (currentPosition - 5_000L).coerceAtLeast(0L)
                 android.util.Log.w(
                     "XuperPlayback",
                     "VOD freeze recovery $recoveryCount/2 at ${currentPosition}ms -> ${resumeAt}ms"
@@ -1492,7 +1491,7 @@ private fun NativePlayerScreen(
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
     }
     fun moveLabFocus(delta: Int) {
-        labFocusRow = (labFocusRow + delta).coerceIn(0, 9)
+        labFocusRow = (labFocusRow + delta).coerceIn(0, 8)
         labFocusOption = when (labFocusRow) {
             0 -> labAudioSelected.coerceAtMost(labAudioOptions.lastIndex.coerceAtLeast(0))
             2 -> 0
@@ -1524,7 +1523,6 @@ private fun NativePlayerScreen(
             hubNotice = "OpenSubtitles está disponible para películas, series y episodios, no para canales en vivo."
             return
         }
-        subtitlePickerOpen = false
         openSubtitlesDialogOpen = true
         openSubtitlesLoading = true
         openSubtitlesStatus = "Buscando subtítulos en español e inglés…"
@@ -1556,8 +1554,7 @@ private fun NativePlayerScreen(
             5 -> labSubtitleDelayMs = 0L
             6 -> labUploadOpen = !labUploadOpen
             7 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
-            8 -> searchOpenSubtitles()
-            9 -> labSettingsOpen = false
+            8 -> labSettingsOpen = false
         }
     }
     fun downloadOpenSubtitle(option: OpenSubtitleOption) {
@@ -1586,7 +1583,6 @@ private fun NativePlayerScreen(
                     saveOpenSubtitleTrack(context, currentTitleId.ifBlank { name }, openSubtitleTracks)
                     reloadWithSavedSubtitles()
                     openSubtitlesDialogOpen = false
-                    subtitlePickerOpen = true
                     openSubtitlesStatus = "Subtítulo agregado al reproductor."
                     hubNotice = "✓ Subtítulo de OpenSubtitles agregado. Abrí CC para seleccionarlo."
                     showControls = true
@@ -1919,10 +1915,10 @@ private fun NativePlayerScreen(
             ) {
                 Text("Subtítulos disponibles", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 if (!isLive) {
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { searchOpenSubtitles() },
-                    ) { Text("＋  Buscar en OpenSubtitles") }
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = {
+                        subtitlePickerOpen = false
+                        searchOpenSubtitles()
+                    }) { Text("Buscar en OpenSubtitles") }
                 }
                 Text(
                     if (subtitleOptions.isEmpty()) "Todavía no se detectaron pistas. Esperá unos segundos o probá después de que termine de cargar el video."
@@ -2084,7 +2080,6 @@ private fun NativePlayerScreen(
                 LabSyncRow(labSubtitleDelayMs, labFocusRow == 5, labSubtitleDelayMs != labAppliedDelayMs)
                 LabSettingsRow("Subir subtítulos", listOf(if (labUploadOpen) "Cerrar QR" else "Subir desde el celular"), 0, labFocusRow == 6, 0, true)
                 LabSettingsRow("Resolución", listOf("Automático / 720p / 1080p disponibles"), 0, labFocusRow == 7, 0, true)
-                LabSettingsRow("OpenSubtitles", listOf("Buscar subtítulos en español e inglés"), 0, labFocusRow == 8, 0, true)
                 Box(Modifier.fillMaxWidth().padding(top = 3.dp), contentAlignment = Alignment.Center) {
                     Box(Modifier.width(220.dp).background(if (labFocusRow == 8) Brush.horizontalGradient(listOf(Color(0xFF00B98D), Color(0xFF168DC0))) else Brush.horizontalGradient(listOf(Color(0xFF39444C), Color(0xFF39444C))), RoundedCornerShape(22.dp)).padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
                         Text("Salida", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)

@@ -46,8 +46,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * Buscador principal: catálogo TMDB del Inicio; xxx.m3u solo con el modo +18 activo; contenido de LAB solo con las
- * opciones de desarrollador desbloqueadas.
+ * Buscador legado. La navegación principal ahora abre LabScreen para compartir el catálogo de Inicio/CineSRC.
+ * Se conserva por compatibilidad interna, sin incorporar resultados de LAB.
  */
 @Composable
 fun SearchScreen(
@@ -84,11 +84,8 @@ fun SearchScreen(
             val adultPlaylistResults = if (adultEnabled) {
                 withContext(Dispatchers.Default) { m3uRepository?.searchAdultSources(query).orEmpty() }
             } else emptyList()
-            // Contenido de LAB: solo con las opciones de desarrollador. Se combina después del catálogo normal.
-            val labResults = if (devEnabled) {
-                withContext(Dispatchers.Default) { m3uRepository?.searchLabSources(query).orEmpty() }
-            } else emptyList()
-            results = (tmdb + labResults + adultPlaylistResults).distinctBy { it.id }
+            // La búsqueda principal no mezcla resultados de listas experimentales/LAB.
+            results = (tmdb + adultPlaylistResults).distinctBy { it.id }
                 .filterNot { AdultContentSettings.isHiddenAdult(it) }.take(120)
         }
     }

@@ -63,6 +63,7 @@ fun MainScreen(
     val sections by repository.sections.collectAsState()
     val repositoryLoading by repository.loading.collectAsState()
     var dest by rememberSaveable { mutableStateOf("home") }
+    var showPlaylistBrowser by rememberSaveable { mutableStateOf(false) }
 
     // La sección +18 existe en la barra lateral solo con el ajuste activado (Perfil, protegido con PIN).
     val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
@@ -82,7 +83,6 @@ fun MainScreen(
         add(NavItem("home", "⌂", "INICIO"))
         add(NavItem("search", "⌕", "BUSCAR"))
         add(NavItem("live", "🇦🇷", "ARGENTINA"))
-        add(NavItem("playlists", "☷", "LISTAS IPTV"))
         add(NavItem("anime", "🎌", "ANIME"))
         if (devEnabled) add(NavItem("lab", "🧪", "LAB"))
         add(NavItem("favorites", "♡", "MI LISTA"))
@@ -94,7 +94,8 @@ fun MainScreen(
     // Si se apaga el modo desarrollador (o quedó "lab" guardado de antes), LAB deja de mostrarse.
     LaunchedEffect(devEnabled) { if (!devEnabled && dest == "lab") dest = "home" }
 
-    BackHandler(enabled = dest != "home") { dest = "home" }
+    BackHandler(enabled = showPlaylistBrowser) { showPlaylistBrowser = false }
+    BackHandler(enabled = dest != "home" && !showPlaylistBrowser) { dest = "home" }
 
     // La cola de "canal anterior/siguiente" de la pestaña Argentina solo vale para lo que se toca ahí:
     // desde cualquier otra pantalla se limpia para que el reproductor use su cola de siempre.
@@ -108,9 +109,9 @@ fun MainScreen(
             when (dest) {
                 // Inicio usa el catálogo TMDB y un único flujo de reproducción VideoAPI + subtítulos CineSrc.
                 "home" -> LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle)
-                "search" -> key("search") { LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle, startInSearch = true) }
-                "playlists" -> PlaylistBrowserScreen(repository = repository, onPlay = plainPlay)
-                "live" -> ArgentinaScreen(sections = sections, onPlay = onPlay)
+                "search" -> LabScreen(catalogService = catalogService, onPlay = onPlayHomeTitle, startInSearch = true)
+                "live" -> if (showPlaylistBrowser) PlaylistBrowserScreen(sections = sections, onPlay = plainPlay, onBack = { showPlaylistBrowser = false })
+                    else ArgentinaScreen(sections = sections, onPlay = onPlay, onBrowsePlaylists = { showPlaylistBrowser = true })
                 "anime" -> AnimeScreen(service = jkanimeService, adultService = adultAnimeService, onPlayEpisode = onPlayAnimeEpisode)
                 "lab" -> if (devEnabled) HomeScreen(repository = repository, onPlay = plainPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
@@ -128,7 +129,8 @@ fun MainScreen(
             }
             // +18 también dispara la carga inicial de las listas M3U locales.
             // Antes solo se refrescaban al entrar en ARGENTINA, dejando xxx.m3u vacío.
-            if (selected == "live" || selected == "playlists" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
+            if (selected == "live" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
+            if (selected != "live") showPlaylistBrowser = false
             dest = selected
         },
             modifier = Modifier.align(Alignment.CenterStart),
