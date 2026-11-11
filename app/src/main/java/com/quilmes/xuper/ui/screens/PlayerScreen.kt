@@ -969,9 +969,19 @@ private fun NativePlayerScreen(
     var openSubtitlesResults by remember(streamUrl) { mutableStateOf(emptyList<OpenSubtitleOption>()) }
     var openSubtitleDownloadingId by remember(streamUrl) { mutableStateOf<Long?>(null) }
     var subtitlePickerOpen by remember(streamUrl) { mutableStateOf(false) }
+    // En LAB, el selector de pistas sustituye temporalmente a Ajustes; nunca debe quedar
+    // el panel anterior dibujado por detrás. Al cerrar, volvemos al mismo menú y foco.
+    var returnToLabSettingsAfterSubtitleFlow by remember(streamUrl) { mutableStateOf(false) }
     var subtitlePickerVisibleCount by remember(streamUrl) { mutableStateOf(6) }
     var subtitleTracksVersion by remember(streamUrl) { mutableStateOf(0) }
     val openSubtitleFirstFocus = remember { FocusRequester() }
+    val subtitlePickerFirstFocus = remember { FocusRequester() }
+    LaunchedEffect(subtitlePickerOpen) {
+        if (subtitlePickerOpen) {
+            delay(80)
+            runCatching { subtitlePickerFirstFocus.requestFocus() }
+        }
+    }
     LaunchedEffect(openSubtitlesDialogOpen, openSubtitlesResults.size) {
         if (openSubtitlesDialogOpen) {
             delay(100)
@@ -1540,6 +1550,15 @@ private fun NativePlayerScreen(
         }
     }
 
+    fun closeSubtitleFlow() {
+        subtitlePickerOpen = false
+        openSubtitlesDialogOpen = false
+        if (returnToLabSettingsAfterSubtitleFlow) {
+            returnToLabSettingsAfterSubtitleFlow = false
+            labSettingsOpen = true
+        }
+    }
+
     fun confirmLabFocus() {
         when (labFocusRow) {
             0 -> applyLabAudio(labFocusOption)
@@ -1548,7 +1567,12 @@ private fun NativePlayerScreen(
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
             }
-            2 -> { subtitlePickerVisibleCount = 6; subtitlePickerOpen = true }
+            2 -> {
+                subtitlePickerVisibleCount = 6
+                returnToLabSettingsAfterSubtitleFlow = true
+                labSettingsOpen = false
+                subtitlePickerOpen = true
+            }
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
             5 -> labSubtitleDelayMs = 0L
@@ -1582,9 +1606,9 @@ private fun NativePlayerScreen(
                     openSubtitleTracks = (openSubtitleTracks.filterNot { it.url == track.url } + track).takeLast(20)
                     saveOpenSubtitleTrack(context, currentTitleId.ifBlank { name }, openSubtitleTracks)
                     reloadWithSavedSubtitles()
-                    openSubtitlesDialogOpen = false
+                    closeSubtitleFlow()
                     openSubtitlesStatus = "Subtítulo agregado al reproductor."
-                    hubNotice = "✓ Subtítulo de OpenSubtitles agregado. Abrí CC para seleccionarlo."
+                    hubNotice = "✓ Subtítulo agregado. Ya podés seleccionarlo en Ajustes → Pistas de subtítulos."
                     showControls = true
                 }
                 .onFailure { error ->
@@ -1650,8 +1674,7 @@ private fun NativePlayerScreen(
         exoPlayer.playWhenReady = wasPlaying
     }
     BackHandler(enabled = subtitlePickerOpen || openSubtitlesDialogOpen || (labMode && (labSettingsOpen || labPanelOpen))) {
-        if (subtitlePickerOpen) subtitlePickerOpen = false
-        else if (openSubtitlesDialogOpen) openSubtitlesDialogOpen = false
+        if (subtitlePickerOpen || openSubtitlesDialogOpen) closeSubtitleFlow()
         else if (labUploadOpen) labUploadOpen = false
         else if (labSettingsOpen) labSettingsOpen = false
         else labPanelOpen = false
@@ -1665,7 +1688,9 @@ private fun NativePlayerScreen(
         Modifier.fillMaxSize().background(Color.Black).focusRequester(rootFocusRequester).focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                if (secondaryPickerOpen) return@onPreviewKeyEvent false // el selector usa la navegación normal por foco
+                // Los diálogos de selección deben recibir las flechas/OK directamente.
+                // Si el root las consume, se convierten en seek y los botones nunca reciben foco.
+                if (secondaryPickerOpen || subtitlePickerOpen || openSubtitlesDialogOpen || labUploadOpen) return@onPreviewKeyEvent false
                 if (showControls) hubTick += 1
                 if (labMode) {
                     when (event.nativeKeyEvent.keyCode) {
@@ -1886,7 +1911,7 @@ private fun NativePlayerScreen(
                 ) { Text("Cancelar") }
             }
         }
-        if (subtitlePickerOpen) {
+        if (subtitlePickerOpen && !openSubtitlesDialogOpen) {
             // Leer las pistas directamente de ExoPlayer, sin depender del idioma de audio activo.
             val subtitleOptions = exoPlayer.currentTracks.groups
                 .filter { it.type == C.TRACK_TYPE_TEXT }
@@ -1909,16 +1934,16 @@ private fun NativePlayerScreen(
             @Suppress("UNUSED_VARIABLE") val tracksVersion = subtitleTracksVersion
             Box(Modifier.fillMaxSize().background(Color(0xB8000000)))
             Column(
-                Modifier.align(Alignment.Center).width(650.dp).heightIn(max = 620.dp)
-                    .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(22.dp),
+                Modifier.align(Alignment.Center).widthIn(max = 560.dp).fillMaxWidth(0.82f).heightIn(max = 470.dp)
+                    .background(Color(0xF21B242B), RoundedCornerShape(18.dp)).padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
-                Text("Subtítulos disponibles", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text("Subtítulos", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 if (!isLive) {
                     Button(modifier = Modifier.fillMaxWidth(), onClick = {
                         subtitlePickerOpen = false
                         searchOpenSubtitles()
-                    }) { Text("Buscar en OpenSubtitles") }
+                    }) { Text("＋  Buscar subtítulos online") }
                 }
                 Text(
                     if (subtitleOptions.isEmpty()) "Todavía no se detectaron pistas. Esperá unos segundos o probá después de que termine de cargar el video."
@@ -1930,13 +1955,13 @@ private fun NativePlayerScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Button(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().focusRequester(subtitlePickerFirstFocus),
                         onClick = {
                             exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                                 .clearOverridesOfType(C.TRACK_TYPE_TEXT)
                                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                                 .build()
-                            subtitlePickerOpen = false
+                            closeSubtitleFlow()
                         },
                     ) { Text("Desactivar subtítulos") }
                     subtitleOptions.take(subtitlePickerVisibleCount).forEachIndexed { index, option ->
@@ -1952,7 +1977,7 @@ private fun NativePlayerScreen(
                                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                                     .addOverride(androidx.media3.common.TrackSelectionOverride(group.mediaTrackGroup, trackIndex))
                                     .build()
-                                subtitlePickerOpen = false
+                                closeSubtitleFlow()
                             },
                         ) { Text("${if (group.isTrackSelected(trackIndex)) "✓  " else ""}${index + 1}. $label${if (detail.isNotBlank()) " · $detail" else ""}", maxLines = 2) }
                     }
@@ -1963,21 +1988,22 @@ private fun NativePlayerScreen(
                     } else {
                         Text("", color = Color.White)
                     }
-                    Button(onClick = { subtitlePickerOpen = false }) { Text("Aceptar") }
+                    Button(onClick = { closeSubtitleFlow() }) { Text("Aceptar") }
                 }
             }
         }
         if (openSubtitlesDialogOpen) {
             Box(Modifier.fillMaxSize().background(Color(0xB8000000)))
             Column(
-                Modifier.align(Alignment.Center).width(700.dp).heightIn(max = 570.dp)
-                    .background(Color(0xF21B242B), RoundedCornerShape(20.dp)).padding(22.dp),
+                Modifier.align(Alignment.Center).widthIn(max = 600.dp).fillMaxWidth(0.86f).heightIn(max = 460.dp)
+                    .background(Color(0xF21B242B), RoundedCornerShape(18.dp)).padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("OpenSubtitles · $name", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                Text("Subtítulos online", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(name, color = Color(0xFFB4C0CE), fontSize = 13.sp, maxLines = 1)
                 Text(openSubtitlesStatus, color = Color(0xFFB4C0CE), fontSize = 13.sp)
                 if (openSubtitlesLoading) {
-                    Text("Consultando catálogo…", color = Color(0xFF83E6D2), fontSize = 14.sp)
+                    Text("Buscando en OpenSubtitles…", color = Color(0xFF83E6D2), fontSize = 13.sp)
                 }
                 Column(
                     Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -2005,7 +2031,7 @@ private fun NativePlayerScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Button(
                         modifier = Modifier.then(if (openSubtitlesResults.isEmpty()) Modifier.focusRequester(openSubtitleFirstFocus) else Modifier),
-                        onClick = { openSubtitlesDialogOpen = false },
+                        onClick = { closeSubtitleFlow() },
                     ) { Text("Cerrar") }
                 }
             }
