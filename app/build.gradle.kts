@@ -133,11 +133,10 @@ tasks.named("preBuild").configure {
 
 chaquopy {
     defaultConfig {
-        // actions/setup-python coloca el Python 3.10 seleccionado al principio de PATH.
-        // Usar el comando "python" evita que Chaquopy intente resolver otro ejecutable
-        // (python3.10/python3) que puede no existir en el runner aunque Python esté instalado.
-        // En CI el workflow valida previamente que este comando sea exactamente Python 3.10.
-        buildPython("python")
+        // CI pasa la ruta absoluta obtenida de sys.executable en setup-python.
+        // No usar "python" por PATH: el runner puede resolver otra versión (por ejemplo 3.14).
+        // El fallback mantiene el build local si el desarrollador tiene Python 3.10 instalado.
+        buildPython(System.getenv("CHAQUOPY_BUILD_PYTHON") ?: "python3.10")
 
         // yt-dlp corre dentro de la app; no depende de Python/Termux instalado en el televisor.
         version = "3.10"
