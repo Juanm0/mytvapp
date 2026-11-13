@@ -26,12 +26,8 @@ val updateRepo = xuperLocalProperties.getProperty("UPDATE_REPO", System.getenv("
 val updateToken = xuperLocalProperties.getProperty("UPDATE_TOKEN", System.getenv("UPDATE_TOKEN") ?: "").trim()
 fun String.asBuildConfigString() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
-// Signing material is supplied by GitHub Actions secrets, never stored in the source tree.
-val releaseStorePath = System.getenv("XUPER_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
-val releaseStorePassword = System.getenv("XUPER_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
-val releaseKeyAlias = System.getenv("XUPER_KEY_ALIAS")?.takeIf { it.isNotBlank() }
-val releaseKeyPassword = System.getenv("XUPER_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
-val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
+// Se conserva la misma clave local del proyecto original para que las actualizaciones
+// se instalen sobre la versión anterior sin desinstalarla.
 val ciVersionCode = (findProperty("xuperVersionCode") as String?)?.toIntOrNull()
 
 android {
@@ -53,21 +49,21 @@ android {
     }
 
     signingConfigs {
-        if (hasReleaseSigning) {
-            create("xuperRelease") {
-                storeFile = file(releaseStorePath!!)
-                storePassword = releaseStorePassword!!
-                keyAlias = releaseKeyAlias!!
-                keyPassword = releaseKeyPassword!!
-            }
+        create("xuper") {
+            storeFile = file("xuper.keystore")
+            storePassword = "xuper123"
+            keyAlias = "xuper"
+            keyPassword = "xuper123"
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("xuper")
+        }
         release {
-            // Release is signed only when the private signing material is supplied by the environment.
             isMinifyEnabled = false
-            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("xuperRelease")
+            signingConfig = signingConfigs.getByName("xuper")
         }
     }
 
