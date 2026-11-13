@@ -352,3 +352,11 @@ La sección +18 conserva `AdultCatalogService` para categorías, búsqueda y min
 **Tolerancia a fallos:** el primer resolve hace hasta tres intentos con pausas progresivas. Si la reproducción falla, la app vuelve a resolver una URL temporal en vez de reutilizar una URL posiblemente vencida. Se conserva un límite de reintentos para no entrar en un bucle infinito.
 
 **Requisitos de compilación:** Chaquopy 17.2.0 y Python 3.10 en el equipo que compila. Se empaquetan ABI `arm64-v8a`, `armeabi-v7a` y `x86_64`; la inclusión del runtime de Python aumenta el tamaño del APK. Debe verificarse el tamaño final y probarse en un Android TV real. Esta integración no evita DRM, verificaciones de acceso ni restricciones del proveedor.
+
+### CI: intérprete de Python para Chaquopy (13/11/2026)
+
+- **Fallo observado**: `:app:installReleasePythonRequirements` terminaba con `Couldn't find Python 3.10`, aunque GitHub Actions ejecutaba `actions/setup-python`.
+- **Causa**: Chaquopy intenta detectar `python3.10` en `PATH`; `setup-python` garantiza `python`, pero no conviene depender del nombre del ejecutable que expone.
+- **Corrección**: el workflow obtiene la ruta absoluta con `sys.executable`, valida que sea Python 3.10 y la exporta como `CHAQUOPY_BUILD_PYTHON` en `GITHUB_ENV`. `app/build.gradle.kts` pasa esa ruta mediante `buildPython(...)`. En compilaciones locales sin esa variable, Chaquopy conserva su detección automática.
+- **Alcance**: no cambia la versión Python empaquetada (`3.10`), Chaquopy, `yt-dlp`, ni el código de reproducción.
+- **Verificación**: revisión estática del workflow y del bloque Gradle. La compilación completa debe confirmarse en GitHub Actions, donde se instala el intérprete real.
