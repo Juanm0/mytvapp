@@ -7,6 +7,13 @@ plugins {
     id("com.chaquo.python")
 }
 
+// Resolver el intérprete desde el proyecto (fuera del DSL de Chaquopy),
+// para evitar que el receiver anidado de defaultConfig oculte findProperty.
+val chaquopyBuildPython = providers.gradleProperty("chaquopyBuildPython")
+    .orElse(providers.environmentVariable("CHAQUOPY_BUILD_PYTHON"))
+    .getOrElse("python3.10")
+logger.lifecycle("Chaquopy build Python seleccionado: $chaquopyBuildPython")
+
 val xuperLocalProperties = Properties().apply {
     val propertiesFile = rootProject.file("local.properties")
     if (propertiesFile.exists()) propertiesFile.inputStream().use { this.load(it) }
@@ -133,13 +140,9 @@ tasks.named("preBuild").configure {
 
 chaquopy {
     defaultConfig {
-        // La ruta se pasa como propiedad en el mismo comando Gradle desde GitHub Actions.
-        // Así no dependemos de la propagación de variables entre pasos/acciones.
-        // En builds locales se puede usar -PchaquopyBuildPython=/ruta/al/python3.10.
-        val chaquopyPython = (findProperty("chaquopyBuildPython") as String?)
-            ?.takeIf { it.isNotBlank() }
-            ?: "python3.10"
-        buildPython(chaquopyPython)
+        // La ruta se resuelve en el nivel Project y se pasa explícitamente a Chaquopy.
+        // GitHub Actions la proporciona con -PchaquopyBuildPython y como variable de entorno.
+        buildPython(chaquopyBuildPython)
 
         // yt-dlp corre dentro de la app; no depende de Python/Termux instalado en el televisor.
         version = "3.10"
