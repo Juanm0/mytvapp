@@ -44,10 +44,14 @@ import androidx.tv.material3.Text
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.quilmes.xuper.data.ContentKind
+import com.quilmes.xuper.data.CatalogVideoResolver
 import com.quilmes.xuper.data.Title
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.WebSourceRegistry
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.ConcurrentHashMap
@@ -60,6 +64,8 @@ private data class HomeStream(
     val referer: String,
     val userAgent: String,
     val cookie: String = "",
+    val extraHeaders: Map<String, String> = emptyMap(),
+    val mimeType: String? = null,
     val subtitles: List<ExternalSubtitleTrack> = emptyList(),
 )
 
@@ -138,6 +144,7 @@ fun HomePlayerScreen(
     val context = LocalContext.current
     val videoApiUrl = remember(catalogId) { WebSourceRegistry.videoApiUrl(catalogId) }
     var attempt by remember(catalogId) { mutableStateOf(0) }
+    var automaticPlaybackRetries by remember(catalogId) { mutableStateOf(0) }
     var stream by remember(catalogId) { mutableStateOf<HomeStream?>(null) }
     var failure by remember(catalogId) { mutableStateOf<String?>(null) }
     var nextEpisode by remember(catalogId) { mutableStateOf<Title?>(null) }
@@ -196,6 +203,7 @@ fun HomePlayerScreen(
             name = name,
             streamUrl = found.url,
             streamHeaders = buildMap {
+                putAll(found.extraHeaders)
                 put("Referer", found.referer)
                 originOf(found.referer)?.let { put("Origin", it) }
                 put("User-Agent", found.userAgent)
@@ -208,12 +216,26 @@ fun HomePlayerScreen(
             directOnly = true,
             externalSubtitles = found.subtitles,
             labMode = true,
+            playbackRetryKey = automaticPlaybackRetries,
+            streamMimeType = found.mimeType,
+            onRetryPlayback = {
+                if (automaticPlaybackRetries >= 2) {
+                    false
+                } else {
+                    automaticPlaybackRetries += 1
+                    stream = null
+                    failure = null
+                    attempt += 1
+                    true
+                }
+            },
         )
         failure != null -> HomeMessage(
             message = failure.orEmpty(),
             onExit = onExit,
             onRetry = {
                 failure = null
+                automaticPlaybackRetries = 0
                 attempt += 1
             },
         )
@@ -244,6 +266,7 @@ private fun HomeResolving(
     onRetry: () -> Unit,
 ) {
     BackHandler { onExit() }
+    val context = LocalContext.current
     val handler = remember { Handler(Looper.getMainLooper()) }
     val done = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
     val streamCaptured = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
@@ -283,6 +306,60 @@ private fun HomeResolving(
             }
         }
         handler.postDelayed(poll, 250L)
+    }
+
+    // yt-dlp intenta resolver directamente el embed de VideoAPI para películas y episodios.
+    // Si no puede obtener una URL reproducible con subtítulos, continúa el capturador WebView
+    // existente sin alterar su comportamiento ni su fallback.
+    LaunchedEffect(videoApiUrl, attempt) {
+        try {
+            val resolved = CatalogVideoResolver.resolve(
+                context = context,
+                pageUrl = videoApiUrl,
+                maxAttempts = 3,
+            )
+            if (done.get()) return@LaunchedEffect
+            val referer = resolved.headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
+                ?: videoApiUrl
+            val userAgent = resolved.headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value
+                ?: "Mozilla/5.0 (Linux; Android TV) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+            val extractedTracks = resolved.subtitles.mapNotNull { subtitle ->
+                val mime = when (subtitle.extension) {
+                    "vtt" -> androidx.media3.common.MimeTypes.TEXT_VTT
+                    "srt" -> androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
+                    else -> null
+                } ?: return@mapNotNull null
+                ExternalSubtitleTrack(
+                    url = subtitle.url,
+                    referer = referer,
+                    language = subtitle.language,
+                    label = subtitle.label,
+                    mimeType = mime,
+                    source = "yt-dlp",
+                )
+            }
+            val tracks = if (extractedTracks.isNotEmpty()) extractedTracks else withContext(Dispatchers.IO) {
+                derivedVideoApiSubtitles(resolved.url, userAgent)
+            }
+            // If yt-dlp cannot resolve the page, the established WebView capture remains the fallback.
+            // An empty subtitle list is valid: the existing player can still play the direct stream.
+            if (done.compareAndSet(false, true)) {
+                android.util.Log.i("XuperYtDlp", "Video resuelto directamente (${resolved.quality}); ${tracks.size} subtítulo(s)")
+                foundState.value(HomeStream(
+                    url = resolved.url,
+                    referer = referer,
+                    userAgent = userAgent,
+                    extraHeaders = resolved.headers,
+                    mimeType = if (resolved.type == "hls") androidx.media3.common.MimeTypes.APPLICATION_M3U8
+                        else androidx.media3.common.MimeTypes.VIDEO_MP4,
+                    subtitles = tracks,
+                ))
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            android.util.Log.i("XuperYtDlp", "No se pudo resolver directamente; sigue el WebView existente: ${error.message}")
+        }
     }
 
     LaunchedEffect(videoApiUrl, attempt) {

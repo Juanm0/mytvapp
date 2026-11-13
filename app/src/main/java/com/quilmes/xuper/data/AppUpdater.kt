@@ -32,88 +32,88 @@ import java.net.UnknownHostException
 
 private const val TAG = "XuperUpdate"
 
-/** Una versión publicada en GitHub Releases. El tag del release es `v<versionCode>` (lo pone el workflow). */
+/** A published GitHub Release. Its tag is v<versionCode>. */
 data class UpdateInfo(
     val versionCode: Int,
     val versionName: String,
     val notes: String,
-    /** URL desde donde bajar el APK (con token: la URL de la API del asset; sin token: la pública). */
     val assetUrl: String,
     val sizeBytes: Long,
 )
 
 sealed interface UpdateState {
+    /** The app starts locked until GitHub confirms that this installation is current. */
+    object Checking : UpdateState
     object Idle : UpdateState
     data class Available(val info: UpdateInfo) : UpdateState
-    /** percent: 0..100. */
     data class Downloading(val info: UpdateInfo, val percent: Int) : UpdateState
-    /** Android pide "Instalar apps desconocidas" para Xuper; hay que permitirlo una vez. */
     data class NeedsPermission(val info: UpdateInfo, val file: File) : UpdateState
-    /** El APK ya está entregado al instalador del sistema (puede mostrar su propia confirmación). */
     data class Installing(val info: UpdateInfo) : UpdateState
+    /** info is null when the release check itself failed; retry then checks GitHub again. */
     data class Failed(val message: String, val info: UpdateInfo?, val file: File?) : UpdateState
 }
 
-/**
- * Actualizaciones automáticas de Xuper.
- *
- * Flujo: al abrir la app (onResume, máximo cada 30 min) se pregunta a GitHub cuál es el último release del repo
- * `BuildConfig.UPDATE_REPO`. Si su número (tag `v<N>`) es mayor que el versionCode instalado, se ofrece
- * actualizar: se descarga el APK a `cacheDir/updates/`, se comprueba que sea de Xuper y más nuevo, y se instala
- * con `PackageInstaller`. Android exige la MISMA firma que el APK instalado (por eso el keystore es fijo).
- * La confirmación final del sistema no se puede saltear en una instalación normal: hay que apretar OK en la tele.
- */
+/** Mandatory GitHub Releases updater. Android remains responsible for its installer/security confirmation. */
 object AppUpdater {
     const val INSTALL_ACTION = "com.quilmes.xuper.INSTALL_RESULT"
     private const val CHECK_INTERVAL_MS = 30 * 60 * 1000L
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    private val _state = MutableStateFlow<UpdateState>(UpdateState.Checking)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
-    private var lastCheckMs = 0L
+    private var lastSuccessfulCheckMs = 0L
+    private var checkInProgress = false
     private var job: Job? = null
     @Volatile private var lastApk: File? = null
 
-    // ---------------------------------------------------------------- consulta
-
-    /** Llamar desde onResume. Es barata: sin repo configurado no hace nada y, con repo, consulta como mucho cada 30 min. */
-    suspend fun check(context: Context) {
+    /** Called from Activity.onResume. The initial process check is never throttled. */
+    suspend fun check(context: Context, force: Boolean = false) {
         val app = context.applicationContext
-        val current = _state.value
-        // Volvió de Ajustes habiendo permitido la instalación: seguir sin pedir nada más.
-        if (current is UpdateState.NeedsPermission && canInstall(app)) {
-            job = scope.launch { install(app, current.info, current.file) }
-            return
+        when (val current = _state.value) {
+            is UpdateState.NeedsPermission -> {
+                if (canInstall(app)) {
+                    job?.cancel()
+                    job = scope.launch { install(app, current.info, current.file) }
+                }
+                return
+            }
+            UpdateState.Checking -> Unit
+            UpdateState.Idle -> Unit
+            is UpdateState.Failed -> if (force && current.info == null) Unit else return
+            else -> return
         }
-        if (BuildConfig.UPDATE_REPO.isBlank()) return
-        if (current !is UpdateState.Idle && current !is UpdateState.Available) return
+        if (checkInProgress) return
         val now = System.currentTimeMillis()
-        if (now - lastCheckMs < CHECK_INTERVAL_MS) return
-        lastCheckMs = now
+        if (!force && lastSuccessfulCheckMs != 0L && now - lastSuccessfulCheckMs < CHECK_INTERVAL_MS) return
 
-        val info = withContext(Dispatchers.IO) {
-            runCatching { fetchLatest() }
-                .onFailure { Log.w(TAG, "No se pudo consultar actualizaciones: ${it.message}") }
-                .getOrNull()
-        } ?: return
-        val installed = installedVersionCode(app)
-        if (info.versionCode > installed) {
-            Log.i(TAG, "Versión nueva: ${info.versionCode} (instalada: $installed)")
-            val now2 = _state.value
-            if (now2 is UpdateState.Idle || now2 is UpdateState.Available) _state.value = UpdateState.Available(info)
-        } else {
-            Log.i(TAG, "Al día (instalada: $installed, última publicada: ${info.versionCode})")
+        checkInProgress = true
+        _state.value = UpdateState.Checking
+        try {
+            val info = withContext(Dispatchers.IO) { fetchLatest() }
+            lastSuccessfulCheckMs = System.currentTimeMillis()
+            val installed = installedVersionCode(app)
+            if (info.versionCode > installed) {
+                Log.i(TAG, "Versión nueva: ${info.versionCode} (instalada: $installed)")
+                _state.value = UpdateState.Available(info)
+            } else {
+                Log.i(TAG, "Al día (instalada: $installed, última publicada: ${info.versionCode})")
+                _state.value = UpdateState.Idle
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo verificar la versión; Xuper permanece bloqueado", e)
+            _state.value = UpdateState.Failed(friendly(e), null, null)
+        } finally {
+            checkInProgress = false
         }
     }
 
-    /** Borra APK viejos de una actualización anterior. Llamar al abrir la app. */
     fun cleanupOldDownloads(context: Context) {
         if (_state.value is UpdateState.Downloading || _state.value is UpdateState.Installing) return
         runCatching { File(context.cacheDir, "updates").deleteRecursively() }
     }
-
-    // ---------------------------------------------------------------- acciones de la pantalla
 
     fun startUpdate(context: Context, info: UpdateInfo) {
         val app = context.applicationContext
@@ -133,32 +133,30 @@ object AppUpdater {
     }
 
     fun continueAfterPermission(context: Context) {
-        val s = _state.value as? UpdateState.NeedsPermission ?: return
+        val current = _state.value as? UpdateState.NeedsPermission ?: return
         val app = context.applicationContext
+        if (!canInstall(app)) return
         job?.cancel()
-        job = scope.launch { install(app, s.info, s.file) }
+        job = scope.launch { install(app, current.info, current.file) }
     }
 
+    /** The only action offered after any update/check/install failure. */
     fun retry(context: Context) {
-        val s = _state.value as? UpdateState.Failed ?: return
-        val info = s.info ?: run { _state.value = UpdateState.Idle; return }
-        val apk = s.file
-        if (apk != null && apk.isFile) {
+        val failed = _state.value as? UpdateState.Failed ?: return
+        val info = failed.info
+        val apk = failed.file
+        if (info != null && apk != null && apk.isFile) {
             val app = context.applicationContext
             job?.cancel()
             job = scope.launch { install(app, info, apk) }
-        } else {
+        } else if (info != null) {
             startUpdate(context, info)
+        } else {
+            scope.launch { check(context.applicationContext, force = true) }
         }
     }
 
-    /** "Más tarde" / "Cancelar": cierra el cartel (y corta la descarga si estaba en curso). */
-    fun cancelOrDismiss() {
-        job?.cancel()
-        _state.value = UpdateState.Idle
-    }
-
-    /** Abre la pantalla "Instalar apps desconocidas" de Xuper. Devuelve false si esta tele no la tiene. */
+    /** Opens Android's per-source install permission screen; it never bypasses that permission. */
     fun openInstallSettings(context: Context): Boolean {
         val intents = buildList {
             if (Build.VERSION.SDK_INT >= 26) {
@@ -172,18 +170,17 @@ object AppUpdater {
                 context.startActivity(intent)
                 return true
             } catch (_: Exception) {
-                // probar la siguiente
+                // Try the next Android settings entry point.
             }
         }
         return false
     }
 
-    // ---------------------------------------------------------------- resultado del instalador (UpdateInstallReceiver)
-
     internal fun onInstallResult(status: Int, message: String?) {
         if (status == PackageInstaller.STATUS_SUCCESS) {
-            // Normalmente Android cierra la app al reemplazarla, así que esto casi no se llega a ver.
+            // Android normally replaces/closes the process. If it stays alive, the verified APK is installed.
             _state.value = UpdateState.Idle
+            lastSuccessfulCheckMs = System.currentTimeMillis()
             return
         }
         val info = (_state.value as? UpdateState.Installing)?.info
@@ -191,15 +188,13 @@ object AppUpdater {
     }
 
     private fun describeFailure(status: Int, message: String?): String = when (status) {
-        PackageInstaller.STATUS_FAILURE_ABORTED -> "Se canceló la instalación."
+        PackageInstaller.STATUS_FAILURE_ABORTED -> "Android canceló la instalación. Podés reintentar."
         PackageInstaller.STATUS_FAILURE_CONFLICT -> "Android no pudo instalarla encima de la versión actual (firma o versión distinta)."
         PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "Esta actualización no es compatible con esta tele."
         PackageInstaller.STATUS_FAILURE_STORAGE -> "No hay espacio suficiente en la tele."
-        PackageInstaller.STATUS_FAILURE_BLOCKED -> "Android bloqueó la instalación."
+        PackageInstaller.STATUS_FAILURE_BLOCKED -> "Android bloqueó la instalación por sus controles de seguridad."
         else -> message?.takeIf { it.isNotBlank() } ?: "La instalación falló (código $status)."
     }
-
-    // ---------------------------------------------------------------- red
 
     private fun openConnection(url: String, accept: String, token: String?): HttpURLConnection =
         (URL(url).openConnection() as HttpURLConnection).apply {
@@ -211,10 +206,7 @@ object AppUpdater {
             if (!token.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $token")
         }
 
-    /**
-     * Abre la URL siguiendo las redirecciones a mano: el token (si hay) solo viaja a GitHub, nunca al
-     * servidor de descargas al que redirige (esa URL ya viene firmada).
-     */
+    /** The GitHub token is never forwarded to the redirected asset host. */
     private fun openFollowing(startUrl: String, accept: String, token: String?): HttpURLConnection {
         var url = startUrl
         var auth = token
@@ -224,40 +216,42 @@ object AppUpdater {
             if (code in 300..399) {
                 val location = conn.getHeaderField("Location")
                 conn.disconnect()
-                if (location.isNullOrBlank()) throw IllegalStateException("Redirección sin destino")
+                if (location.isNullOrBlank()) throw IllegalStateException("GitHub devolvió una redirección sin destino")
                 url = URL(URL(url), location).toString()
                 auth = null
-                return@repeat
+            } else {
+                return conn
             }
-            return conn
         }
-        throw IllegalStateException("Demasiadas redirecciones")
+        throw IllegalStateException("Demasiadas redirecciones al consultar GitHub")
     }
 
-    private fun fetchLatest(): UpdateInfo? {
+    private fun fetchLatest(): UpdateInfo {
+        val repo = BuildConfig.UPDATE_REPO.trim()
+        require(Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").matches(repo)) {
+            "No está configurado UPDATE_REPO. La actualización obligatoria no puede verificarse."
+        }
         val token = BuildConfig.UPDATE_TOKEN.ifBlank { null }
-        val api = "https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest"
+        val api = "https://api.github.com/repos/$repo/releases/latest"
         val conn = openFollowing(api, "application/vnd.github+json", token)
         try {
             val code = conn.responseCode
-            if (code == 404) {
-                Log.i(TAG, "Sin releases publicados (o el repo es privado y falta el token)")
-                return null
-            }
-            if (code !in 200..299) throw IllegalStateException("GitHub respondió HTTP $code")
+            if (code == 404) throw IllegalStateException("GitHub no encontró un Release publicado. Xuper no puede verificar esta versión.")
+            if (code !in 200..299) throw IllegalStateException("GitHub respondió HTTP $code al consultar actualizaciones")
             val json = JSONObject(conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             val versionCode = Regex("^v?(\\d+)$").find(json.optString("tag_name").trim())
-                ?.groupValues?.get(1)?.toIntOrNull() ?: return null
-            val assets = json.optJSONArray("assets") ?: return null
+                ?.groupValues?.get(1)?.toIntOrNull()
+                ?: throw IllegalStateException("El último Release no tiene un tag v<versionCode> válido")
+            val assets = json.optJSONArray("assets") ?: throw IllegalStateException("El Release no contiene APK")
             val asset = (0 until assets.length())
                 .mapNotNull { assets.optJSONObject(it) }
                 .firstOrNull { it.optString("name").endsWith(".apk", ignoreCase = true) }
-                ?: return null
+                ?: throw IllegalStateException("El último Release no contiene un archivo APK")
             val url = if (token != null) asset.optString("url") else asset.optString("browser_download_url")
-            if (url.isBlank()) return null
+            if (url.isBlank()) throw IllegalStateException("GitHub no informó la URL del APK")
             return UpdateInfo(
                 versionCode = versionCode,
-                versionName = "0.1.$versionCode",
+                versionName = json.optString("name").ifBlank { "0.1.$versionCode" },
                 notes = json.optString("body").trim(),
                 assetUrl = url,
                 sizeBytes = asset.optLong("size", 0L),
@@ -273,10 +267,8 @@ object AppUpdater {
             dir.listFiles()?.forEach { it.delete() }
             val part = File(dir, "Xuper-${info.versionCode}.part")
             val target = File(dir, "Xuper-${info.versionCode}.apk")
-
             val token = BuildConfig.UPDATE_TOKEN.ifBlank { null }
-            val accept = if (token != null) "application/octet-stream" else "*/*"
-            val conn = openFollowing(info.assetUrl, accept, token)
+            val conn = openFollowing(info.assetUrl, if (token != null) "application/octet-stream" else "*/*", token)
             try {
                 val code = conn.responseCode
                 if (code !in 200..299) throw IllegalStateException("La descarga falló (HTTP $code)")
@@ -310,18 +302,19 @@ object AppUpdater {
                 throw IllegalStateException("La descarga quedó incompleta. Probá de nuevo.")
             }
             if (!part.renameTo(target)) throw IllegalStateException("No se pudo guardar el archivo descargado")
-            validate(app, target)
+            validate(app, target, info.versionCode)
             target
         }
 
-    // ---------------------------------------------------------------- instalación
-
-    /** Defensa extra antes de entregarlo a Android: tiene que ser un APK de Xuper y más nuevo que el instalado. */
-    private fun validate(app: Context, apk: File) {
+    private fun validate(app: Context, apk: File, expectedVersionCode: Int) {
         val archive = app.packageManager.getPackageArchiveInfo(apk.absolutePath, 0)
             ?: throw IllegalStateException("El archivo descargado no es un APK válido")
         if (archive.packageName != app.packageName) throw IllegalStateException("El APK descargado es de otra aplicación")
-        if (versionCodeOf(archive) <= installedVersionCode(app)) {
+        val apkVersionCode = versionCodeOf(archive)
+        if (apkVersionCode != expectedVersionCode) {
+            throw IllegalStateException("El versionCode del APK no coincide con el tag del Release.")
+        }
+        if (apkVersionCode <= installedVersionCode(app)) {
             throw IllegalStateException("El APK descargado no es más nuevo que el instalado")
         }
     }
@@ -357,21 +350,20 @@ object AppUpdater {
         val installer = app.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
             setAppPackageName(app.packageName)
-            // Android 12+: si Xuper fue quien instaló la versión anterior, puede actualizarse sin pedir confirmación.
-            // Si no se cumplen las condiciones del sistema, simplemente pide confirmación como siempre.
-            if (Build.VERSION.SDK_INT >= 31) setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            if (Build.VERSION.SDK_INT >= 31) {
+                setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
         }
         val sessionId = installer.createSession(params)
         installer.openSession(sessionId).use { session ->
             apk.inputStream().use { input ->
-                session.openWrite("xuper.apk", 0, apk.length()).use { out ->
-                    input.copyTo(out)
-                    session.fsync(out)
+                session.openWrite("xuper.apk", 0, apk.length()).use { output ->
+                    input.copyTo(output)
+                    session.fsync(output)
                 }
             }
             val intent = Intent(app, UpdateInstallReceiver::class.java).setAction(INSTALL_ACTION)
             var flags = PendingIntent.FLAG_UPDATE_CURRENT
-            // El sistema agrega extras (estado, intent de confirmación): en Android 12+ tiene que ser mutable.
             if (Build.VERSION.SDK_INT >= 31) flags = flags or PendingIntent.FLAG_MUTABLE
             val pending = PendingIntent.getBroadcast(app, sessionId, intent, flags)
             session.commit(pending.intentSender)
@@ -380,7 +372,7 @@ object AppUpdater {
 
     private fun friendly(e: Exception): String = when (e) {
         is UnknownHostException, is ConnectException, is SocketTimeoutException ->
-            "No se pudo conectar. Revisá el internet de la tele."
+            "No se pudo conectar con GitHub. Revisá el internet de la tele y reintentá."
         else -> e.message?.takeIf { it.isNotBlank() } ?: "Error inesperado (${e.javaClass.simpleName})."
     }
 }

@@ -2,7 +2,6 @@ package com.quilmes.xuper.data
 
 import android.content.Context
 import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -20,19 +19,11 @@ data class ResolvedAdultVideo(
  * No requiere instalar Python ni Termux en el Android TV.
  */
 object AdultVideoResolver {
-    @Volatile private var started = false
-    private val startLock = Any()
-
     suspend fun resolve(context: Context, viewKey: String): ResolvedAdultVideo = withContext(Dispatchers.IO) {
         check(AdultContentSettings.isEnabled()) { "El perfil +18 está bloqueado." }
         require(AdultCatalogService.isValidViewKey(viewKey)) { "Identificador de video inválido." }
 
-        if (!started) synchronized(startLock) {
-            if (!started) {
-                if (!Python.isStarted()) Python.start(AndroidPlatform(context.applicationContext))
-                started = true
-            }
-        }
+        ChaquopyRuntime.ensureStarted(context)
 
         val jsonText = Python.getInstance()
             .getModule("adult_extractor")

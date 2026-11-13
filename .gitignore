@@ -5,3 +5,11 @@ local.properties
 build/
 app/build/
 .DS_Store
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+__pycache__/
+*.pyc

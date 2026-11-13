@@ -884,6 +884,9 @@ fun PlayerScreen(
     directOnly: Boolean = false,
     externalSubtitles: List<ExternalSubtitleTrack> = emptyList(),
     labMode: Boolean = false,
+    playbackRetryKey: Int = 0,
+    onRetryPlayback: (() -> Boolean)? = null,
+    streamMimeType: String? = null,
 ) {
     val isKnownEmbed = WebSourceRegistry.isVideoApiEmbedUrl(streamUrl) || WebSourceRegistry.isVidlyEmbedUrl(streamUrl) ||
         WebSourceRegistry.isVidLuxEmbedUrl(streamUrl) || WebSourceRegistry.isCineSrcEmbedUrl(streamUrl) ||
@@ -925,6 +928,9 @@ fun PlayerScreen(
         directOnly = directOnly,
         externalSubtitles = externalSubtitles,
         labMode = labMode,
+        playbackRetryKey = playbackRetryKey,
+        onRetryPlayback = onRetryPlayback,
+        streamMimeType = streamMimeType,
         onResolveAsWebPage = resolvePageCallback,
     )
 }
@@ -947,9 +953,14 @@ private fun NativePlayerScreen(
     directOnly: Boolean,
     externalSubtitles: List<ExternalSubtitleTrack>,
     labMode: Boolean,
+    playbackRetryKey: Int,
+    onRetryPlayback: (() -> Boolean)?,
+    streamMimeType: String?,
     onResolveAsWebPage: () -> Unit,
 ) {
     val context = LocalContext.current
+    val retryPlaybackState = rememberUpdatedState(onRetryPlayback)
+    var labPlaybackRetryPending by remember(streamUrl, playbackRetryKey) { mutableStateOf(false) }
     var error by remember(streamUrl) { mutableStateOf<String?>(null) }
     var showControls by remember(streamUrl, labMode) { mutableStateOf(!labMode) }
     var labPanelOpen by remember(streamUrl, labMode) { mutableStateOf(false) }
@@ -1112,6 +1123,7 @@ private fun NativePlayerScreen(
         val lowerUrl = url.lowercase()
         val item = MediaItem.Builder().setUri(url).apply {
             when {
+                !streamMimeType.isNullOrBlank() -> setMimeType(streamMimeType)
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
@@ -1435,6 +1447,27 @@ private fun NativePlayerScreen(
             }
             override fun onPlayerError(e: PlaybackException) {
                 val currentUrl = exoPlayer.currentMediaItem?.localConfiguration?.uri?.toString().orEmpty()
+                if (labMode && retryPlaybackState.value != null) {
+                    if (labPlaybackRetryPending) return
+                    if (playbackRetryKey >= 2) {
+                        error = "No se pudo recuperar el video después de varios intentos."
+                        showControls = true
+                        return
+                    }
+                    labPlaybackRetryPending = true
+                    val retryNumber = playbackRetryKey + 1
+                    error = "Se interrumpió la reproducción. Renovando el enlace (${retryNumber}/2)…"
+                    showControls = true
+                    seekScope.launch {
+                        delay(1_000L * (1 shl playbackRetryKey))
+                        val accepted = retryPlaybackState.value?.invoke() == true
+                        if (!accepted) {
+                            error = "No se pudo recuperar el video después de varios intentos."
+                            showControls = true
+                        }
+                    }
+                    return
+                }
                 if (!directOnly && currentUrl == streamUrl && isWebPageUrl(streamUrl)) {
                     onResolveAsWebPage()
                     return

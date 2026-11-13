@@ -24,7 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.tv.material3.Text
 import com.quilmes.xuper.data.AppUpdater
 import com.quilmes.xuper.data.UpdateState
@@ -35,10 +37,7 @@ import com.quilmes.xuper.ui.theme.XuperTextPrimary
 import com.quilmes.xuper.ui.theme.XuperTextSecondary
 import kotlinx.coroutines.delay
 
-/**
- * Cartel de actualización automática. Se pone una sola vez en MainActivity, arriba de la navegación:
- * no dibuja nada mientras no haya una actualización (estado Idle).
- */
+/** Mandatory update gate. It cannot be dismissed by Back or by touching outside the dialog. */
 @Composable
 fun UpdatePrompt() {
     val context = LocalContext.current
@@ -48,14 +47,22 @@ fun UpdatePrompt() {
 
     val firstButton = remember { FocusRequester() }
     var settingsFailed by remember { mutableStateOf(false) }
-    // El foco vuelve al primer botón cada vez que cambia el estado (los botones cambian con él).
     val stateKey = current.javaClass
     LaunchedEffect(stateKey) {
         delay(120)
         runCatching { firstButton.requestFocus() }
     }
 
-    Dialog(onDismissRequest = { AppUpdater.cancelOrDismiss() }) {
+    // Consume Android/TV Back while the mandatory gate is visible.
+    BackHandler(enabled = true) { }
+
+    Dialog(
+        onDismissRequest = { /* Mandatory: no dismiss path. */ },
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+    ) {
         Column(
             modifier = Modifier
                 .widthIn(min = 420.dp, max = 580.dp)
@@ -64,23 +71,25 @@ fun UpdatePrompt() {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             when (current) {
+                UpdateState.Checking -> {
+                    DialogTitle("Verificando Xuper…")
+                    DialogBody("Estamos comprobando en GitHub si esta instalación tiene la última versión. No cierres la aplicación.")
+                }
+
                 is UpdateState.Available -> {
-                    DialogTitle("Actualización disponible")
-                    DialogBody("Hay una versión nueva de Xuper (${current.info.versionName}). Se descarga y se instala en un minuto.")
+                    DialogTitle("Actualización obligatoria")
+                    DialogBody("Hay una versión nueva de Xuper (${current.info.versionName}). Para continuar, instalá esta actualización.")
                     if (current.info.notes.isNotBlank()) {
-                        DialogBody("Novedades: " + current.info.notes.take(300), dim = true)
+                        DialogBody("Novedades: " + current.info.notes.take(500), dim = true)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        DialogButton("Actualizar ahora", Modifier.focusRequester(firstButton)) {
-                            AppUpdater.startUpdate(context, current.info)
-                        }
-                        DialogButton("Más tarde") { AppUpdater.cancelOrDismiss() }
+                    DialogButton("ACTUALIZAR XUPER", Modifier.focusRequester(firstButton)) {
+                        AppUpdater.startUpdate(context, current.info)
                     }
                 }
 
                 is UpdateState.Downloading -> {
                     DialogTitle("Descargando actualización…")
-                    DialogBody("No apagues la tele ni salgas de Xuper. ${current.percent} %")
+                    DialogBody("Xuper permanecerá bloqueado hasta completar la actualización. ${current.percent} %")
                     Box(
                         Modifier
                             .fillMaxWidth()
@@ -94,47 +103,39 @@ fun UpdatePrompt() {
                                 .background(XuperAccentBright, RoundedCornerShape(5.dp)),
                         )
                     }
-                    DialogButton("Cancelar", Modifier.focusRequester(firstButton)) { AppUpdater.cancelOrDismiss() }
                 }
 
                 is UpdateState.NeedsPermission -> {
-                    DialogTitle("Falta un permiso (una sola vez)")
+                    DialogTitle("Permiso de instalación de Android")
                     DialogBody(
-                        "Para actualizarse, Android tiene que dejar que Xuper instale aplicaciones. " +
-                            "Apretá «Abrir ajustes», activá «Permitir de esta fuente», volvé con ATRÁS y listo."
+                        "Android necesita autorización para que Xuper pueda solicitar la instalación. " +
+                            "Abrí los ajustes, habilitá «Permitir de esta fuente» para Xuper y volvé a esta pantalla."
                     )
                     if (settingsFailed) {
                         DialogBody(
-                            "Esta tele no abrió esa pantalla sola. Andá a Ajustes › Aplicaciones › Acceso especial › " +
-                                "Instalar apps desconocidas › Xuper, y activalo.",
+                            "No se pudo abrir esa pantalla. Entrá manualmente en Ajustes › Aplicaciones › " +
+                                "Acceso especial › Instalar apps desconocidas › Xuper.",
                             dim = true,
                         )
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        DialogButton("Abrir ajustes", Modifier.focusRequester(firstButton)) {
+                        DialogButton("ABRIR AJUSTES", Modifier.focusRequester(firstButton)) {
                             settingsFailed = !AppUpdater.openInstallSettings(context)
                         }
-                        DialogButton("Continuar") { AppUpdater.continueAfterPermission(context) }
-                        DialogButton("Cancelar") { AppUpdater.cancelOrDismiss() }
+                        DialogButton("YA LO HABILITÉ") { AppUpdater.continueAfterPermission(context) }
                     }
                 }
 
                 is UpdateState.Installing -> {
-                    DialogTitle("Instalando…")
-                    DialogBody("Si Android te pregunta, elegí «Instalar». Cuando termine, volvé a abrir Xuper.")
-                    DialogButton("Cerrar", Modifier.focusRequester(firstButton)) { AppUpdater.cancelOrDismiss() }
+                    DialogTitle("Instalando actualización…")
+                    DialogBody("Android está procesando el APK. Si muestra su confirmación, elegí «Instalar». Xuper seguirá bloqueado hasta que termine.")
                 }
 
                 is UpdateState.Failed -> {
-                    DialogTitle("No se pudo actualizar")
+                    DialogTitle("No se pudo actualizar Xuper")
                     DialogBody(current.message)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (current.info != null) {
-                            DialogButton("Reintentar", Modifier.focusRequester(firstButton)) { AppUpdater.retry(context) }
-                            DialogButton("Cerrar") { AppUpdater.cancelOrDismiss() }
-                        } else {
-                            DialogButton("Cerrar", Modifier.focusRequester(firstButton)) { AppUpdater.cancelOrDismiss() }
-                        }
+                    DialogButton("REINTENTAR", Modifier.focusRequester(firstButton)) {
+                        AppUpdater.retry(context)
                     }
                 }
 

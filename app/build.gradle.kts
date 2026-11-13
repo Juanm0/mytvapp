@@ -11,18 +11,20 @@ val xuperLocalProperties = Properties().apply {
     val propertiesFile = rootProject.file("local.properties")
     if (propertiesFile.exists()) propertiesFile.inputStream().use { this.load(it) }
 }
-val tmdbApiKey = xuperLocalProperties.getProperty("TMDB_API_KEY", "")
+val tmdbApiKey = xuperLocalProperties.getProperty("TMDB_API_KEY", System.getenv("TMDB_API_KEY") ?: "")
 val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
-// Actualizaciones automáticas (ver README, sección "Actualizaciones automáticas").
-// UPDATE_REPO = "usuario/repo" de GitHub donde el workflow publica los releases con el APK.
-// UPDATE_TOKEN (opcional) = token de SOLO LECTURA, únicamente si ese repo es privado.
-// En el workflow ambos se escriben en local.properties; en Android Studio se pueden poner a mano (o dejar vacíos).
-val updateRepo = xuperLocalProperties.getProperty("UPDATE_REPO", "").trim()
-val updateToken = xuperLocalProperties.getProperty("UPDATE_TOKEN", "").trim()
+// The workflow injects the release repository and (only for a private releases repo) its read token.
+val updateRepo = xuperLocalProperties.getProperty("UPDATE_REPO", System.getenv("UPDATE_REPO") ?: "Juanm0/mytvapp").trim()
+val updateToken = xuperLocalProperties.getProperty("UPDATE_TOKEN", System.getenv("UPDATE_TOKEN") ?: "").trim()
 fun String.asBuildConfigString() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
-// El workflow pasa -PxuperVersionCode=<número de ejecución>: cada APK publicado tiene un versionCode mayor.
-// Sin ese parámetro (Android Studio) queda en 1, que nunca "pisa" a un APK publicado.
+
+// Signing material is supplied by GitHub Actions secrets, never stored in the source tree.
+val releaseStorePath = System.getenv("XUPER_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+val releaseStorePassword = System.getenv("XUPER_KEYSTORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeyAlias = System.getenv("XUPER_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword = System.getenv("XUPER_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+val hasReleaseSigning = listOf(releaseStorePath, releaseStorePassword, releaseKeyAlias, releaseKeyPassword).all { it != null }
 val ciVersionCode = (findProperty("xuperVersionCode") as String?)?.toIntOrNull()
 
 android {
@@ -43,25 +45,22 @@ android {
         versionName = if (ciVersionCode != null) "0.1.$ciVersionCode" else "0.1.0"
     }
 
-    // Clave fija (app/xuper.keystore): así cada APK nuevo se instala POR ENCIMA del anterior
-    // sin desinstalar. Es una app personal; si algún día se publica, generar una clave privada propia.
     signingConfigs {
-        create("xuper") {
-            storeFile = file("xuper.keystore")
-            storePassword = "xuper123"
-            keyAlias = "xuper"
-            keyPassword = "xuper123"
+        if (hasReleaseSigning) {
+            create("xuperRelease") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword!!
+                keyAlias = releaseKeyAlias!!
+                keyPassword = releaseKeyPassword!!
+            }
         }
     }
 
     buildTypes {
-        debug {
-            signingConfig = signingConfigs.getByName("xuper")
-        }
         release {
-            // Release (no debuggable) corre mucho más rápido que debug con Compose
+            // Release is signed only when the private signing material is supplied by the environment.
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("xuper")
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("xuperRelease")
         }
     }
 
