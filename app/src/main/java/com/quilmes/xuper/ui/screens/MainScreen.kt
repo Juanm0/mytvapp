@@ -59,6 +59,8 @@ fun MainScreen(
     adultAnimeService: JkanimeService? = null,
     /** Inicio: nombre a mostrar e ID TMDB del título/episodio. */
     onPlayHomeTitle: (title: String, catalogId: String) -> Unit = { _, _ -> },
+    /** +18: viewkey del video y título (abre el reproductor oficial embebido). */
+    onPlayAdultVideo: (viewKey: String, title: String) -> Unit = { _, _ -> },
 ) {
     val sections by repository.sections.collectAsState()
     val repositoryLoading by repository.loading.collectAsState()
@@ -116,7 +118,7 @@ fun MainScreen(
                 "lab" -> if (devEnabled) HomeScreen(repository = repository, onPlay = plainPlay)
                 "favorites" -> LibraryScreen(sections = sections, mode = LibraryMode.FAVORITES, onPlay = plainPlay)
                 "continue" -> LibraryScreen(sections = sections, mode = LibraryMode.CONTINUE, onPlay = plainPlay)
-                "adult" -> if (adultEnabled) AdultScreen(sections = sections, loading = repositoryLoading, onPlay = plainPlay)
+                "adult" -> if (adultEnabled) AdultScreen(onPlayVideo = onPlayAdultVideo)
                 "profile" -> ProfileScreen()
             }
         }
@@ -127,9 +129,7 @@ fun MainScreen(
             } else {
                 DeveloperMode.onOtherNavPressed()
             }
-            // +18 también dispara la carga inicial de las listas M3U locales.
-            // Antes solo se refrescaban al entrar en ARGENTINA, dejando xxx.m3u vacío.
-            if (selected == "live" || selected == "adult" || (selected == "search" && adultEnabled)) onRequestIptv()
+            if (selected == "live") onRequestIptv()
             if (selected != "live") showPlaylistBrowser = false
             dest = selected
         },

@@ -39,8 +39,7 @@ internal fun PlaylistBrowserScreen(
 ) {
     val playlists = remember(sections) {
         sections.filter { section ->
-            section.id != "tmdb-catalog" && !section.name.equals("Argentina", true) &&
-                !section.name.equals("xxx", true) && !section.name.equals("+18", true) && !section.name.equals("18+", true)
+            section.id != "tmdb-catalog" && !section.name.equals("Argentina", true)
         }.flatMap { section -> section.categories.map { category ->
             Triple(section.name, category, category.items.filterNot { AdultContentSettings.isHiddenAdult(it) })
         } }.filter { it.third.isNotEmpty() }

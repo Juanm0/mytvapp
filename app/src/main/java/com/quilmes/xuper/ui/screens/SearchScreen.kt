@@ -61,14 +61,11 @@ fun SearchScreen(
     val adultEnabled by AdultContentSettings.enabledFlow.collectAsState()
     val devEnabled by DeveloperMode.enabledFlow.collectAsState()
     val sections by repository.sections.collectAsState()
-    val adultPlaylistLoaded = sections.any {
-        it.name.equals("xxx", ignoreCase = true) || it.name.equals("+18", ignoreCase = true) || it.name.equals("18+", ignoreCase = true)
-    }
     val m3uRepository = repository as? M3uRepository
 
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
 
-    LaunchedEffect(query, adultEnabled, adultPlaylistLoaded, devEnabled) {
+    LaunchedEffect(query, adultEnabled, devEnabled) {
         delay(250) // espera a que termine de escribir
         if (query.isBlank()) {
             results = emptyList()
@@ -80,12 +77,8 @@ fun SearchScreen(
                 // Registra las fichas TMDB para que puedan abrirse desde el resultado.
                 m3uRepository?.registerCatalogTitles(tmdb)
             }
-            // La única fuente M3U permitida en búsqueda es xxx.m3u, y solo con +18 activado.
-            val adultPlaylistResults = if (adultEnabled) {
-                withContext(Dispatchers.Default) { m3uRepository?.searchAdultSources(query).orEmpty() }
-            } else emptyList()
             // La búsqueda principal no mezcla resultados de listas experimentales/LAB.
-            results = (tmdb + adultPlaylistResults).distinctBy { it.id }
+            results = tmdb.distinctBy { it.id }
                 .filterNot { AdultContentSettings.isHiddenAdult(it) }.take(120)
         }
     }

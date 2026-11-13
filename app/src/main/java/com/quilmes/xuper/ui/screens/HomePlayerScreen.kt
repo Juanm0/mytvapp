@@ -54,7 +54,7 @@ import java.util.concurrent.ConcurrentHashMap
 import android.util.Base64
 import org.json.JSONObject
 
-/** Enlace de video y subtítulos que la propia página de CineSrc solicitó. */
+/** Enlace de video (HLS de VideoAPI) y los subtítulos que se pudieron deducir de ese mismo enlace. */
 private data class HomeStream(
     val url: String,
     val referer: String,
@@ -117,82 +117,15 @@ private fun derivedVideoApiSubtitles(streamUrl: String, userAgent: String): List
 }
 
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
-private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$))|[?&]format=(?:srt|vtt)\\b|[?&]m=[A-Za-z0-9_%-=]+", RegexOption.IGNORE_CASE)
 // A los 30 s se avisa que tarda y se ofrecen las opciones, pero SIGUE cargando; recién a los 5 min se da por fallido.
 private const val SLOW_NOTICE_MS = 30_000L
 private const val RESOLVE_TIMEOUT_MS = 300_000L
-private val SUBTITLE_CAPTURE_JS = """
-(function(){
-  if (window.__xuperSubtitleCapture) return; window.__xuperSubtitleCapture = true;
-  var URL_RE = /(?:\.srt(?:[?#]|$)|\.vtt(?:[?#]|$)|[?&]format=(?:srt|vtt)\b|[?&]m=[A-Za-z0-9_%=-]+)/i;
-  var sent = Object.create(null);
-  function cleanText(value){ return String(value || '')
-    .replace(/\\+\//g, '/')
-    .replace(/\\+u0026/gi, '&').replace(/\\+u003d/gi, '=').replace(/\\+u002f/gi, '/')
-    .replace(/&amp;/gi, '&'); }
-  function scan(text, ref){ try {
-    text = cleanText(text);
-    var re = /https?:\/\/[^\"'`\s\\<>]+/gi, m;
-    while ((m = re.exec(text)) !== null) {
-      var candidate = m[0].replace(/[),.;}\]]+$/, '');
-      sendUrl(candidate, ref);
-    }
-  } catch(e) {} }
-  function sendUrl(value, ref){
-    try {
-      var u = cleanText(value).replace(/[),.;}\]]+$/, '');
-      if (!URL_RE.test(u) || sent[u]) return;
-      sent[u] = true;
-      window.XuperSubtitleBridge.add(u, ref || location.href);
-    } catch(e) {}
-  }
-  function captureUrl(value, ref){
-    try { var u = typeof value === 'string' ? value : (value && value.url) || ''; sendUrl(u, ref); } catch(e) {}
-  }
-  function smallTextResponse(r){ try {
-    var ct = r.headers.get('content-type') || ''; var len = Number(r.headers.get('content-length') || 0);
-    return /json|text|javascript/i.test(ct) && (!len || len < 500000);
-  } catch(e) { return false; } }
-  try {
-    var originalFetch = window.fetch;
-    if (originalFetch) window.fetch = function(input, init){
-      captureUrl(input, location.href);
-      return originalFetch.apply(this, arguments).then(function(r){
-        if (smallTextResponse(r)) { try { r.clone().text().then(function(t){ scan(t, location.href); }).catch(function(){}); } catch(e) {} }
-        return r;
-      });
-    };
-  } catch(e) {}
-  try {
-    var originalOpen = XMLHttpRequest.prototype.open, originalSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function(method, url){ this.__xuperUrl = url; captureUrl(url, location.href); return originalOpen.apply(this, arguments); };
-    XMLHttpRequest.prototype.send = function(){
-      this.addEventListener('load', function(){ try {
-        var ct = this.getResponseHeader('content-type') || '';
-        if (/json|text|javascript/i.test(ct)) {
-          var body = this.responseType === 'json' ? JSON.stringify(this.response) :
-            ((!this.responseType || this.responseType === 'text') ? this.responseText : '');
-          if (body && body.length < 500000) scan(body, location.href);
-        }
-      } catch(e) {} });
-      return originalSend.apply(this, arguments);
-    };
-  } catch(e) {}
-  // Fallback: algunos embeds agregan pistas al DOM sin usar fetch/XHR desde el frame principal.
-  try {
-    var scanResources = function(){ try {
-      (performance.getEntriesByType('resource') || []).forEach(function(entry){ captureUrl(entry.name, location.href); });
-    } catch(e) {} };
-    scanResources(); setInterval(scanResources, 700);
-  } catch(e) {}
-})();
-""".trimIndent()
-
 /**
- * Reproductor único del Inicio: la persona nunca ve los embeds de VideoAPI ni CineSrc.
+ * Reproductor único del Inicio: la persona nunca ve el embed de VideoAPI.
  * 1) Un WebView oculto captura el HLS de VideoAPI.
- * 2) Otro WebView oculto reproduce el método de CineSrc: observa pedidos directos y extrae URLs de respuestas JSON/texto.
- * 3) Media3 reproduce el HLS y carga las pistas externas en la misma sesión nativa.
+ * 2) Los subtítulos se deducen del propio enlace (derivedVideoApiSubtitles). Ya no se capturan los de CineSrc
+ *    (ver README: "Subtítulos de CineSrc (retirados)").
+ * 3) Media3 reproduce el HLS y carga esas pistas externas en la misma sesión nativa.
  */
 @Composable
 fun HomePlayerScreen(
@@ -204,7 +137,6 @@ fun HomePlayerScreen(
 ) {
     val context = LocalContext.current
     val videoApiUrl = remember(catalogId) { WebSourceRegistry.videoApiUrl(catalogId) }
-    val subtitleEmbedUrl = remember(catalogId) { WebSourceRegistry.cineSrcUrl(catalogId) }
     var attempt by remember(catalogId) { mutableStateOf(0) }
     var stream by remember(catalogId) { mutableStateOf<HomeStream?>(null) }
     var failure by remember(catalogId) { mutableStateOf<String?>(null) }
@@ -259,7 +191,7 @@ fun HomePlayerScreen(
 
     val found = stream
     when {
-        videoApiUrl == null || subtitleEmbedUrl == null -> HomeMessage("No se pudo preparar el video o los subtítulos de este título.", onExit, null)
+        videoApiUrl == null -> HomeMessage("No se pudo preparar el video de este título.", onExit, null)
         found != null -> PlayerScreen(
             name = name,
             streamUrl = found.url,
@@ -289,7 +221,6 @@ fun HomePlayerScreen(
             HomeResolving(
                 name = name,
                 videoApiUrl = videoApiUrl.orEmpty(),
-                subtitleEmbedUrl = subtitleEmbedUrl.orEmpty(),
                 attempt = attempt,
                 onFound = { stream = it },
                 onFail = { failure = it },
@@ -300,13 +231,12 @@ fun HomePlayerScreen(
     }
 }
 
-/** Captura en paralelo el HLS de VideoAPI y los subtítulos que solicita CineSrc. */
+/** Captura el HLS de VideoAPI en un WebView oculto y deduce sus subtítulos. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun HomeResolving(
     name: String,
     videoApiUrl: String,
-    subtitleEmbedUrl: String,
     attempt: Int,
     onFound: (HomeStream) -> Unit,
     onFail: (String) -> Unit,
@@ -315,66 +245,36 @@ private fun HomeResolving(
 ) {
     BackHandler { onExit() }
     val handler = remember { Handler(Looper.getMainLooper()) }
-    val done = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
+    val done = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
     val streamCaptured = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
-    val finishScheduled = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
-    val capturedSubtitles = remember(subtitleEmbedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
-    val lastSubtitleCaptureAt = remember(subtitleEmbedUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
+    val finishScheduled = remember(videoApiUrl, attempt) { AtomicBoolean(false) }
     // Subtítulos deducidos del enlace de VideoAPI (null = todavía comprobando).
     val derivedSubtitles = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicReference<List<ExternalSubtitleTrack>?>(null) }
     val streamCapturedAt = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
-    val resolveStartedAt = remember(videoApiUrl, subtitleEmbedUrl, attempt) { SystemClock.uptimeMillis() }
-    val subtitleBridge = remember(subtitleEmbedUrl, attempt) {
-        object {
-            @JavascriptInterface
-            fun add(url: String?, referer: String?) {
-                val value = url?.trim().orEmpty()
-                if (value.startsWith("https://", true) && SUBTITLE_URL.containsMatchIn(value)) {
-                    val requestReferer = referer?.takeIf { it.startsWith("https://") } ?: subtitleEmbedUrl
-                    val previous = capturedSubtitles.putIfAbsent(value, subtitleFromUrl(value, requestReferer))
-                    if (previous == null) {
-                        lastSubtitleCaptureAt.set(SystemClock.uptimeMillis())
-                        android.util.Log.i("XuperSubtitles", "Pista CineSrc capturada: ${subtitleFromUrl(value, requestReferer).label}")
-                    }
-                }
-            }
-        }
-    }
     val foundState = rememberUpdatedState(onFound)
     val failState = rememberUpdatedState(onFail)
     // Se conserva el HLS encontrado junto con sus encabezados para que Media3 pueda abrirlo.
     val capturedVideo = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicReference<HomeStream?>(null) }
     var videoWebView by remember(videoApiUrl, attempt) { mutableStateOf<WebView?>(null) }
-    var subtitleWebView by remember(subtitleEmbedUrl, attempt) { mutableStateOf<WebView?>(null) }
     var seconds by remember(videoApiUrl, attempt) { mutableStateOf(0) }
     var slow by remember(videoApiUrl, attempt) { mutableStateOf(false) }
 
     fun finishWhenReady() {
         if (!streamCaptured.get() || !finishScheduled.compareAndSet(false, true)) return
-        // Igual que el resolver original de CineSrc: espera a la primera lista de subtítulos
-        // y deja una ventana de gracia para capturar todas las pistas; máximo 25 s.
+        // Espera a que termine la comprobación de subtítulos de VideoAPI (máx. 10 s tras capturar el video).
         val poll = object : Runnable {
             override fun run() {
                 if (done.get()) return
-                val now = SystemClock.uptimeMillis()
-                val last = lastSubtitleCaptureAt.get()
-                val hasTracks = capturedSubtitles.isNotEmpty()
-                val quietLongEnough = hasTracks && now - last >= 1_200L
-                val timedOut = now - resolveStartedAt >= 25_000L
-                // Con los subtítulos de VideoAPI ya confirmados alcanza una pequeña gracia para sumar los de CineSrc
-                // que lleguen: no hace falta esperar los 25 s de antes.
                 val derived = derivedSubtitles.get()
-                val derivedReady = derived != null && derived.isNotEmpty() && now - streamCapturedAt.get() >= 3_000L
-                // Si VideoAPI no tiene ninguno, se sigue esperando a CineSrc como siempre.
-                val derivedPending = derived == null && now - streamCapturedAt.get() < 8_000L && !timedOut
-                if ((quietLongEnough && !derivedPending) || timedOut || derivedReady) {
+                val waitedTooLong = SystemClock.uptimeMillis() - streamCapturedAt.get() >= 10_000L
+                if (derived != null || waitedTooLong) {
                     if (done.compareAndSet(false, true)) {
-                        val tracks = (derived.orEmpty() + capturedSubtitles.values.toList())
+                        val tracks = derived.orEmpty()
                             .distinctBy { it.url }
                             .sortedWith(compareBy<ExternalSubtitleTrack> {
                                 when { isSpanishSubtitle(it) -> 0; isEnglishSubtitle(it) -> 1; else -> 2 }
                             }.thenBy { it.label })
-                        android.util.Log.i("XuperSubtitles", "Captura finalizada: ${tracks.size} pistas externas")
+                        android.util.Log.i("XuperSubtitles", "Listo: ${tracks.size} pistas externas")
                         val captured = capturedVideo.get()
                         if (captured != null) foundState.value(captured.copy(subtitles = tracks))
                         else failState.value("VideoAPI no entregó un enlace de video válido.")
@@ -385,7 +285,7 @@ private fun HomeResolving(
         handler.postDelayed(poll, 250L)
     }
 
-    LaunchedEffect(videoApiUrl, subtitleEmbedUrl, attempt) {
+    LaunchedEffect(videoApiUrl, attempt) {
         val started = SystemClock.uptimeMillis()
         var taps = 0
         while (!done.get()) {
@@ -396,7 +296,6 @@ private fun HomeResolving(
             if (taps < 3 && elapsed > 3_500L * (taps + 1)) {
                 taps++
                 videoWebView?.let { tapCenter(it) }
-                subtitleWebView?.let { tapCenter(it) }
             }
             if (elapsed > RESOLVE_TIMEOUT_MS && !streamCaptured.get() && done.compareAndSet(false, true)) {
                 failState.value("VideoAPI no entregó el video en ${RESOLVE_TIMEOUT_MS / 60_000} minutos.")
@@ -404,7 +303,7 @@ private fun HomeResolving(
         }
     }
 
-    DisposableEffect(videoApiUrl, subtitleEmbedUrl, attempt) {
+    DisposableEffect(videoApiUrl, attempt) {
         onDispose {
             done.set(true)
             videoWebView?.let { view ->
@@ -415,20 +314,11 @@ private fun HomeResolving(
                     view.destroy()
                 }
             }
-            subtitleWebView?.let { view ->
-                runCatching {
-                    view.stopLoading()
-                    view.loadUrl("about:blank")
-                    (view.parent as? ViewGroup)?.removeView(view)
-                    view.destroy()
-                }
-            }
             videoWebView = null
-            subtitleWebView = null
         }
     }
 
-    fun configureWebView(view: WebView, subtitleMode: Boolean) {
+    fun configureWebView(view: WebView) {
         view.setBackgroundColor(android.graphics.Color.BLACK)
         view.isFocusable = false
         view.isFocusableInTouchMode = false
@@ -439,50 +329,15 @@ private fun HomeResolving(
         view.settings.setSupportMultipleWindows(false)
         view.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
         view.settings.userAgentString = view.settings.userAgentString + " XuperQuilmesTV/1.0"
-        if (subtitleMode) {
-            view.addJavascriptInterface(subtitleBridge, "XuperSubtitleBridge")
-            if (runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
-                runCatching { WebViewCompat.addDocumentStartJavaScript(view, SUBTITLE_CAPTURE_JS, setOf("*")) }
-            }
-        }
         CookieManager.getInstance().setAcceptCookie(true)
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, true)
         val webUserAgent = view.settings.userAgentString
         view.webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: android.graphics.Bitmap?) {
-                // En Android TV algunos WebView no implementan DOCUMENT_START_SCRIPT. Inyectamos
-                // al inicio del documento principal; las URLs directas pedidas por iframes se
-                // siguen observando desde shouldInterceptRequest.
-                if (subtitleMode && !runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
-                    view?.evaluateJavascript(SUBTITLE_CAPTURE_JS, null)
-                }
-            }
-
-            override fun onPageFinished(view: WebView?, pageUrl: String?) {
-                if (subtitleMode && !runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT) }.getOrDefault(false)) {
-                    view?.evaluateJavascript(SUBTITLE_CAPTURE_JS, null)
-                }
-            }
-
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val req = request ?: return null
                 val url = req.url.toString()
                 if (done.get()) return XuperBraveAdblock.blockedResponse()
-                if (subtitleMode) {
-                    if (M3U8_URL.containsMatchIn(url)) return XuperBraveAdblock.blockedResponse()
-                    if (SUBTITLE_URL.containsMatchIn(url)) {
-                        val headers = req.requestHeaders.orEmpty()
-                        val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value
-                            ?.takeIf { it.startsWith("https://", true) } ?: view?.url ?: subtitleEmbedUrl
-                        val previous = capturedSubtitles.putIfAbsent(url, subtitleFromUrl(url, referer))
-                        if (previous == null) {
-                            lastSubtitleCaptureAt.set(SystemClock.uptimeMillis())
-                            android.util.Log.i("XuperSubtitles", "Request CineSrc capturado: ${capturedSubtitles[url]?.label}")
-                        }
-                        // No bloquear la descarga: CineSrc debe poder completar su propio request.
-                        return null
-                    }
-                } else if (M3U8_URL.containsMatchIn(url)) {
+                if (M3U8_URL.containsMatchIn(url)) {
                     if (streamCaptured.compareAndSet(false, true)) {
                         val headers = req.requestHeaders.orEmpty()
                         val referer = headers.entries.firstOrNull { it.key.equals("Referer", true) }?.value ?: videoApiUrl
@@ -515,21 +370,13 @@ private fun HomeResolving(
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // Dos páginas ocultas: VideoAPI entrega únicamente el HLS; CineSrc aporta las pistas externas.
+        // Página oculta: VideoAPI entrega únicamente el HLS.
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { viewContext -> WebView(viewContext).apply {
-                configureWebView(this, false)
+                configureWebView(this)
                 videoWebView = this
                 loadUrl(videoApiUrl)
-            } },
-        )
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { viewContext -> WebView(viewContext).apply {
-                configureWebView(this, true)
-                subtitleWebView = this
-                loadUrl(subtitleEmbedUrl)
             } },
         )
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
@@ -595,7 +442,6 @@ private fun normalizedSubtitleLanguage(track: ExternalSubtitleTrack): String =
 
 private fun isSpanishSubtitle(track: ExternalSubtitleTrack): Boolean {
     val value = normalizedSubtitleLanguage(track)
-    // `ea` aparece en algunas respuestas de CineSrc aunque la pista reproducida sea español.
     return Regex("(^|[^a-z])(es|spa|ea|es-[a-z0-9-]+|spanish|espanol|español|castellano|latino|latin american)([^a-z]|$)")
         .containsMatchIn(value)
 }
@@ -603,64 +449,6 @@ private fun isSpanishSubtitle(track: ExternalSubtitleTrack): Boolean {
 private fun isEnglishSubtitle(track: ExternalSubtitleTrack): Boolean {
     val value = normalizedSubtitleLanguage(track)
     return Regex("(^|[^a-z])(en|eng|en-[a-z0-9-]+|english|ingles|inglés)([^a-z]|$)").containsMatchIn(value)
-}
-
-private fun subtitleFromUrl(url: String, embedUrl: String): ExternalSubtitleTrack {
-    var lang = "und"
-    var display = ""
-    var source: String? = null
-    var flags = 0
-    runCatching {
-        val encoded = android.net.Uri.parse(url).getQueryParameter("m")
-        if (!encoded.isNullOrBlank()) {
-            val normalized = encoded.replace('-', '+').replace('_', '/')
-            val padded = normalized + "=".repeat((4 - normalized.length % 4) % 4)
-            val json = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
-            val meta = JSONObject(json)
-            lang = meta.optString("lang", "und").lowercase().trim().ifBlank { "und" }
-            display = meta.optString("display").trim()
-            source = meta.optString("src").trim().takeIf { it.isNotBlank() }
-            if (meta.optString("hi") == "1" || meta.optBoolean("hi")) flags = flags or ExternalSubtitleTrack.FLAG_HEARING_IMPAIRED
-            if (meta.optString("forced") == "1" || meta.optBoolean("forced")) flags = flags or ExternalSubtitleTrack.FLAG_FORCED
-        }
-    }
-
-    val evidence = "$lang $display ${source.orEmpty()}".lowercase().replace('_', '-')
-    val spanish = Regex("(^|[^a-z])(es|spa|ea|es-[a-z0-9-]+|spanish|espanol|español|castellano|latino|latin american)([^a-z]|$)")
-        .containsMatchIn(evidence)
-    val english = !spanish && Regex("(^|[^a-z])(en|eng|en-[a-z0-9-]+|english|ingles|inglés)([^a-z]|$)")
-        .containsMatchIn(evidence)
-    val normalizedLanguage = when {
-        spanish -> if (lang.startsWith("es-")) lang else "es"
-        english -> if (lang.startsWith("en-")) lang else "en"
-        lang != "und" -> lang
-        else -> "und"
-    }
-
-    val rawDisplay = display.trim()
-    val alias = rawDisplay.lowercase().replace('_', ' ').trim()
-    val fullLabel = when {
-        alias in setOf("ea", "es spanish", "spanish", "espanol", "español", "castellano") -> "Español"
-        alias in setOf("spanish (la)", "spanish la", "es-la", "es-419", "latin spanish", "latin american", "latino", "español latino") -> "Español (Latinoamérica)"
-        alias in setOf("en", "eng", "english") -> "English"
-        rawDisplay.length > 2 -> rawDisplay // conservar el nombre completo: SDH, forced, release, variante, etc.
-        spanish -> "Español"
-        english -> "English"
-        normalizedLanguage != "und" -> normalizedLanguage
-        else -> "Subtítulo del reproductor"
-    }
-    val mime = if (url.substringBefore('?').substringBefore('#').endsWith(".vtt", true) ||
-        android.net.Uri.parse(url).getQueryParameter("format")?.equals("vtt", true) == true)
-        androidx.media3.common.MimeTypes.TEXT_VTT else androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
-    return ExternalSubtitleTrack(
-        url = url,
-        referer = embedUrl,
-        language = normalizedLanguage,
-        label = fullLabel,
-        mimeType = mime,
-        flags = flags,
-        source = source,
-    )
 }
 
 private fun originOf(url: String): String? = runCatching {

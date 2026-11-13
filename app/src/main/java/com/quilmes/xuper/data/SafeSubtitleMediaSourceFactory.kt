@@ -20,7 +20,7 @@ import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
  * Mientras un subtítulo se está descargando su "posición buffereada" es 0, así que TODO el reproductor queda en
  * "cargando" (pantalla negra) hasta que termina, y si falla (servidor caído, enlace vencido, 403) después de los
  * reintentos de fábrica la reproducción entera se corta con error. Con 5 o 6 pistas de CineSrc más las de
- * OpenSubtitles alcanza con que una sola tarde o falle para que la película se trabe.
+ * alcanza con que una sola tarde o falle para que la película se trabe.
  *
  * Acá cada subtítulo se carga con [SingleSampleMediaSource.Factory.setTreatLoadErrorsAsEndOfStream]: si no se puede
  * bajar, esa pista simplemente queda vacía y el video sigue; y se reintenta una sola vez (rápido) en vez de varias

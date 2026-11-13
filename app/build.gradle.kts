@@ -12,8 +12,6 @@ val xuperLocalProperties = Properties().apply {
 }
 val tmdbApiKey = xuperLocalProperties.getProperty("TMDB_API_KEY", "")
 val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
-val openSubtitlesApiKey = "am1oXmZFU0guGE0UCsQ0exQd3PGBDKNg"
-val escapedOpenSubtitlesApiKey = openSubtitlesApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
 // Actualizaciones automáticas (ver README, sección "Actualizaciones automáticas").
 // UPDATE_REPO = "usuario/repo" de GitHub donde el workflow publica los releases con el APK.
@@ -35,7 +33,6 @@ android {
     defaultConfig {
         applicationId = "com.quilmes.xuper"
         buildConfigField("String", "TMDB_API_KEY", "\"$escapedTmdbApiKey\"")
-        buildConfigField("String", "OPEN_SUBTITLES_API_KEY", "\"$escapedOpenSubtitlesApiKey\"")
         buildConfigField("String", "UPDATE_REPO", updateRepo.asBuildConfigString())
         buildConfigField("String", "UPDATE_TOKEN", updateToken.asBuildConfigString())
         minSdk = 24

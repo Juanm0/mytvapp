@@ -33,6 +33,7 @@ import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.components.UpdatePrompt
 import com.quilmes.xuper.ui.screens.MainScreen
+import com.quilmes.xuper.ui.screens.AdultEmbedPlayerScreen
 import com.quilmes.xuper.ui.screens.HomePlayerScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
@@ -52,7 +53,7 @@ import java.nio.charset.StandardCharsets
  */
 /** assets/listas/: todas las listas M3U. Las de nombre fijo (abajo) son fuentes propias; el resto son "Otros canales para ver". */
 private const val LISTS_DIR = "listas"
-/** assets/contenido_oculto/: contenido que no sale en los menús normales (xxx.m3u => sección +18). Cada .m3u se registra sola. */
+/** assets/contenido_oculto/: listas que no salen en los menús normales. Cada .m3u se registra sola. (La sección +18 ya NO usa listas: ver AdultCatalogService.) */
 private const val MY_LISTS_DIR = "contenido_oculto"
 /** Las listas M3U no fijas de assets/listas/ se registran como fuentes explorables. */
 private const val OTHER_CHANNELS_DIR = LISTS_DIR
@@ -185,26 +186,21 @@ private fun buildRepository(cacheDir: File, assets: android.content.res.AssetMan
             isUserIptvAccount = true,
         )
     }
-    // Listas ocultas: cualquier .m3u que se suelte en app/src/main/assets/contenido_oculto/ se registra sola (xxx.m3u = +18).
+    // Listas ocultas: cualquier .m3u que se suelte en app/src/main/assets/contenido_oculto/ se registra sola.
     // El nombre del archivo es el nombre de la fuente; el tipo (película/serie/canal) se detecta
     // por cada entrada (.mp4 => película, S01E02 => serie, el resto => TV en vivo).
     val myListSources = (runCatching { assets.list(MY_LISTS_DIR)?.toList() }.getOrNull().orEmpty())
         .filter { it.endsWith(".m3u", true) || it.endsWith(".m3u8", true) }
         .sorted()
         .map { file ->
-            val sourceName = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim().ifBlank { "Mi lista" }
-            val isAdultPlaylist = sourceName.equals("xxx", ignoreCase = true) ||
-                sourceName.equals("+18", ignoreCase = true) || sourceName.equals("18+", ignoreCase = true)
             M3uSource(
-                name = sourceName,
+                name = file.substringBeforeLast('.').replace('_', ' ').replace('-', ' ').trim().ifBlank { "Mi lista" },
                 url = File(File(cacheDir, MY_LISTS_DIR), file).toURI().toString(),
-                icon = if (isAdultPlaylist) "🔞" else "🎬",
-                // Las listas adultas no se mezclan con Inicio/LAB; solo se muestran en +18.
-                homeRows = if (isAdultPlaylist) 0 else 2,
+                icon = "🎬",
+                homeRows = 2,
                 enrichMetadata = false,
                 maxPerRow = 60,
-                // xxx.m3u contiene más de 16.000 entradas: 200 filas truncaban la lista.
-                maxRows = if (isAdultPlaylist) 1_000 else 200,
+                maxRows = 200,
             )
         }
     // "Otros canales para ver" (pestaña Argentina): los .m3u de assets/listas/ que no son de nombre fijo ni están ignorados.
@@ -451,6 +447,23 @@ class MainActivity : ComponentActivity() {
                             onPlayHomeTitle = { titleName, catalogId ->
                                 navController.navigate("home-player/${Uri.encode(titleName)}/${Uri.encode(catalogId)}")
                             },
+                            // +18: reproductor oficial embebido (no pasa por "Continuar viendo").
+                            onPlayAdultVideo = { viewKey, videoTitle ->
+                                navController.navigate("adult-player/${Uri.encode(viewKey)}/${Uri.encode(videoTitle)}")
+                            },
+                        )
+                    }
+                    composable(
+                        route = "adult-player/{adultKey}/{adultTitle}",
+                        arguments = listOf(
+                            navArgument("adultKey") { type = NavType.StringType },
+                            navArgument("adultTitle") { type = NavType.StringType },
+                        ),
+                    ) { entry ->
+                        AdultEmbedPlayerScreen(
+                            viewKey = entry.arguments?.getString("adultKey").orEmpty(),
+                            title = entry.arguments?.getString("adultTitle").orEmpty(),
+                            onExit = { navController.popBackStack() },
                         )
                     }
                     composable(

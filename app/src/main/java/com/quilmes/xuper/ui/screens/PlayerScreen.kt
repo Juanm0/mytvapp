@@ -100,8 +100,6 @@ import coil.compose.AsyncImage
 import com.quilmes.xuper.data.ChannelQueueStore
 import com.quilmes.xuper.data.LabSubtitleStore
 import com.quilmes.xuper.data.LabSubtitleUploadServer
-import com.quilmes.xuper.data.OpenSubtitleOption
-import com.quilmes.xuper.data.OpenSubtitlesService
 import com.quilmes.xuper.data.SubtitleShiftDataSourceFactory
 import com.quilmes.xuper.ui.components.qrImageBitmap
 import com.quilmes.xuper.data.WebSourceRegistry
@@ -974,32 +972,14 @@ private fun NativePlayerScreen(
     var labSavedSubtitles by remember(currentTitleId) {
         mutableStateOf(if (labMode) uploadedSubtitleTracks(context, currentTitleId) else emptyList())
     }
-    var openSubtitleTracks by remember(currentTitleId) {
-        mutableStateOf(savedOpenSubtitleTracks(context, currentTitleId))
-    }
-    var openSubtitlesDialogOpen by remember(streamUrl) { mutableStateOf(false) }
-    var openSubtitlesLoading by remember(streamUrl) { mutableStateOf(false) }
-    var openSubtitlesStatus by remember(streamUrl) { mutableStateOf("") }
-    var openSubtitlesResults by remember(streamUrl) { mutableStateOf(emptyList<OpenSubtitleOption>()) }
-    var openSubtitleDownloadingId by remember(streamUrl) { mutableStateOf<Long?>(null) }
     var subtitlePickerOpen by remember(streamUrl) { mutableStateOf(false) }
-    // En LAB, el selector de pistas sustituye temporalmente a Ajustes; nunca debe quedar
-    // el panel anterior dibujado por detrás. Al cerrar, volvemos al mismo menú y foco.
-    var returnToLabSettingsAfterSubtitleFlow by remember(streamUrl) { mutableStateOf(false) }
     var subtitlePickerVisibleCount by remember(streamUrl) { mutableStateOf(6) }
     var subtitleTracksVersion by remember(streamUrl) { mutableStateOf(0) }
-    val openSubtitleFirstFocus = remember { FocusRequester() }
     val subtitlePickerFirstFocus = remember { FocusRequester() }
     LaunchedEffect(subtitlePickerOpen) {
         if (subtitlePickerOpen) {
             delay(80)
             runCatching { subtitlePickerFirstFocus.requestFocus() }
-        }
-    }
-    LaunchedEffect(openSubtitlesDialogOpen, openSubtitlesResults.size) {
-        if (openSubtitlesDialogOpen) {
-            delay(100)
-            runCatching { openSubtitleFirstFocus.requestFocus() }
         }
     }
     var labPlayerView by remember(streamUrl) { mutableStateOf<PlayerView?>(null) }
@@ -1053,7 +1033,7 @@ private fun NativePlayerScreen(
             .setUserAgent("Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
     }
     val subtitleOffsetMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
-    val currentExternalSubtitles by rememberUpdatedState(labSavedSubtitles + externalSubtitles + openSubtitleTracks)
+    val currentExternalSubtitles by rememberUpdatedState(labSavedSubtitles + externalSubtitles)
     val subtitleShiftFactory = remember {
         // DefaultDataSource: http(s) sigue yendo por dataSourceFactory y además lee los .srt/.vtt guardados en la tele (file://).
         SubtitleShiftDataSourceFactory(
@@ -1135,7 +1115,7 @@ private fun NativePlayerScreen(
                 cleanUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") -> setMimeType(MimeTypes.APPLICATION_M3U8)
                 cleanUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") -> setMimeType(MimeTypes.APPLICATION_MPD)
             }
-            val allSubtitles = labSavedSubtitles + externalSubtitles + openSubtitleTracks
+            val allSubtitles = labSavedSubtitles + externalSubtitles
             if (allSubtitles.isNotEmpty()) setSubtitleConfigurations(subtitleConfigurations(allSubtitles))
         }.build()
         attemptedUrls = attemptedUrls + url
@@ -1586,40 +1566,13 @@ private fun NativePlayerScreen(
         val item = exoPlayer.currentMediaItem ?: return
         val resumeAt = exoPlayer.currentPosition
         val wasPlaying = exoPlayer.playWhenReady
-        val all = labSavedSubtitles + externalSubtitles + openSubtitleTracks
+        val all = labSavedSubtitles + externalSubtitles
         exoPlayer.setMediaItem(item.buildUpon().setSubtitleConfigurations(subtitleConfigurations(all)).build(), resumeAt)
         exoPlayer.prepare()
         exoPlayer.playWhenReady = wasPlaying
     }
-    fun searchOpenSubtitles() {
-        if (isLive) {
-            hubNotice = "OpenSubtitles está disponible para películas, series y episodios, no para canales en vivo."
-            return
-        }
-        openSubtitlesDialogOpen = true
-        openSubtitlesLoading = true
-        openSubtitlesStatus = "Buscando subtítulos en español e inglés…"
-        openSubtitlesResults = emptyList()
-        seekScope.launch {
-            runCatching { OpenSubtitlesService.search(name, currentTitleId) }
-                .onSuccess { results ->
-                    openSubtitlesResults = results
-                    openSubtitlesStatus = if (results.isEmpty()) "No se encontraron subtítulos en español o inglés para este título." else "${results.size} opciones disponibles. Elegí una para descargarla."
-                }
-                .onFailure { error ->
-                    openSubtitlesStatus = error.message?.take(180) ?: "No se pudo conectar con OpenSubtitles."
-                }
-            openSubtitlesLoading = false
-        }
-    }
-
     fun closeSubtitleFlow() {
         subtitlePickerOpen = false
-        openSubtitlesDialogOpen = false
-        if (returnToLabSettingsAfterSubtitleFlow) {
-            returnToLabSettingsAfterSubtitleFlow = false
-            labSettingsOpen = true
-        }
     }
 
     fun confirmLabFocus() {
@@ -1637,42 +1590,6 @@ private fun NativePlayerScreen(
             6 -> labUploadOpen = !labUploadOpen
             7 -> TrackSelectionDialogBuilder(context, "Resolución", exoPlayer, C.TRACK_TYPE_VIDEO).build().show()
             8 -> labSettingsOpen = false
-        }
-    }
-    fun downloadOpenSubtitle(option: OpenSubtitleOption) {
-        if (openSubtitleDownloadingId != null) return
-        openSubtitleDownloadingId = option.fileId
-        openSubtitlesStatus = "Descargando ${option.fileName}…"
-        seekScope.launch {
-            runCatching { OpenSubtitlesService.download(context, option, currentTitleId.ifBlank { name }) }
-                .onSuccess { downloaded ->
-                    val extension = downloaded.file.extension.lowercase()
-                    val mime = when (extension) {
-                        "vtt" -> "text/vtt"
-                        "ass", "ssa" -> "application/x-ssa"
-                        else -> "application/x-subrip"
-                    }
-                    val track = ExternalSubtitleTrack(
-                        url = android.net.Uri.fromFile(downloaded.file).toString(),
-                        referer = "",
-                        language = downloaded.language,
-                        label = downloaded.displayName,
-                        mimeType = mime,
-                        flags = 0,
-                        source = "OpenSubtitles",
-                    )
-                    openSubtitleTracks = (openSubtitleTracks.filterNot { it.url == track.url } + track).takeLast(20)
-                    saveOpenSubtitleTrack(context, currentTitleId.ifBlank { name }, openSubtitleTracks)
-                    reloadWithSavedSubtitles()
-                    closeSubtitleFlow()
-                    openSubtitlesStatus = "Subtítulo agregado al reproductor."
-                    hubNotice = "✓ Subtítulo agregado. Ya podés seleccionarlo en Ajustes → Pistas de subtítulos."
-                    showControls = true
-                }
-                .onFailure { error ->
-                    openSubtitlesStatus = error.message?.take(180) ?: "No se pudo descargar el subtítulo."
-                }
-            openSubtitleDownloadingId = null
         }
     }
     // Al cerrar el modal se cierra también el panel del QR (y se apaga el servidor).
@@ -1731,8 +1648,8 @@ private fun NativePlayerScreen(
         exoPlayer.prepare()
         exoPlayer.playWhenReady = wasPlaying
     }
-    BackHandler(enabled = subtitlePickerOpen || openSubtitlesDialogOpen || (labMode && (labSettingsOpen || labPanelOpen))) {
-        if (subtitlePickerOpen || openSubtitlesDialogOpen) closeSubtitleFlow()
+    BackHandler(enabled = subtitlePickerOpen || (labMode && (labSettingsOpen || labPanelOpen))) {
+        if (subtitlePickerOpen) closeSubtitleFlow()
         else if (labUploadOpen) labUploadOpen = false
         else if (labSettingsOpen) labSettingsOpen = false
         else labPanelOpen = false
@@ -1748,13 +1665,12 @@ private fun NativePlayerScreen(
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 // Los diálogos de selección deben recibir las flechas/OK directamente.
                 // Si el root las consume, se convierten en seek y los botones nunca reciben foco.
-                if (secondaryPickerOpen || subtitlePickerOpen || openSubtitlesDialogOpen || labUploadOpen) return@onPreviewKeyEvent false
+                if (secondaryPickerOpen || subtitlePickerOpen || labUploadOpen) return@onPreviewKeyEvent false
                 if (showControls) hubTick += 1
                 if (labMode) {
                     when (event.nativeKeyEvent.keyCode) {
                         AndroidKeyEvent.KEYCODE_BACK, AndroidKeyEvent.KEYCODE_ESCAPE -> {
-                            if (openSubtitlesDialogOpen) openSubtitlesDialogOpen = false
-                            else if (labUploadOpen) labUploadOpen = false
+                            if (labUploadOpen) labUploadOpen = false
                             else if (labSettingsOpen) labSettingsOpen = false
                             else if (labPanelOpen) labPanelOpen = false
                             else onExit()
@@ -1969,7 +1885,7 @@ private fun NativePlayerScreen(
                 ) { Text("Cancelar") }
             }
         }
-        if (subtitlePickerOpen && !openSubtitlesDialogOpen) {
+        if (subtitlePickerOpen) {
             // Leer las pistas directamente de ExoPlayer, sin depender del idioma de audio activo.
             val subtitleOptions = exoPlayer.currentTracks.groups
                 .filter { it.type == C.TRACK_TYPE_TEXT }
@@ -1997,12 +1913,6 @@ private fun NativePlayerScreen(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Text("Subtítulos", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                if (!isLive) {
-                    Button(modifier = Modifier.fillMaxWidth(), onClick = {
-                        subtitlePickerOpen = false
-                        searchOpenSubtitles()
-                    }) { Text("＋  Buscar subtítulos online") }
-                }
                 Text(
                     if (subtitleOptions.isEmpty()) "Todavía no se detectaron pistas. Esperá unos segundos o probá después de que termine de cargar el video."
                     else "Mostrando ${minOf(subtitlePickerVisibleCount, subtitleOptions.size)} de ${subtitleOptions.size} idiomas/pistas.",
@@ -2047,50 +1957,6 @@ private fun NativePlayerScreen(
                         Text("", color = Color.White)
                     }
                     Button(onClick = { closeSubtitleFlow() }) { Text("Aceptar") }
-                }
-            }
-        }
-        if (openSubtitlesDialogOpen) {
-            Box(Modifier.fillMaxSize().background(Color(0xB8000000)))
-            Column(
-                Modifier.align(Alignment.Center).widthIn(max = 600.dp).fillMaxWidth(0.86f).heightIn(max = 460.dp)
-                    .background(Color(0xF21B242B), RoundedCornerShape(18.dp)).padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("Subtítulos online", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text(name, color = Color(0xFFB4C0CE), fontSize = 13.sp, maxLines = 1)
-                Text(openSubtitlesStatus, color = Color(0xFFB4C0CE), fontSize = 13.sp)
-                if (openSubtitlesLoading) {
-                    Text("Buscando en OpenSubtitles…", color = Color(0xFF83E6D2), fontSize = 13.sp)
-                }
-                Column(
-                    Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    openSubtitlesResults.forEach { option ->
-                        val langLabel = if (option.language == "es" || option.language.startsWith("es-")) "ESPAÑOL" else "INGLÉS"
-                        val trustedLabel = if (option.trusted) " · Verificado" else ""
-                        val hearingLabel = if (option.hearingImpaired) " · SDH" else ""
-                        Button(
-                            modifier = Modifier.fillMaxWidth().then(if (option == openSubtitlesResults.firstOrNull()) Modifier.focusRequester(openSubtitleFirstFocus) else Modifier),
-                            enabled = openSubtitleDownloadingId == null,
-                            onClick = { downloadOpenSubtitle(option) },
-                        ) {
-                            Text(
-                                "$langLabel · ${option.release.ifBlank { option.fileName }.take(76)}$trustedLabel$hearingLabel · ${option.downloads} descargas",
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                }
-                if (openSubtitleDownloadingId != null) {
-                    Text("Descargando y preparando la pista…", color = Color(0xFF83E6D2), fontSize = 13.sp)
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(
-                        modifier = Modifier.then(if (openSubtitlesResults.isEmpty()) Modifier.focusRequester(openSubtitleFirstFocus) else Modifier),
-                        onClick = { closeSubtitleFlow() },
-                    ) { Text("Cerrar") }
                 }
             }
         }
@@ -2207,57 +2073,6 @@ private fun NativePlayerScreen(
             )
         }
     }
-}
-
-/** Recupera las pistas de OpenSubtitles descargadas previamente para este título. */
-private fun savedOpenSubtitleTracks(context: Context, titleId: String): List<ExternalSubtitleTrack> {
-    if (titleId.isBlank()) return emptyList()
-    val key = "tracks_${titleId.hashCode().toUInt().toString(16)}"
-    val raw = context.getSharedPreferences("xuper-open-subtitles", Context.MODE_PRIVATE).getString(key, "[]") ?: "[]"
-    return runCatching {
-        val array = org.json.JSONArray(raw)
-        buildList {
-            for (i in 0 until array.length()) {
-                val item = array.optJSONObject(i) ?: continue
-                val url = item.optString("url")
-                val path = android.net.Uri.parse(url).path.orEmpty()
-                if (url.isBlank() || !java.io.File(path).isFile) continue
-                add(
-                    ExternalSubtitleTrack(
-                        url = url,
-                        referer = "",
-                        language = item.optString("language", "und"),
-                        label = item.optString("label", "OpenSubtitles"),
-                        mimeType = item.optString("mimeType", "application/x-subrip"),
-                        flags = 0,
-                        source = "OpenSubtitles",
-                    )
-                )
-            }
-        }
-    }.getOrDefault(emptyList())
-}
-
-/** Guarda metadatos locales para que la pista vuelva a aparecer al reabrir el mismo título. */
-private fun saveOpenSubtitleTrack(
-    context: Context,
-    titleId: String,
-    tracks: List<ExternalSubtitleTrack>,
-) {
-    if (titleId.isBlank()) return
-    val key = "tracks_${titleId.hashCode().toUInt().toString(16)}"
-    val array = org.json.JSONArray()
-    tracks.filter { it.source == "OpenSubtitles" }.takeLast(20).forEach { track ->
-        array.put(
-            org.json.JSONObject()
-                .put("url", track.url)
-                .put("language", track.language)
-                .put("label", track.label)
-                .put("mimeType", track.mimeType)
-        )
-    }
-    context.getSharedPreferences("xuper-open-subtitles", Context.MODE_PRIVATE)
-        .edit().putString(key, array.toString()).apply()
 }
 
 /** Pistas subidas desde el celular para este título (más la marca "Subido"), listas para el reproductor. */
