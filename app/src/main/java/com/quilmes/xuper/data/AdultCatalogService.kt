@@ -48,6 +48,12 @@ object AdultCatalogService {
 
     fun isValidViewKey(viewKey: String): Boolean = VIEWKEY_VALID.matches(viewKey)
 
+    /** URL oficial del reproductor embebido para un video gratuito del catálogo. */
+    fun embedUrl(viewKey: String): String {
+        require(isValidViewKey(viewKey)) { "viewKey inválido" }
+        return "$BASE_URL/embed/$viewKey"
+    }
+
     
     suspend fun list(category: AdultCategory, page: Int): AdultPage =
         fetch(
