@@ -77,6 +77,9 @@ object LabSubtitleStore {
     }
 
     /** Los .srt viejos suelen venir en Windows-1252 / Latin-1: se detecta y se pasa a UTF-8 para que no se rompan ñ y tildes. */
+    /** Texto UTF-8 de un archivo de subtítulos en cualquier codificación común (también lo usa OpenSubtitles). */
+    fun toUtf8(bytes: ByteArray): String = decodeText(bytes)
+
     private fun decodeText(bytes: ByteArray): String {
         if (bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte())
             return String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)

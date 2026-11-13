@@ -318,3 +318,12 @@ Si se reemplaza la API Key del Consumer, actualizar el valor `openSubtitlesApiKe
 - `index.m3u` es una lista grande (aprox. 23.800 líneas en esta copia); se carga en segundo plano con el límite de concurrencia ya existente. Puede tardar más que listas pequeñas.
 - El navegador muestra todas las categorías que `M3uRepository` haya podido parsear; una URL caída o una lista con formato no compatible seguirá sin entradas y queda registrada en Logcat (`XuperM3U`).
 - El cambio de seek reduce una causa conocida de bloqueos, pero la pantalla negra tras saltos debe verificarse con los streams concretos que fallaban en la TV. No se reemplazó ni rediseñó la UI del reproductor.
+
+
+### Subtítulos: fila "Idioma", VideoAPI sin clics y saltos (13/11/2026)
+
+- **Ajuste de reproducir (INICIO)**: se conserva el menú de siempre. Debajo de *Subtítulo ON/OFF*, la fila *Pistas de subtítulos* pasó a ser **Idioma** con solo **Español / Inglés** (◀ ▶ elige, OK aplica; `applyLabSubtitleLanguage` limpia elecciones manuales y fija el idioma preferido). OpenSubtitles no aparece en este menú.
+- **VideoAPI sin clics** (`HomePlayerScreen.derivedVideoApiSubtitles`): del HLS crudo (`https://vimeos.zip/hls2/03/00015/<id>_,n,h,.urlset/master.m3u8?...&srv=s1`) se arma `https://s1.vimeos.net/vtt/03/00015/<id>_spa.vtt` (`hls2`→`vtt`, host = `srv` + `.vimeos.net`, nombre = antes del primer `_`). Se prueban `spa, lat, eng, por, fre, ita, ger` y solo se cargan los que empiezan con `WEBVTT`. Con esos confirmados se espera solo 3 s extra por CineSrc. Dominio fijo `vimeos.net` (según el ejemplo real). Logcat: `XuperSubtitles`.
+- **Pantallas negras**: `data/SafeSubtitleMediaSourceFactory.kt` carga cada subtítulo externo con `treatLoadErrorsAsEndOfStream` y 1 reintento (en Media3 1.3.1 un subtítulo lento/caído frenaba o cortaba todo el video). Vigilante de saltos en `PlayerScreen` (6 s re-pide, 14 s reconstruye, 35 s avisa), el salto no cae en el último segundo, buffer de arranque menor en VOD, reintentos de segmentos más rápidos y timeouts HTTP 12/20 s. Se mantiene `SeekParameters.DEFAULT`.
+- OpenSubtitles descarga ahora en UTF-8 y solo `.srt`/`.vtt`.
+- **No verificado**: compilación ni prueba en la TV (solo sintaxis Kotlin).

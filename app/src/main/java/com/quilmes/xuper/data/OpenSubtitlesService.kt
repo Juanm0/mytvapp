@@ -171,13 +171,15 @@ object OpenSubtitlesService {
             }
 
             val extracted = extractSubtitle(downloaded, option.fileName)
-            val extension = extracted.first.substringAfterLast('.', "srt").lowercase(Locale.ROOT)
-                .let { if (it in setOf("srt", "vtt", "ass", "ssa")) it else "srt" }
+            // Se pasa siempre a UTF-8: muchos .srt viejos vienen en Windows-1252 y sin esto se rompen la ñ y las tildes.
+            val text = LabSubtitleStore.toUtf8(extracted.second)
+            if (!text.contains("-->")) throw IllegalStateException("El archivo descargado no parece un subtítulo válido.")
+            val extension = if (text.trimStart().startsWith("WEBVTT")) "vtt" else "srt"
             val folder = java.io.File(context.filesDir, "opensubtitles").apply { mkdirs() }
             val safeId = contentId.hashCode().toUInt().toString(16)
             val safeName = "${safeId}_${option.fileId}.$extension"
             val target = java.io.File(folder, safeName)
-            target.writeBytes(extracted.second)
+            target.writeBytes(text.toByteArray(Charsets.UTF_8))
             DownloadedOpenSubtitle(
                 file = target,
                 language = option.language,
@@ -192,7 +194,7 @@ object OpenSubtitlesService {
                     val entry = zip.nextEntry ?: break
                     if (entry.isDirectory) continue
                     val ext = entry.name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-                    if (ext !in setOf("srt", "vtt", "ass", "ssa")) continue
+                    if (ext !in setOf("srt", "vtt")) continue
                     val out = ByteArrayOutputStream()
                     val buffer = ByteArray(8 * 1024)
                     while (true) {
@@ -204,7 +206,7 @@ object OpenSubtitlesService {
                     if (out.size() > 0) return entry.name to out.toByteArray()
                 }
             }
-            throw IllegalStateException("El ZIP no contiene un archivo SRT/VTT/ASS compatible.")
+            throw IllegalStateException("El ZIP no contiene un archivo SRT/VTT compatible.")
         }
         val name = originalName.substringAfterLast('/').ifBlank { "opensubtitles.srt" }
         return name to bytes

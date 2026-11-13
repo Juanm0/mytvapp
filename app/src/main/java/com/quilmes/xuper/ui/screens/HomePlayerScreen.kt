@@ -63,6 +63,59 @@ private data class HomeStream(
     val subtitles: List<ExternalSubtitleTrack> = emptyList(),
 )
 
+/**
+ * Subtítulos de VideoAPI deducidos del propio enlace del video, sin tocar nada en su reproductor.
+ *
+ * El HLS crudo se ve así:  https://vimeos.zip/hls2/03/00015/7t0r7ooe2llz_,n,h,.urlset/master.m3u8?...&srv=s1&...
+ * y los subtítulos viven en: https://s1.vimeos.net/vtt/03/00015/7t0r7ooe2llz_spa.vtt  (y _eng.vtt, etc.)
+ * Regla: `hls2` pasa a `vtt`, el host sale de `srv=` (+ `.vimeos.net`) y el nombre es lo que hay antes del primer `_` + `_<idioma>.vtt`.
+ * Se prueba cada idioma con un pedido corto y solo se devuelven los que existen de verdad (empiezan con WEBVTT).
+ * Corre en un hilo de fondo (hace red). Si el enlace no tiene ese formato devuelve vacío y todo sigue como antes.
+ */
+private fun derivedVideoApiSubtitles(streamUrl: String, userAgent: String): List<ExternalSubtitleTrack> {
+    val uri = runCatching { URI(streamUrl) }.getOrNull() ?: return emptyList()
+    val match = Regex("^/hls\\d*/(.+?)/([A-Za-z0-9]+)_[^/]*/[^/]*$").find(uri.rawPath.orEmpty()) ?: return emptyList()
+    val server = android.net.Uri.parse(streamUrl).getQueryParameter("srv")
+        ?.takeIf { Regex("[A-Za-z0-9-]{1,12}").matches(it) } ?: return emptyList()
+    val base = "https://$server.vimeos.net/vtt/${match.groupValues[1]}/${match.groupValues[2]}_"
+    val referer = "${uri.scheme}://${uri.host}/"
+    // código en el servidor -> (idioma para Media3, nombre que se muestra)
+    val languages = listOf(
+        "spa" to ("es" to "Español"), "lat" to ("es-419" to "Español (Latinoamérica)"), "eng" to ("en" to "English"),
+        "por" to ("pt" to "Português"), "fre" to ("fr" to "Français"), "ita" to ("it" to "Italiano"), "ger" to ("de" to "Deutsch"),
+    )
+    val found = java.util.concurrent.ConcurrentHashMap<String, ExternalSubtitleTrack>()
+    val threads = languages.map { (code, info) ->
+        Thread {
+            val url = "$base$code.vtt"
+            var connection: java.net.HttpURLConnection? = null
+            try {
+                connection = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 4_000
+                    readTimeout = 4_000
+                    setRequestProperty("Referer", referer)
+                    setRequestProperty("User-Agent", userAgent)
+                    setRequestProperty("Range", "bytes=0-63")
+                }
+                if (connection.responseCode in 200..299) {
+                    val head = connection.inputStream.use { it.readBytes() }.toString(Charsets.UTF_8).trimStart('\uFEFF', ' ', '\n', '\r')
+                    if (head.startsWith("WEBVTT")) {
+                        found[code] = ExternalSubtitleTrack(
+                            url = url, referer = referer, language = info.first, label = info.second,
+                            mimeType = androidx.media3.common.MimeTypes.TEXT_VTT, flags = 0, source = "VideoAPI",
+                        )
+                    }
+                }
+            } catch (_: Exception) {
+            } finally {
+                runCatching { connection?.disconnect() }
+            }
+        }.apply { isDaemon = true; start() }
+    }
+    threads.forEach { runCatching { it.join(6_000) } }
+    return languages.mapNotNull { found[it.first] }
+}
+
 private val M3U8_URL = Regex("\\.m3u8(?:[?#]|$)", RegexOption.IGNORE_CASE)
 private val SUBTITLE_URL = Regex("(?:\\.(?:srt|vtt)(?:[?#]|$))|[?&]format=(?:srt|vtt)\\b|[?&]m=[A-Za-z0-9_%-=]+", RegexOption.IGNORE_CASE)
 // A los 30 s se avisa que tarda y se ofrecen las opciones, pero SIGUE cargando; recién a los 5 min se da por fallido.
@@ -267,6 +320,9 @@ private fun HomeResolving(
     val finishScheduled = remember(videoApiUrl, subtitleEmbedUrl, attempt) { AtomicBoolean(false) }
     val capturedSubtitles = remember(subtitleEmbedUrl, attempt) { ConcurrentHashMap<String, ExternalSubtitleTrack>() }
     val lastSubtitleCaptureAt = remember(subtitleEmbedUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
+    // Subtítulos deducidos del enlace de VideoAPI (null = todavía comprobando).
+    val derivedSubtitles = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicReference<List<ExternalSubtitleTrack>?>(null) }
+    val streamCapturedAt = remember(videoApiUrl, attempt) { java.util.concurrent.atomic.AtomicLong(0L) }
     val resolveStartedAt = remember(videoApiUrl, subtitleEmbedUrl, attempt) { SystemClock.uptimeMillis() }
     val subtitleBridge = remember(subtitleEmbedUrl, attempt) {
         object {
@@ -305,9 +361,15 @@ private fun HomeResolving(
                 val hasTracks = capturedSubtitles.isNotEmpty()
                 val quietLongEnough = hasTracks && now - last >= 1_200L
                 val timedOut = now - resolveStartedAt >= 25_000L
-                if (quietLongEnough || timedOut) {
+                // Con los subtítulos de VideoAPI ya confirmados alcanza una pequeña gracia para sumar los de CineSrc
+                // que lleguen: no hace falta esperar los 25 s de antes.
+                val derived = derivedSubtitles.get()
+                val derivedReady = derived != null && derived.isNotEmpty() && now - streamCapturedAt.get() >= 3_000L
+                // Si VideoAPI no tiene ninguno, se sigue esperando a CineSrc como siempre.
+                val derivedPending = derived == null && now - streamCapturedAt.get() < 8_000L && !timedOut
+                if ((quietLongEnough && !derivedPending) || timedOut || derivedReady) {
                     if (done.compareAndSet(false, true)) {
-                        val tracks = capturedSubtitles.values.toList()
+                        val tracks = (derived.orEmpty() + capturedSubtitles.values.toList())
                             .distinctBy { it.url }
                             .sortedWith(compareBy<ExternalSubtitleTrack> {
                                 when { isSpanishSubtitle(it) -> 0; isEnglishSubtitle(it) -> 1; else -> 2 }
@@ -427,6 +489,13 @@ private fun HomeResolving(
                         val ua = headers.entries.firstOrNull { it.key.equals("User-Agent", true) }?.value ?: webUserAgent
                         val cookie = CookieManager.getInstance().getCookie(url).orEmpty()
                         capturedVideo.set(HomeStream(url, referer, ua, cookie))
+                        streamCapturedAt.set(SystemClock.uptimeMillis())
+                        // Sin tocar nada en VideoAPI: los subtítulos salen del propio enlace (ver derivedVideoApiSubtitles).
+                        Thread {
+                            val derived = runCatching { derivedVideoApiSubtitles(url, ua) }.getOrDefault(emptyList())
+                            android.util.Log.i("XuperSubtitles", "VideoAPI: ${derived.size} subtítulos deducidos (${derived.joinToString { it.label }})")
+                            derivedSubtitles.set(derived)
+                        }.apply { isDaemon = true; start() }
                         finishWhenReady()
                     }
                     return XuperBraveAdblock.blockedResponse()

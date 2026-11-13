@@ -87,6 +87,8 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import com.quilmes.xuper.data.SafeSubtitleMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.TrackSelectionDialogBuilder
@@ -111,6 +113,18 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private data class AudioTrackOption(val language: String, val label: String, val selected: Boolean)
+
+/** Reintentos para películas/series: un segmento que falla justo después de un salto se reintenta hasta 6 veces con esperas cortas (máx. 3 s). En vivo se deja la política estándar. */
+@OptIn(UnstableApi::class)
+private fun vodLoadErrorPolicy(isLive: Boolean): androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy =
+    if (isLive) DefaultLoadErrorHandlingPolicy()
+    else object : DefaultLoadErrorHandlingPolicy(6) {
+        override fun getRetryDelayMsFor(loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+            val base = super.getRetryDelayMsFor(loadErrorInfo)
+            if (base == C.TIME_UNSET) return base
+            return minOf((loadErrorInfo.errorCount - 1).coerceAtLeast(0) * 700L, 3_000L)
+        }
+    }
 
 private fun isWebPageUrl(raw: String): Boolean {
     val parsed = runCatching { URI(raw) }.getOrNull() ?: return false
@@ -1000,6 +1014,8 @@ private fun NativePlayerScreen(
     // Acumulamos el destino y ejecutamos un único seek cuando el usuario deja de pulsar.
     var pendingSeekPosition by remember(streamUrl) { mutableStateOf<Long?>(null) }
     var seekCommitJob by remember(streamUrl) { mutableStateOf<Job?>(null) }
+    var seekWatchTick by remember(streamUrl) { mutableStateOf(0) }
+    var seekWatchTarget by remember(streamUrl) { mutableStateOf(0L) }
     var lastSeekAtMs by remember(streamUrl) { mutableStateOf(0L) }
     val seekScope = rememberCoroutineScope()
     var isPlaying by remember(streamUrl) { mutableStateOf(true) }
@@ -1032,6 +1048,8 @@ private fun NativePlayerScreen(
     val dataSourceFactory = remember {
         DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(12_000)
+            .setReadTimeoutMs(20_000)
             .setUserAgent("Mozilla/5.0 (Linux; Android TV) XuperQuilmesTV")
     }
     val subtitleOffsetMs = remember { java.util.concurrent.atomic.AtomicLong(0L) }
@@ -1064,7 +1082,9 @@ private fun NativePlayerScreen(
     // Los perfiles se aplican solo a IPTV en vivo. Películas, series y anime conservan
     // el LoadControl estándar para no cambiar su comportamiento por una preferencia de IPTV.
     val iptvLoadControl = remember(isLive) {
-        if (!isLive) DefaultLoadControl.Builder().build()
+        if (!isLive) DefaultLoadControl.Builder()
+            .setBufferDurationsMs(20_000, 50_000, 1_500, 3_000)
+            .build()
         else {
             val profile = context.getSharedPreferences("xuper-iptv", Context.MODE_PRIVATE)
                 .getString("profile", "fast") ?: "fast"
@@ -1081,7 +1101,11 @@ private fun NativePlayerScreen(
     val exoPlayer = remember {
         ExoPlayer.Builder(context)
             .setLoadControl(iptvLoadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(subtitleShiftFactory))
+            .setMediaSourceFactory(
+                // Subtítulos externos que no pueden trabar ni cortar el video (ver SafeSubtitleMediaSourceFactory).
+                SafeSubtitleMediaSourceFactory(subtitleShiftFactory, DefaultMediaSourceFactory(subtitleShiftFactory))
+                    .setLoadErrorHandlingPolicy(vodLoadErrorPolicy(isLive))
+            )
             .setSeekBackIncrementMs(10_000)
             .setSeekForwardIncrementMs(10_000)
             .build().apply {
@@ -1130,7 +1154,8 @@ private fun NativePlayerScreen(
     fun seekBy(deltaMs: Long) {
         val basePosition = pendingSeekPosition ?: exoPlayer.currentPosition.coerceAtLeast(0L)
         val target = (basePosition + deltaMs).coerceAtLeast(0L)
-        val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost(exoPlayer.duration) else target
+        // Nunca se cae en el último instante: un salto al final exacto dejaba el reproductor terminado (pantalla negra).
+        val boundedTarget = if (exoPlayer.duration > 0L) target.coerceAtMost((exoPlayer.duration - 2_000L).coerceAtLeast(0L)) else target
         pendingSeekPosition = boundedTarget
         lastSeekAtMs = SystemClock.elapsedRealtime()
         seekCommitJob?.cancel()
@@ -1145,6 +1170,8 @@ private fun NativePlayerScreen(
                 exoPlayer.setSeekParameters(SeekParameters.DEFAULT)
                 exoPlayer.seekTo(finalTarget)
                 lastSeekAtMs = SystemClock.elapsedRealtime()
+                seekWatchTarget = finalTarget
+                seekWatchTick++
             }
             pendingSeekPosition = null
             seekCommitJob = null
@@ -1208,6 +1235,40 @@ private fun NativePlayerScreen(
                     }
                 }
                 else -> bufferingTicks = 0
+            }
+        }
+    }
+
+    // Vigilante de saltos: si tras adelantar/atrasar el video queda cargando, a los 6 s pide de nuevo el punto,
+    // a los 14 s reconstruye la sesión en ese punto y a los 35 s avisa (en vez de quedarse en negro).
+    LaunchedEffect(seekWatchTick) {
+        if (seekWatchTick == 0 || isLive) return@LaunchedEffect
+        val target = seekWatchTarget
+        var waitedMs = 0L
+        var stage = 0
+        delay(1_200)
+        while (true) {
+            val state = exoPlayer.playbackState
+            if (state == Player.STATE_READY || state == Player.STATE_ENDED || !exoPlayer.playWhenReady) break
+            if (state == Player.STATE_IDLE && error != null) break
+            delay(500)
+            waitedMs += 500
+            if (stage == 0 && waitedMs >= 6_000L) {
+                stage = 1
+                runCatching { exoPlayer.seekTo(target) }
+            } else if (stage == 1 && waitedMs >= 14_000L) {
+                stage = 2
+                lastSeekAtMs = SystemClock.elapsedRealtime()
+                runCatching {
+                    val item = exoPlayer.currentMediaItem ?: return@runCatching
+                    exoPlayer.setMediaItem(item, target)
+                    exoPlayer.prepare()
+                    exoPlayer.playWhenReady = true
+                }
+            } else if (stage == 2 && waitedMs >= 35_000L) {
+                error = "No se pudo cargar esa parte del video. Probá un salto más corto o cambiá de fuente."
+                showControls = true
+                break
             }
         }
     }
@@ -1496,7 +1557,9 @@ private fun NativePlayerScreen(
     }
     fun applyLabSubtitleLanguage(index: Int) {
         labSubtitleLanguage = index.coerceIn(0, 1)
+        // Se descartan elecciones manuales previas para que mande el idioma elegido (0 = Español, 1 = Inglés).
         exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setPreferredTextLanguage(if (labSubtitleLanguage == 0) "es" else "en")
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
     }
@@ -1504,7 +1567,7 @@ private fun NativePlayerScreen(
         labFocusRow = (labFocusRow + delta).coerceIn(0, 8)
         labFocusOption = when (labFocusRow) {
             0 -> labAudioSelected.coerceAtMost(labAudioOptions.lastIndex.coerceAtLeast(0))
-            2 -> 0
+            2 -> labSubtitleLanguage
             3 -> labSubtitleSize
             4 -> labSubtitleStyle
             else -> 0
@@ -1515,7 +1578,7 @@ private fun NativePlayerScreen(
             labSubtitleDelayMs = (labSubtitleDelayMs + delta * 500L).coerceIn(-60_000L, 60_000L)
             return
         }
-        val max = when (labFocusRow) { 0 -> labAudioOptions.lastIndex.coerceAtLeast(0); 3 -> 2; 4 -> 2; else -> 0 }
+        val max = when (labFocusRow) { 0 -> labAudioOptions.lastIndex.coerceAtLeast(0); 2 -> 1; 3 -> 2; 4 -> 2; else -> 0 }
         labFocusOption = (labFocusOption + delta + max + 1) % (max + 1)
     }
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
@@ -1567,12 +1630,7 @@ private fun NativePlayerScreen(
                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
                     .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !labSubtitlesEnabled).build()
             }
-            2 -> {
-                subtitlePickerVisibleCount = 6
-                returnToLabSettingsAfterSubtitleFlow = true
-                labSettingsOpen = false
-                subtitlePickerOpen = true
-            }
+            2 -> applyLabSubtitleLanguage(labFocusOption)
             3 -> labSubtitleSize = labFocusOption
             4 -> labSubtitleStyle = labFocusOption
             5 -> labSubtitleDelayMs = 0L
@@ -2100,7 +2158,7 @@ private fun NativePlayerScreen(
                     false,
                 )
                 LabToggleRow(labSubtitlesEnabled, labFocusRow == 1)
-                LabSettingsRow("Pistas de subtítulos", listOf("Elegir pista"), 0, labFocusRow == 2, 0, true)
+                LabSettingsRow("Idioma", listOf("Español", "Inglés"), labSubtitleLanguage, labFocusRow == 2, labFocusOption.coerceIn(0, 1), true)
                 LabSettingsRow("Tamaño", listOf("Normal", "Grande", "Pequeño"), labSubtitleSize, labFocusRow == 3, labFocusOption, true)
                 LabStyleRow(labSubtitleStyle, labFocusRow == 4, labFocusOption)
                 LabSyncRow(labSubtitleDelayMs, labFocusRow == 5, labSubtitleDelayMs != labAppliedDelayMs)
