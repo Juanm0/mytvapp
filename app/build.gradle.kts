@@ -133,10 +133,13 @@ tasks.named("preBuild").configure {
 
 chaquopy {
     defaultConfig {
-        // CI pasa la ruta absoluta obtenida de sys.executable en setup-python.
-        // No usar "python" por PATH: el runner puede resolver otra versión (por ejemplo 3.14).
-        // El fallback mantiene el build local si el desarrollador tiene Python 3.10 instalado.
-        buildPython(System.getenv("CHAQUOPY_BUILD_PYTHON") ?: "python3.10")
+        // La ruta se pasa como propiedad en el mismo comando Gradle desde GitHub Actions.
+        // Así no dependemos de la propagación de variables entre pasos/acciones.
+        // En builds locales se puede usar -PchaquopyBuildPython=/ruta/al/python3.10.
+        val chaquopyPython = (findProperty("chaquopyBuildPython") as String?)
+            ?.takeIf { it.isNotBlank() }
+            ?: "python3.10"
+        buildPython(chaquopyPython)
 
         // yt-dlp corre dentro de la app; no depende de Python/Termux instalado en el televisor.
         version = "3.10"
