@@ -154,9 +154,10 @@ fun AdultEmbedPlayerScreen(viewKey: String, title: String, onExit: () -> Unit) {
                     settings.javaScriptCanOpenWindowsAutomatically = false
                     settings.setSupportMultipleWindows(false)
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                                        val embedView = this
                     CookieManager.getInstance().apply {
                         setAcceptCookie(true)
-                        setAcceptThirdPartyCookies(this@apply, true)
+                        setAcceptThirdPartyCookies(embedView, true)
                         setCookie("https://www.pornhub.com", "accessAgeDisclaimerPH=1")
                     }
                     webChromeClient = WebChromeClient()
