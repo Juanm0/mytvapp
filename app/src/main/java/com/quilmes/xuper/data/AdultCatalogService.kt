@@ -48,9 +48,7 @@ object AdultCatalogService {
 
     fun isValidViewKey(viewKey: String): Boolean = VIEWKEY_VALID.matches(viewKey)
 
-    /** URL oficial del reproductor embebido. */
-    fun embedUrl(viewKey: String): String = "$BASE_URL/embed/$viewKey"
-
+    
     suspend fun list(category: AdultCategory, page: Int): AdultPage =
         fetch(
             url = "$BASE_URL/video?o=${category.order}" + if (page > 1) "&page=$page" else "",

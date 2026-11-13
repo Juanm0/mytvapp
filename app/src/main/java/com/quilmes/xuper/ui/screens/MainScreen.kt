@@ -59,7 +59,7 @@ fun MainScreen(
     adultAnimeService: JkanimeService? = null,
     /** Inicio: nombre a mostrar e ID TMDB del título/episodio. */
     onPlayHomeTitle: (title: String, catalogId: String) -> Unit = { _, _ -> },
-    /** +18: viewkey del video y título (abre el reproductor oficial embebido). */
+    /** +18: viewkey del video y título (abre el reproductor nativo Media3 con yt-dlp). */
     onPlayAdultVideo: (viewKey: String, title: String) -> Unit = { _, _ -> },
 ) {
     val sections by repository.sections.collectAsState()

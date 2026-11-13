@@ -344,3 +344,17 @@ Hasta el 13/11/2026 el Inicio (`HomePlayerScreen`) abría un **segundo WebView o
 - **VideoAPI sin clics** (`HomePlayerScreen.derivedVideoApiSubtitles`): del HLS crudo (`https://vimeos.zip/hls2/03/00015/<id>_,n,h,.urlset/master.m3u8?...&srv=s1`) se arma `https://s1.vimeos.net/vtt/03/00015/<id>_spa.vtt` (`hls2`→`vtt`, host = `srv` + `.vimeos.net`, nombre = antes del primer `_`). Se prueban `spa, lat, eng, por, fre, ita, ger` y solo se cargan los que empiezan con `WEBVTT`. Con esos confirmados se espera solo 3 s extra por CineSrc. Dominio fijo `vimeos.net` (según el ejemplo real). Logcat: `XuperSubtitles`.
 - **Pantallas negras**: `data/SafeSubtitleMediaSourceFactory.kt` carga cada subtítulo externo con `treatLoadErrorsAsEndOfStream` y 1 reintento (en Media3 1.3.1 un subtítulo lento/caído frenaba o cortaba todo el video). Vigilante de saltos en `PlayerScreen` (6 s re-pide, 14 s reconstruye, 35 s avisa), el salto no cae en el último segundo, buffer de arranque menor en VOD, reintentos de segmentos más rápidos y timeouts HTTP 12/20 s. Se mantiene `SeekParameters.DEFAULT`.
 - **No verificado**: compilación ni prueba en la TV (solo sintaxis Kotlin).
+
+
+## Sección +18 — extractor yt-dlp y reproductor nativo (integración experimental)
+
+La sección +18 conserva `AdultCatalogService` para categorías, búsqueda y miniaturas. Al seleccionar un video, `AdultVideoResolver` ejecuta yt-dlp dentro del APK mediante Chaquopy (Python embebido); no requiere instalar Python ni Termux en el Android TV. El enlace HTTPS devuelto y sus cabeceras HTTP se entregan a Media3/ExoPlayer para reproducir HLS o MP4 con controles nativos.
+
+- `app/src/main/python/adult_extractor.py`: adaptador Python para yt-dlp.
+- `data/AdultVideoResolver.kt`: inicialización de Python, ejecución y validación del resultado.
+- `ui/screens/AdultNativePlayerScreen.kt`: reproducción Media3, buffer inicial y reintentos de resolución.
+- `AdultEmbedPlayerScreen.kt` fue retirado de la navegación y reemplazado por el reproductor nativo.
+
+**Tolerancia a fallos:** el primer resolve hace hasta tres intentos con pausas progresivas. Si la reproducción falla, la app vuelve a resolver una URL temporal en vez de reutilizar una URL posiblemente vencida. Se conserva un límite de reintentos para no entrar en un bucle infinito.
+
+**Requisitos de compilación:** Chaquopy 17.2.0 y Python 3.10 en el equipo que compila. Se empaquetan ABI `arm64-v8a`, `armeabi-v7a` y `x86_64`; la inclusión del runtime de Python aumenta el tamaño del APK. Debe verificarse el tamaño final y probarse en un Android TV real. Esta integración no evita DRM, verificaciones de acceso ni restricciones del proveedor.

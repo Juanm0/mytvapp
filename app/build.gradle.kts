@@ -4,6 +4,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.chaquo.python")
 }
 
 val xuperLocalProperties = Properties().apply {
@@ -37,6 +38,7 @@ android {
         buildConfigField("String", "UPDATE_TOKEN", updateToken.asBuildConfigString())
         minSdk = 24
         targetSdk = 34
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
         versionCode = ciVersionCode ?: 1
         versionName = if (ciVersionCode != null) "0.1.$ciVersionCode" else "0.1.0"
     }
@@ -127,6 +129,17 @@ val generateActiveIptvAccounts by tasks.registering {
 
 tasks.named("preBuild").configure {
     dependsOn(generateActiveIptvAccounts)
+}
+
+
+chaquopy {
+    defaultConfig {
+        // yt-dlp corre dentro de la app; no depende de Python/Termux instalado en el televisor.
+        version = "3.10"
+        pip {
+            install("yt-dlp")
+        }
+    }
 }
 
 dependencies {

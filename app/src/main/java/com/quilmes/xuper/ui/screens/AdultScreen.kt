@@ -75,7 +75,7 @@ private object AdultSession {
 
 /**
  * Sección +18: catálogo dinámico (Populares, Recientes, Más vistos, Mejor valorados, Más largos), buscador y
- * paginación. Elegir una miniatura abre el reproductor oficial embebido (AdultEmbedPlayerScreen).
+ * paginación. Elegir una miniatura abre el reproductor nativo Media3 (yt-dlp + AdultNativePlayerScreen).
  * Solo se muestra con el perfil +18 desbloqueado (MainScreen).
  */
 @Composable

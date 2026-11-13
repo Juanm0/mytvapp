@@ -33,7 +33,7 @@ import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
 import com.quilmes.xuper.ui.components.UpdatePrompt
 import com.quilmes.xuper.ui.screens.MainScreen
-import com.quilmes.xuper.ui.screens.AdultEmbedPlayerScreen
+import com.quilmes.xuper.ui.screens.AdultNativePlayerScreen
 import com.quilmes.xuper.ui.screens.HomePlayerScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
 import com.quilmes.xuper.ui.screens.PlayerScreen
@@ -447,7 +447,7 @@ class MainActivity : ComponentActivity() {
                             onPlayHomeTitle = { titleName, catalogId ->
                                 navController.navigate("home-player/${Uri.encode(titleName)}/${Uri.encode(catalogId)}")
                             },
-                            // +18: reproductor oficial embebido (no pasa por "Continuar viendo").
+                            // +18: extractor yt-dlp + reproductor nativo Media3 (no pasa por "Continuar viendo").
                             onPlayAdultVideo = { viewKey, videoTitle ->
                                 navController.navigate("adult-player/${Uri.encode(viewKey)}/${Uri.encode(videoTitle)}")
                             },
@@ -460,7 +460,7 @@ class MainActivity : ComponentActivity() {
                             navArgument("adultTitle") { type = NavType.StringType },
                         ),
                     ) { entry ->
-                        AdultEmbedPlayerScreen(
+                        AdultNativePlayerScreen(
                             viewKey = entry.arguments?.getString("adultKey").orEmpty(),
                             title = entry.arguments?.getString("adultTitle").orEmpty(),
                             onExit = { navController.popBackStack() },
