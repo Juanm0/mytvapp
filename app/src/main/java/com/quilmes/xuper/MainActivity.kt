@@ -18,6 +18,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.NavHostController
 import androidx.navigation.navArgument
+import com.quilmes.xuper.data.AppUpdater
 import com.quilmes.xuper.data.ContentRepository
 import com.quilmes.xuper.data.DeveloperMode
 import com.quilmes.xuper.data.ContentKind
@@ -30,6 +31,7 @@ import com.quilmes.xuper.data.AdultContentSettings
 import com.quilmes.xuper.data.TmdbCatalogService
 import com.quilmes.xuper.data.AnimeSites
 import com.quilmes.xuper.data.JkanimeService
+import com.quilmes.xuper.ui.components.UpdatePrompt
 import com.quilmes.xuper.ui.screens.MainScreen
 import com.quilmes.xuper.ui.screens.HomePlayerScreen
 import com.quilmes.xuper.ui.screens.DetailScreen
@@ -282,6 +284,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Actualizaciones automáticas: consulta barata (máx. cada 30 min); si hay versión nueva sale el cartel.
+        lifecycleScope.launch { AppUpdater.check(applicationContext) }
         if (resetToHomeOnNextResume) {
             resetToHomeOnNextResume = false
             appNavController?.let { nav ->
@@ -380,6 +384,7 @@ class MainActivity : ComponentActivity() {
         // Opciones de desarrollador (LAB oculto): leer el estado guardado antes de componer la UI.
         DeveloperMode.init(applicationContext)
         XuperBraveAdblock.initialize(applicationContext)
+        AppUpdater.cleanupOldDownloads(applicationContext)
 
         // La interfaz se dibuja YA (con filas "fantasma"); todo lo pesado va en segundo plano.
         // Antes se copiaban archivos acá y, sobre todo, setCatalogCategories() corría en el hilo
@@ -799,6 +804,8 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
+                // Cartel de actualización automática (no dibuja nada si no hay versión nueva).
+                UpdatePrompt()
             }
         }
     }

@@ -15,6 +15,17 @@ val escapedTmdbApiKey = tmdbApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 val openSubtitlesApiKey = "am1oXmZFU0guGE0UCsQ0exQd3PGBDKNg"
 val escapedOpenSubtitlesApiKey = openSubtitlesApiKey.replace("\\", "\\\\").replace("\"", "\\\"")
 
+// Actualizaciones automáticas (ver README, sección "Actualizaciones automáticas").
+// UPDATE_REPO = "usuario/repo" de GitHub donde el workflow publica los releases con el APK.
+// UPDATE_TOKEN (opcional) = token de SOLO LECTURA, únicamente si ese repo es privado.
+// En el workflow ambos se escriben en local.properties; en Android Studio se pueden poner a mano (o dejar vacíos).
+val updateRepo = xuperLocalProperties.getProperty("UPDATE_REPO", "").trim()
+val updateToken = xuperLocalProperties.getProperty("UPDATE_TOKEN", "").trim()
+fun String.asBuildConfigString() = "\"" + replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+// El workflow pasa -PxuperVersionCode=<número de ejecución>: cada APK publicado tiene un versionCode mayor.
+// Sin ese parámetro (Android Studio) queda en 1, que nunca "pisa" a un APK publicado.
+val ciVersionCode = (findProperty("xuperVersionCode") as String?)?.toIntOrNull()
+
 android {
     namespace = "com.quilmes.xuper"
     compileSdk = 34
@@ -25,10 +36,12 @@ android {
         applicationId = "com.quilmes.xuper"
         buildConfigField("String", "TMDB_API_KEY", "\"$escapedTmdbApiKey\"")
         buildConfigField("String", "OPEN_SUBTITLES_API_KEY", "\"$escapedOpenSubtitlesApiKey\"")
+        buildConfigField("String", "UPDATE_REPO", updateRepo.asBuildConfigString())
+        buildConfigField("String", "UPDATE_TOKEN", updateToken.asBuildConfigString())
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = ciVersionCode ?: 1
+        versionName = if (ciVersionCode != null) "0.1.$ciVersionCode" else "0.1.0"
     }
 
     // Clave fija (app/xuper.keystore): así cada APK nuevo se instala POR ENCIMA del anterior
