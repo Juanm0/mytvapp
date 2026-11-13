@@ -16,14 +16,12 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # Chaquopy necesita un intérprete Python 3.10 en el runner.
+      # Chaquopy requiere Python 3.10.
       - uses: actions/setup-python@v5
         id: setup_python
         with:
           python-version: '3.10'
-          check-latest: true
 
-      # El runner ya trae el Android SDK; solo aceptamos licencias por las dudas
       - name: Aceptar licencias del SDK
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
@@ -31,25 +29,58 @@ jobs:
         with:
           gradle-version: 8.7
 
-      - name: Configurar local.properties (TMDB opcional)
+      - name: Configurar Android SDK y TMDB
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          printf 'sdk.dir=%s\\n' "$ANDROID_HOME" > local.properties
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > local.properties
           if [ -n "$TMDB_API_KEY" ]; then
-            printf 'TMDB_API_KEY=%s\\n' "$TMDB_API_KEY" >> local.properties
+            printf 'TMDB_API_KEY=%s\n' "$TMDB_API_KEY" >> local.properties
           fi
 
-      - name: Compilar APK (release rápido, firmado con la clave del proyecto)
-        shell: bash
+      # El Gradle del proyecto firma Release solo cuando recibe los cuatro valores.
+      # El keystore se guarda como secreto Base64 para no incluirlo en el repositorio.
+      - name: Preparar firma Release
+        env:
+          XUPER_KEYSTORE_BASE64: ${{ secrets.XUPER_KEYSTORE_BASE64 }}
+          XUPER_KEYSTORE_PASSWORD: ${{ secrets.XUPER_KEYSTORE_PASSWORD }}
+          XUPER_KEY_ALIAS: ${{ secrets.XUPER_KEY_ALIAS }}
+          XUPER_KEY_PASSWORD: ${{ secrets.XUPER_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          PYTHON_EXE="$(python -c 'import sys; print(sys.executable)')"
-          python -c 'import sys; assert sys.version_info[:2] == (3, 10), f"Se requiere Python 3.10 para Chaquopy; encontrado: {sys.version}"'
-          echo "Python de Chaquopy: $PYTHON_EXE"
-          gradle assembleRelease --no-daemon "-PchaquopyBuildPython=$PYTHON_EXE"
+          for name in XUPER_KEYSTORE_BASE64 XUPER_KEYSTORE_PASSWORD XUPER_KEY_ALIAS XUPER_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "Falta configurar el secreto de GitHub: $name"
+              exit 1
+            fi
+          done
+          KEYSTORE_PATH="$RUNNER_TEMP/xuper-release.jks"
+          printf '%s' "$XUPER_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          echo "XUPER_KEYSTORE_FILE=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "XUPER_KEYSTORE_PASSWORD=$XUPER_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "XUPER_KEY_ALIAS=$XUPER_KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "XUPER_KEY_PASSWORD=$XUPER_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Compilar APK Release firmado
+        shell: bash
+        env:
+          CHAQUOPY_BUILD_PYTHON: ${{ steps.setup_python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          test -x "$CHAQUOPY_BUILD_PYTHON"
+          "$CHAQUOPY_BUILD_PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 10), f"Chaquopy requiere Python 3.10; encontrado: {sys.version}"'
+          echo "Python usado por Chaquopy: $CHAQUOPY_BUILD_PYTHON"
+          gradle assembleRelease --no-daemon "-PchaquopyBuildPython=$CHAQUOPY_BUILD_PYTHON"
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -s "$APK"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "$APK"
+          echo "APK Release firmado y verificado: $APK"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: XuperQuilmesTV-apk
-          path: app/build/outputs/apk/release/*.apk
+          name: XuperQuilmesTV-apk-signed
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
